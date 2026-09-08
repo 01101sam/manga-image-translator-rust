@@ -1,4 +1,7 @@
-use std::{fmt::Display, ops::Deref, sync::Arc};
+use std::{
+    fmt::Display,
+    sync::{Arc, Mutex},
+};
 
 use base_util::onnx::{new_session, Providers};
 use interface_image::{
@@ -11,12 +14,11 @@ use interface_model::{
 use interface_upscaler::Upscaler;
 use maplit::hashmap;
 use ndarray::{stack, Array3, Array4, ArrayView, ArrayView4, ArrayViewD, Axis, Dimension};
-use ort::{inputs, session::RunOptions, value::Tensor};
-use ort_parallel::AsyncSessionPool;
+use ort::{inputs, session::Session, value::Tensor};
 use util::spawn_blocking;
 
 pub struct Waifu2xUpscaler {
-    model: ModelWrap<AsyncSessionPool>,
+    model: ModelWrap<Mutex<Session>>,
     model_kind: Waifu2xModels,
     max_batch_size: usize,
     providers: Arc<Vec<Providers>>,
@@ -105,15 +107,25 @@ impl Waifu2xUpscaler {
 
 #[async_trait::async_trait]
 impl ModelLoad for Waifu2xUpscaler {
-    impl_model_load_helpers!(model, AsyncSessionPool);
+    impl_model_load_helpers!(model, Mutex<Session>);
 
     async fn reload(&self) -> anyhow::Result<ModelRead<'_, Self::T>> {
         let model = self.model_kind.to_string();
         let path = self
             .download_model(&model, &format!("{model}.onnx"))
             .await?;
-        let session = AsyncSessionPool::commit_from_file(new_session(&self.providers)?, &path, 10)?;
-        *self.model.write().await = Some(session);
+        // CoreML loses or breaks on every variant (M3 Max, sync run): cunet runs 512ms vs 440ms
+        // on the CPU EP at 371x512 and 1.95s vs 1.55s at 743x1024 under NeuralNetwork, and the
+        // MLProgram format fails to compile (error -14); swin_unet shatters into 90+ partitions
+        // and fails at predict time under NeuralNetwork (error -1), MLProgram again -14.
+        let providers: Vec<_> = self
+            .providers
+            .iter()
+            .filter(|p| !matches!(p, Providers::CoreML))
+            .cloned()
+            .collect();
+        let session = new_session(&providers)?.commit_from_file(&path)?;
+        *self.model.write().await = Some(Mutex::new(session));
         Ok(self.get_model().await.expect("Set model before"))
     }
 }
@@ -171,7 +183,7 @@ mod tests {
 
     use crate::{Waifu2xModels, Waifu2xUpscaler};
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_upscaler() {
         let upscaler = Waifu2xUpscaler::new(
             Waifu2xModels::CuNetArt { noise: Some(3) },
@@ -199,7 +211,7 @@ mod tests {
         upscaled.to_image().unwrap().save("upscaled.png").unwrap();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_upscaler_patches() {
         let upscaler = Waifu2xUpscaler::new(
             Waifu2xModels::CuNetArt { noise: Some(3) },
@@ -290,24 +302,19 @@ fn pre_process(
     )?)
 }
 
-async fn process(
-    model: &AsyncSessionPool,
-    batches: Vec<Array4<f32>>,
-) -> anyhow::Result<Vec<Array3<u8>>> {
+/// Synchronous `Session::run` on purpose: the `ort-parallel` pool (ORT `RunAsync`) ran the first
+/// two inferences of every session at 3.7-5s instead of 0.7s (cunet, 371x512) and stayed slower.
+fn process(model: &Mutex<Session>, batches: Vec<Array4<f32>>) -> anyhow::Result<Vec<Array3<u8>>> {
     let mut processed_patches = vec![];
-    let opt = RunOptions::new()?;
+    let mut session = model.lock().expect("session mutex poisoned");
     for batch in batches {
-        let t = spawn_blocking!(|| Tensor::from_array(batch))??;
-        let out = model.run_async(inputs! {"x"=>t}, &opt).await?;
-        spawn_blocking!(|| {
-            let img: ArrayViewD<f32> = out[0].try_extract_array()?;
-            let img: ArrayView4<f32> = img.into_dimensionality()?;
-            for img in img.outer_iter() {
-                let img = img.permuted_axes((1, 2, 0)).mapv(|v| (v * 255.0) as u8);
-                processed_patches.push(img);
-            }
-            Ok::<_, anyhow::Error>(())
-        })??;
+        let out = session.run(inputs! {"x"=>Tensor::from_array(batch)?})?;
+        let img: ArrayViewD<f32> = out[0].try_extract_array()?;
+        let img: ArrayView4<f32> = img.into_dimensionality()?;
+        for img in img.outer_iter() {
+            let img = img.permuted_axes((1, 2, 0)).mapv(|v| (v * 255.0) as u8);
+            processed_patches.push(img);
+        }
     }
     Ok(processed_patches)
 }
@@ -326,22 +333,14 @@ impl Upscaler for Waifu2xUpscaler {
         let h = image.height;
 
         let model = self.load().await?;
-        let model = model.deref();
-        let batches = spawn_blocking!(|| pre_process(
-            image,
-            patch_size,
-            padding,
-            max_batch_size,
-            img_processor
-        ))??;
-        let mut patches = process(model, batches)
-            .await?
-            .into_iter()
-            .map(RawImage::from)
-            .collect::<Vec<_>>();
         let out = spawn_blocking!(|| {
+            let batches = pre_process(image, patch_size, padding, max_batch_size, img_processor)?;
+            let mut patches = process(&model, batches)?
+                .into_iter()
+                .map(RawImage::from)
+                .collect::<Vec<_>>();
             let ps = patches[0].width;
-            match patch_size {
+            Ok::<_, anyhow::Error>(match patch_size {
                 Some(_) => combine_patches_m(
                     patches,
                     w * self.model_kind.scale() as DimType,
@@ -354,8 +353,8 @@ impl Upscaler for Waifu2xUpscaler {
                     w * self.model_kind.scale() as DimType,
                     h * self.model_kind.scale() as DimType,
                 ),
-            }
-        })?;
+            })
+        })??;
 
         Ok(out)
     }

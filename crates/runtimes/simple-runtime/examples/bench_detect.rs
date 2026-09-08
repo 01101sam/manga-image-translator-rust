@@ -9,9 +9,9 @@ const WARMUP: usize = 2;
 const ITERS: usize = 10;
 
 fn fnv(bytes: impl IntoIterator<Item = u8>) -> u64 {
-    bytes
-        .into_iter()
-        .fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3))
+    bytes.into_iter().fold(0xcbf29ce484222325u64, |h, b| {
+        (h ^ b as u64).wrapping_mul(0x100000001b3)
+    })
 }
 
 fn median(mut xs: Vec<f64>) -> f64 {
@@ -79,7 +79,12 @@ async fn main() {
             std::fs::write(&dump, &mask.data).expect("dump mask");
             let mut quads: Vec<String> = boxes
                 .iter()
-                .map(|q| format!("{:?}", q.pts().iter().map(|p| (p.x, p.y)).collect::<Vec<_>>()))
+                .map(|q| {
+                    format!(
+                        "{:?}",
+                        q.pts().iter().map(|p| (p.x, p.y)).collect::<Vec<_>>()
+                    )
+                })
                 .collect();
             quads.sort();
             std::fs::write(format!("{dump}.boxes"), quads.join("\n")).expect("dump boxes");

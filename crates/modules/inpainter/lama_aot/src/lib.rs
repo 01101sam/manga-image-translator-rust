@@ -1,4 +1,4 @@
-use std::{ops::Deref, sync::Arc};
+use std::sync::{Arc, Mutex};
 
 use base_util::onnx::{new_session, Providers};
 use interface_image::{ImageOp, RawImageCow};
@@ -9,15 +9,14 @@ use interface_model::{
 };
 use maplit::hashmap;
 use ndarray::{ArrayView4, Axis};
-use ort::{inputs, session::RunOptions, value::Tensor};
-use ort_parallel::AsyncSessionPool;
+use ort::{inputs, session::Session, value::Tensor};
 use util::{
     lama::{lama_add_border, lama_resize_image},
     spawn_blocking,
 };
 
 pub struct LamaLargeInpainter {
-    model: ModelWrap<AsyncSessionPool>,
+    model: ModelWrap<Mutex<Session>>,
     providers: Arc<Vec<Providers>>,
 }
 
@@ -32,16 +31,22 @@ impl LamaLargeInpainter {
 
 #[async_trait::async_trait]
 impl ModelLoad for LamaLargeInpainter {
-    impl_model_load_helpers!(model, AsyncSessionPool);
+    impl_model_load_helpers!(model, Mutex<Session>);
 
     async fn reload(&self) -> anyhow::Result<ModelRead<'_, Self::T>> {
         let p = self.download_model("model", "model.onnx").await?;
-        let model = Some(AsyncSessionPool::commit_from_file(
-            new_session(&self.providers)?,
-            &p,
-            10,
-        )?);
-        *self.model.write().await = model;
+        // CoreML buys nothing here and costs ~10x the memory. On a 1487x2048 page (M3 Max, sync
+        // run): CPU EP 3.5-4.2s per inference at 5GB RSS; CoreML NeuralNetwork 3.9s at 49GB RSS
+        // with a 6.9s first inference; CoreML MLProgram 3.2s at 47GB RSS with an 8.5s first
+        // inference. Outputs differ from the CPU EP by at most 1/255 either way.
+        let providers: Vec<_> = self
+            .providers
+            .iter()
+            .filter(|p| !matches!(p, Providers::CoreML))
+            .cloned()
+            .collect();
+        let session = new_session(&providers)?.commit_from_file(&p)?;
+        *self.model.write().await = Some(Mutex::new(session));
         Ok(self.get_model().await.expect("load model before"))
     }
 }
@@ -64,7 +69,10 @@ impl Inpainter for LamaLargeInpainter {
     ) -> anyhow::Result<interface_image::RawImage> {
         let ho = image.height;
         let wo = image.width;
-        let (image, mask, w, h, new_w, new_h) = spawn_blocking!(|| {
+        let session = self.load().await?;
+        // Synchronous `Session::run` on purpose: the `ort-parallel` pool (ORT `RunAsync`) ran the
+        // first two inferences of every session at ~27.7s instead of ~5.3s on a 1487x2048 page.
+        let img = spawn_blocking!(|| {
             let (image, mask) =
                 lama_resize_image(image.view(), mask, options.inpainting_size, img_processor)?;
             let mut image = image.to_owned();
@@ -87,16 +95,9 @@ impl Inpainter for LamaLargeInpainter {
                 .insert_axis(Axis(0));
             let image = Tensor::from_array(image)?;
             let mask = Tensor::from_array(mask)?;
-            Ok::<_, anyhow::Error>((image, mask, w, h, new_w, new_h))
-        })??;
 
-        let model = self.load().await?;
-        let model = model.deref();
-        let opt = RunOptions::new()?;
-        let out = model
-            .run_async(inputs! {"image"=> image, "mask"=> mask}, &opt)
-            .await?;
-        let img = spawn_blocking!(|| {
+            let mut session = session.lock().expect("session mutex poisoned");
+            let out = session.run(inputs! {"image"=> image, "mask"=> mask})?;
             let out: ArrayView4<f32> = out[0].try_extract_array()?.into_dimensionality()?;
             let img_inpainted = out
                 .remove_axis(Axis(0))
@@ -129,20 +130,20 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_inpaint() {
         let img = RawImage::new("./imgs/232265329-6a560438-e887-4f7f-b6a1-a61b8648f781.png")
             .expect("Failed to load image");
-        let img = RawImage::from(img);
         let img_processor =
             Arc::new(CpuImageProcessor::default()) as Arc<dyn ImageOp + Send + Sync>;
         let mask: Array2<u8> = ndarray_npy::read_npy("../lama_large/mask.npy").unwrap();
         let mask = Mask::from(mask);
         let inp = LamaLargeInpainter::new(Arc::new(vec![]));
         let v = inp
-            .inpaint(&Arc::new(img), mask, Default::default(), &img_processor)
+            .inpaint(&img, mask, Default::default(), &img_processor)
             .await
             .unwrap();
+        assert_eq!((v.width, v.height), (img.width, img.height));
         v.to_image().unwrap().save("inpainted.png").unwrap()
     }
 }

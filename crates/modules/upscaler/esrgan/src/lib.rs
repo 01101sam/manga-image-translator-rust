@@ -1,4 +1,7 @@
-use std::{fmt::Display, ops::Deref, sync::Arc};
+use std::{
+    fmt::Display,
+    sync::{Arc, Mutex},
+};
 
 use base_util::onnx::{new_session, Providers};
 use half::f16;
@@ -12,12 +15,11 @@ use interface_model::{
 use interface_upscaler::Upscaler;
 use maplit::hashmap;
 use ndarray::{stack, Array3, Array4, ArrayView, ArrayView4, ArrayViewD, Axis, Dimension};
-use ort::{inputs, session::RunOptions, value::Tensor};
-use ort_parallel::AsyncSessionPool;
+use ort::{inputs, session::Session, value::Tensor};
 use util::spawn_blocking;
 
 pub struct EsrGan {
-    model: ModelWrap<AsyncSessionPool>,
+    model: ModelWrap<Mutex<Session>>,
     model_kind: EsrGanModel,
     max_batch_size: usize,
     providers: Arc<Vec<Providers>>,
@@ -75,15 +77,19 @@ impl EsrGan {
 
 #[async_trait::async_trait]
 impl ModelLoad for EsrGan {
-    impl_model_load_helpers!(model, AsyncSessionPool);
+    impl_model_load_helpers!(model, Mutex<Session>);
 
     async fn reload(&self) -> anyhow::Result<ModelRead<'_, Self::T>> {
         let model = self.model_kind.to_string();
         let path = self
             .download_model(&model, &format!("{model}.onnx"))
             .await?;
-        let session = AsyncSessionPool::commit_from_file(new_session(&self.providers)?, &path, 10)?;
-        *self.model.write().await = Some(session);
+        // CoreML NeuralNetwork runs the f32 exports whole on the GPU: x4plus 1.0s vs 9.8s on the
+        // CPU EP per 371x512 upscale (M3 Max), output within 8/255 of the CPU EP. MLProgram is
+        // 10% slower with a longer first load. The f16 exports it does not take at all (either
+        // format falls back to the CPU EP, ~9s), so on CoreML request f32 variants.
+        let session = new_session(&self.providers)?.commit_from_file(&path)?;
+        *self.model.write().await = Some(Mutex::new(session));
 
         Ok(self.get_model().await.expect("Set model before"))
     }
@@ -166,45 +172,35 @@ fn pre_process(
     )?)
 }
 
-async fn process(
-    model: &AsyncSessionPool,
+/// Synchronous `Session::run` on purpose: the `ort-parallel` pool (ORT `RunAsync`) ran the first
+/// two inferences of every session at ~85s instead of ~14s (x4plus-f16, 371x512).
+fn process(
+    model: &Mutex<Session>,
     batches: Vec<Array4<f16>>,
     half: bool,
 ) -> anyhow::Result<Vec<Array3<u8>>> {
     let mut processed_patches = vec![];
-    let options = RunOptions::new()?;
+    let mut session = model.lock().expect("session mutex poisoned");
     for batch in batches {
         if half {
-            let t = spawn_blocking!(|| { Tensor::from_array(batch) })??;
-            let out = model.run_async(inputs! {"input"=>t}, &options).await?;
-
-            spawn_blocking!(|| {
-                let img: ArrayViewD<f16> = out[0].try_extract_array()?;
-                let img: ArrayView4<f16> = img.into_dimensionality()?;
-                for img in img.outer_iter() {
-                    let img = img
-                        .permuted_axes((1, 2, 0))
-                        .mapv(|v| (v.to_f32() * 255.0) as u8);
-                    processed_patches.push(img);
-                }
-                Ok::<_, anyhow::Error>(())
-            })??;
+            let out = session.run(inputs! {"input"=>Tensor::from_array(batch)?})?;
+            let img: ArrayViewD<f16> = out[0].try_extract_array()?;
+            let img: ArrayView4<f16> = img.into_dimensionality()?;
+            for img in img.outer_iter() {
+                let img = img
+                    .permuted_axes((1, 2, 0))
+                    .mapv(|v| (v.to_f32() * 255.0) as u8);
+                processed_patches.push(img);
+            }
         } else {
-            let t = spawn_blocking!(|| {
-                let batch = batch.mapv(|v| v.to_f32());
-                Tensor::from_array(batch)
-            })??;
-
-            let out = model.run_async(inputs! {"input"=>t}, &options).await?;
-            spawn_blocking!(|| {
-                let img: ArrayViewD<f32> = out[0].try_extract_array()?;
-                let img: ArrayView4<f32> = img.into_dimensionality()?;
-                for img in img.outer_iter() {
-                    let img = img.permuted_axes((1, 2, 0)).mapv(|v| (v * 255.0) as u8);
-                    processed_patches.push(img);
-                }
-                Ok::<_, anyhow::Error>(())
-            })??;
+            let batch = batch.mapv(|v| v.to_f32());
+            let out = session.run(inputs! {"input"=>Tensor::from_array(batch)?})?;
+            let img: ArrayViewD<f32> = out[0].try_extract_array()?;
+            let img: ArrayView4<f32> = img.into_dimensionality()?;
+            for img in img.outer_iter() {
+                let img = img.permuted_axes((1, 2, 0)).mapv(|v| (v * 255.0) as u8);
+                processed_patches.push(img);
+            }
         };
     }
     Ok(processed_patches)
@@ -225,22 +221,15 @@ impl Upscaler for EsrGan {
         let half = self.model_kind.half();
 
         let model = self.load().await?;
-        let model = model.deref();
-        let batches = spawn_blocking!(|| pre_process(
-            image.view(),
-            patch_size,
-            padding,
-            max_batch_size,
-            img_processor,
-        ))??;
-        let mut patches = process(model, batches, half)
-            .await?
-            .into_iter()
-            .map(RawImage::from)
-            .collect::<Vec<_>>();
         let out = spawn_blocking!(|| {
+            let batches =
+                pre_process(image.view(), patch_size, padding, max_batch_size, img_processor)?;
+            let mut patches = process(&model, batches, half)?
+                .into_iter()
+                .map(RawImage::from)
+                .collect::<Vec<_>>();
             let ps = patches[0].width;
-            match patch_size {
+            Ok::<_, anyhow::Error>(match patch_size {
                 Some(_) => combine_patches(
                     patches,
                     w * self.model_kind.zoom() as DimType,
@@ -253,8 +242,8 @@ impl Upscaler for EsrGan {
                     w * self.model_kind.zoom() as DimType,
                     h * self.model_kind.zoom() as DimType,
                 ),
-            }
-        })?;
+            })
+        })??;
 
         Ok(out)
     }
@@ -270,7 +259,7 @@ mod tests {
 
     use crate::{EsrGan, EsrGanModel};
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_upscaler() {
         let upscaler = EsrGan::new(
             EsrGanModel::X2Plus { f32: true },
@@ -296,7 +285,7 @@ mod tests {
         assert_eq!(upscaled.height, w * upscaler.model_kind.zoom() as DimType);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_upscaler_patches() {
         let upscaler = EsrGan::new(
             EsrGanModel::X4PlusAnime6B { f32: false },
