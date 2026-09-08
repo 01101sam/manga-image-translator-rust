@@ -41,7 +41,6 @@ tiny-skia = "0.11.4"
 geo = "0.31"
 dbnet = { path = "crates/modules/detector/dbnet" }
 ctd = { path = "crates/modules/detector/ctd" }
-paddle = { path = "crates/modules/detector/paddle" }
 textline-merge = { path = "crates/textline-merge" }
 ureq = "3.1"
 tempfile = "3.22"
@@ -56,6 +55,9 @@ interface-detector = { path = "crates/interface/detector" }
 interface-ocr = { path = "crates/interface/ocr" }
 interface-upscaler = { path = "crates/interface/upscaler" }
 interface-translator = { path = "crates/interface/translator" }
+interface-colorizer = { path = "crates/interface/colorizer" }
+color = { path = "crates/modules/inpainter/color" }
+kumiko = { path = "crates/kumiko" }
 waifu2x = { path = "crates/modules/upscaler/waifu2x" }
 anime4k = { path = "crates/modules/upscaler/anime4k" }
 esrgan = { path = "crates/modules/upscaler/esrgan" }
@@ -66,7 +68,6 @@ manga-ocr = { path = "crates/modules/ocr/manga-ocr" }
 mask-refinement = { path = "crates/mask-refinement" }
 export = { path = "crates/modules/renderer/export" }
 png = { path = "crates/modules/renderer/png" }
-tesseract = { path = "crates/modules/ocr/tesseract" }
 native = { path = "crates/modules/ocr/native" }
 ctc-48px = { path = "crates/modules/ocr/ctc-48px" }
 ocr-48px = { path = "crates/modules/ocr/ocr-48px" }

@@ -22,12 +22,13 @@ interface-inpainter.workspace = true
 interface-image.workspace = true
 interface-ocr.workspace = true
 interface-translator.workspace = true
+interface-colorizer.workspace = true
+color.workspace = true
 log.workspace = true
 semver.workspace = true
 ctc-48px.workspace = true
 native.workspace = true
 parking_lot.workspace = true
-tesseract.workspace = true
 schemars.workspace = true
 ocr-48px.workspace = true
 html.workspace = true
@@ -44,7 +45,6 @@ esrgan.workspace = true
 anime4k.workspace = true
 dbnet.workspace = true
 ctd.workspace = true
-paddle.workspace = true
 lama_aot.workspace = true
 lama_large.workspace = true
 lama_mpe.workspace = true
@@ -86,3 +86,7 @@ cuda = ["ort/cuda"]
 coreml = ["ort/coreml"]
 tensorrt = ["ort/tensorrt"]
 rocm = ["ort/rocm"]
+
+# CoreML is the default accelerator on macOS; other platforms opt in via the features above.
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { workspace = true, features = ["coreml"] }
