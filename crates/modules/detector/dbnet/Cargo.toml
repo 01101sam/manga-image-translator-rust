@@ -17,18 +17,8 @@ maplit.workspace = true
 util.workspace = true
 ort.workspace = true
 base-util.workspace = true
-ndarray-npy = "0.9.1"
 ndarray.workspace = true
-ordered-float = "5.0.0"
-env_logger.workspace = true
-ort-parallel.workspace = true
 async-trait.workspace = true
 
 [dev-dependencies]
-criterion = "0.6.0"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-
-
-[[bench]]
-name = "onnx_bench"
-harness = false

@@ -1,4 +1,7 @@
-use std::{ops::Deref, sync::Arc};
+use std::{
+    ops::Deref,
+    sync::{Arc, Mutex},
+};
 
 use base_util::onnx::{new_session, Providers};
 
@@ -12,8 +15,7 @@ use log::debug;
 
 use ndarray::{array, Array2, Array3, Array4, ArrayView4, ArrayViewD, Axis};
 use opencv::core::BORDER_DEFAULT;
-use ort::{session::RunOptions, value::Tensor};
-use ort_parallel::AsyncSessionPool;
+use ort::{session::Session, value::Tensor};
 use util::{
     det_arrange::{det_rearrange_forward, det_unarrange, shoud_rearrange},
     opencv::bilateral_filter,
@@ -23,7 +25,7 @@ use maplit::hashmap;
 
 pub struct DbNetDetector {
     providers: Arc<Vec<Providers>>,
-    model: ModelWrap<AsyncSessionPool>,
+    model: ModelWrap<Mutex<Session>>,
     /// Different model architecture, but based on dbnet
     convnext: bool,
 }
@@ -41,11 +43,11 @@ impl DbNetDetector {
 
 #[async_trait::async_trait]
 impl ModelLoad for DbNetDetector {
-    impl_model_load_helpers!(model, AsyncSessionPool);
+    impl_model_load_helpers!(model, Mutex<Session>);
     async fn reload(&self) -> anyhow::Result<ModelRead<Self::T>> {
         let p = self.download_model("model", "model.onnx").await?;
-        let s = AsyncSessionPool::commit_from_file(new_session(&self.providers)?, &p, 10)?;
-        *self.model.write().await = Some(s);
+        let session = new_session(&self.providers)?.commit_from_file(&p)?;
+        *self.model.write().await = Some(Mutex::new(session));
         Ok(self.get_model().await.expect("set before"))
     }
 }
@@ -63,18 +65,19 @@ impl Model for DbNetDetector {
     }
 }
 
-async fn det_batch_forward_default<'a, 'b>(
-    session: &'b AsyncSessionPool,
-    batch: ArrayView4<'a, u8>,
-    ro: &RunOptions,
+/// Runs the session synchronously on the calling thread. ORT's `RunAsync` path (what
+/// `ort-parallel` wraps) executed the first two runs of every session near single-threaded
+/// (~10s instead of ~1.6s each) and stayed ~17% slower afterwards.
+fn det_batch_forward_default(
+    session: &Mutex<Session>,
+    batch: ArrayView4<u8>,
 ) -> anyhow::Result<(Array4<f32>, Array4<f32>)> {
     let batch = batch
         .mapv(|x| x as f32 / 127.5 - 1.0)
         .permuted_axes([0, 3, 1, 2]);
     let tensor = Tensor::from_array(batch)?;
-    let outputs = session
-        .run_async(ort::inputs!["input" => tensor], ro)
-        .await?;
+    let mut session = session.lock().expect("session mutex poisoned");
+    let outputs = session.run(ort::inputs!["input" => tensor])?;
     let db: ArrayViewD<f32> = outputs["db"].try_extract_array()?;
     let mask: ArrayViewD<f32> = outputs["mask"].try_extract_array()?;
     let db = db.mapv(|x| 1.0 / (1.0 + (-x).exp()));
@@ -95,7 +98,6 @@ impl Detector for DbNetDetector {
         let session = self.load().await?;
         let session = session.deref();
 
-        let ro = RunOptions::new()?;
         let (db, mask, shape, ratio_w, ratio_h, pad_w, pad_h) =
             match shoud_rearrange(img.view(), options.detect_size as u32) {
                 true => {
@@ -107,11 +109,10 @@ impl Detector for DbNetDetector {
                         4,
                         img_processor,
                     )?;
-                    let mut out = vec![];
-                    for batch in batch_results {
-                        let t = det_batch_forward_default(session, batch.view(), &ro).await?;
-                        out.push(t)
-                    }
+                    let out = batch_results
+                        .iter()
+                        .map(|batch| det_batch_forward_default(session, batch.view()))
+                        .collect::<anyhow::Result<Vec<_>>>()?;
                     let (db, mask) = det_unarrange(out, rv)?;
                     (db, mask, shape, 1.0, 1.0, 0, 0)
                 }
@@ -133,7 +134,7 @@ impl Detector for DbNetDetector {
                     let ratio_w = ratio_h;
                     let shape = (resized.img.height, resized.img.width);
                     let img = resized.img.as_ndarray()?.insert_axis(ndarray::Axis(0));
-                    let (db, mask) = det_batch_forward_default(session, img, &ro).await?;
+                    let (db, mask) = det_batch_forward_default(session, img)?;
                     (
                         db,
                         mask,

@@ -9,12 +9,13 @@ use interface_image::{Mask, MaskCow, RawImage, RawImageCow};
 use ndarray::{s, Array2, ArrayView2, Zip};
 use opencv::{
     core::{
-        bitwise_or, bitwise_xor, in_range, no_array, subtract, sum_elems, Mat, MatExprTraitConst,
-        MatTrait as _, MatTraitConst, MatTraitConstManual as _, Point, Rect, Scalar, Size,
-        BORDER_CONSTANT, CV_16U, CV_8U,
+        bitwise_or, in_range, subtract, Mat, MatExprTraitConst, MatTraitConst,
+        MatTraitConstManual as _, MatTraitManual as _, Point, Rect, Scalar, Size, BORDER_CONSTANT,
+        CV_16U, CV_8U,
     },
     imgproc::{get_structuring_element, MORPH_ELLIPSE, MORPH_RECT, THRESH_BINARY, THRESH_OTSU},
 };
+use rayon::prelude::*;
 use roots::find_roots_quadratic;
 
 pub fn refine_mask(
@@ -23,37 +24,45 @@ pub fn refine_mask(
     blk_list: &[Quadrilateral],
     refinemask_inpaint: bool,
 ) -> anyhow::Result<Mask> {
-    let mut mask_refined = Mat::zeros(mask.height as i32, mask.width as i32, CV_8U)?.to_mat()?;
     let img = img.view();
     let img_ = img.to_image()?;
-    for blk in blk_list {
-        let (bx1, by1, bx2, by2) = enlarge_window(blk.xyxy(), img.width, img.height, 2.5, 1.0);
-        let im = DynamicImage::from(
-            img_.view(
-                bx1 as u32,
-                by1 as u32,
-                (bx2 - bx1) as u32,
-                (by2 - by1) as u32,
-            )
-            .to_image(),
-        );
-        let im_gray = im.clone().into_luma8();
-        let im_gray = Mask::from(im_gray);
-        let im_gray = im_gray.as_nd()?;
-        let msk = mask.as_nd()?;
-        let msk = msk.slice(s![by1 as usize..by2 as usize, bx1 as usize..bx2 as usize]);
-        let mut mask_list = get_topk_masklist(im_gray, &msk)?;
-        mask_list.extend(get_otsuthresh_masklist(&RawImage::from(im), msk)?);
-        let mask_merged = merge_mask_list(mask_list, &MaskCow::from(msk), 30, refinemask_inpaint)?;
-        let roi_rect = Rect::new(
-            bx1 as i32,
-            by1 as i32,
-            bx2 as i32 - bx1 as i32,
-            by2 as i32 - by1 as i32,
-        );
+    // Blocks are independent; only the final OR into the shared mask needs to be sequential.
+    let refined_blocks = blk_list
+        .par_iter()
+        .map(|blk| {
+            let (bx1, by1, bx2, by2) =
+                enlarge_window(blk.xyxy(), img.width, img.height, 2.5, 1.0);
+            let roi_rect = Rect::new(
+                bx1 as i32,
+                by1 as i32,
+                (bx2 - bx1) as i32,
+                (by2 - by1) as i32,
+            );
+            let im = DynamicImage::from(
+                img_.view(
+                    bx1 as u32,
+                    by1 as u32,
+                    (bx2 - bx1) as u32,
+                    (by2 - by1) as u32,
+                )
+                .to_image(),
+            );
+            let im_gray = Mask::from(im.clone().into_luma8());
+            let im_gray = im_gray.as_nd()?;
+            let msk = mask.as_nd()?;
+            let msk = msk.slice(s![by1 as usize..by2 as usize, bx1 as usize..bx2 as usize]);
+            let mut mask_list = get_topk_masklist(im_gray, &msk)?;
+            mask_list.extend(get_otsuthresh_masklist(&RawImage::from(im), msk)?);
+            let mask_merged =
+                merge_mask_list(mask_list, &MaskCow::from(msk), 30, refinemask_inpaint)?;
+            Ok((roi_rect, mask_merged))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    let mut mask_refined = Mat::zeros(mask.height as i32, mask.width as i32, CV_8U)?.to_mat()?;
+    for (roi_rect, mask_merged) in refined_blocks {
         let mut roi = Mat::roi_mut(&mut mask_refined, roi_rect)?;
         let roy2 = roi.clone_pointee();
-
         bitwise_or(&roy2, &mask_merged, &mut roi, &opencv::core::no_array())?;
     }
     Ok(Mask::from(mask_refined))
@@ -175,71 +184,39 @@ fn histogram(candidate_grey_px: &[u8], bins: usize) -> (Vec<usize>, Vec<u32>) {
     (bin_edges, hist)
 }
 
-fn merge_mask_list_(
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
+/// Adds one connected component (`stat` = x, y, w, h of its bounding box) to `mask_merged` when
+/// that lowers `sum(mask_merged ^ pred_mask)` over the box. Pixels outside the component are
+/// identical in both sums, so only the component's pixels decide.
+fn merge_component(
+    stat: &[i32],
     labels: &Mat,
-    label_index: i32,
+    label_index: u16,
     mask_merged: &mut Mat,
     pred_mask: &Mat,
-) -> anyhow::Result<()> {
-    let (x1, y1, x2, y2) = (x, y, x + w, y + h);
-    let width = x2 - x1;
-    let height = y2 - y1;
-    let roi_rect = Rect::new(x1, y1, width, height);
-    let label_local = Mat::roi(labels, roi_rect)?;
-    let size = label_local.size()?;
-    let mut tmp_merged = Mat::zeros(size.height, size.width, CV_8U)?.to_mat()?;
+) -> opencv::Result<()> {
+    let cols = labels.cols() as usize;
+    let rows = stat[1] as usize..(stat[1] + stat[3]) as usize;
+    let span = |row: usize| row * cols + stat[0] as usize..row * cols + (stat[0] + stat[2]) as usize;
+    let labels = labels.data_typed::<u16>()?;
+    let pred = pred_mask.data_typed::<u8>()?;
+    let merged = mask_merged.data_typed_mut::<u8>()?;
 
-    for y in 0..size.height {
-        for x in 0..size.width {
-            let val = *label_local.at_2d::<u16>(y, x)? as i32;
-            if val == label_index {
-                *tmp_merged.at_2d_mut::<u8>(y, x)? = 255;
+    let mut delta = 0i32;
+    for row in rows.clone() {
+        for i in span(row) {
+            if labels[i] == label_index {
+                delta += (255 ^ pred[i]) as i32 - (merged[i] ^ pred[i]) as i32;
             }
         }
     }
-    let width = x2 - x1;
-    let height = y2 - y1;
-    let roi_rect = Rect::new(x1, y1, width, height);
-
-    let roi_mask_merged = Mat::roi(mask_merged, roi_rect)?;
-    let roi_pred_mask = Mat::roi(pred_mask, roi_rect)?;
-
-    let tmp_merged_ptr: *mut Mat = &mut tmp_merged;
-
-    unsafe {
-        bitwise_or(
-            &roi_mask_merged,
-            &tmp_merged,
-            &mut *tmp_merged_ptr,
-            &no_array(),
-        )?;
-    }
-
-    let mut xor_merged = Mat::default();
-    bitwise_xor(&tmp_merged, &roi_pred_mask, &mut xor_merged, &no_array())?;
-    let xor_merged_sum = sum_elems(&xor_merged)?.0[0] as i32;
-
-    let mut xor_origin = Mat::default();
-    bitwise_xor(
-        &roi_mask_merged,
-        &roi_pred_mask,
-        &mut xor_origin,
-        &no_array(),
-    )?;
-    let xor_origin_sum = sum_elems(&xor_origin)?.0[0] as i32;
-
-    if xor_merged_sum < xor_origin_sum {
-        let width = x2 - x1;
-        let height = y2 - y1;
-        let roi_rect = Rect::new(x1, y1, width, height);
-
-        let mut roi_mask_merged = Mat::roi_mut(mask_merged, roi_rect)?;
-
-        tmp_merged.copy_to(&mut roi_mask_merged)?;
+    if delta < 0 {
+        for row in rows {
+            for i in span(row) {
+                if labels[i] == label_index {
+                    merged[i] = 255;
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -324,25 +301,12 @@ fn merge_mask_list(
             connectivity,
             CV_16U,
         )?;
-        for label_index in 0..num_labels {
-            if label_index != 0 {
-                let stat = stats.at_row::<i32>(label_index)?;
-                let (w, h) = (stat[2], stat[3]);
-                if w * h < 3 {
-                    continue;
-                }
-                let (x, y) = (stat[0], stat[1]);
-                merge_mask_list_(
-                    x,
-                    y,
-                    w,
-                    h,
-                    &labels,
-                    label_index,
-                    &mut mask_merged,
-                    &pred_mask,
-                )?;
+        for label_index in 1..num_labels {
+            let stat = stats.at_row::<i32>(label_index)?;
+            if stat[2] * stat[3] < 3 {
+                continue;
             }
+            merge_component(stat, &labels, label_index as u16, &mut mask_merged, &pred_mask)?;
         }
         if refinemask_inpaint {
             let kernel = get_structuring_element(
@@ -386,18 +350,8 @@ fn merge_mask_list(
         let area_thresh = get_area_threshold(&stats)?;
         for label_index in 0..num_labels {
             let stat = stats.at_row::<i32>(label_index)?;
-            let (x, y, w, h, area) = (stat[0], stat[1], stat[2], stat[3], stat[4]);
-            if area < area_thresh {
-                merge_mask_list_(
-                    x,
-                    y,
-                    w,
-                    h,
-                    &labels,
-                    label_index,
-                    &mut mask_merged,
-                    &pred_mask,
-                )?;
+            if stat[4] < area_thresh {
+                merge_component(stat, &labels, label_index as u16, &mut mask_merged, &pred_mask)?;
             }
         }
     }
