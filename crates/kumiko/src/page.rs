@@ -30,7 +30,7 @@ pub fn detect_panels(
     let gray =
         DynamicImage::from(RgbImage::from_raw(width, height, buffer.clone()).unwrap()).to_luma8();
     let gray = Mat::from_slice(gray.as_raw()).unwrap();
-    let gray = gray.reshape(1, width as i32).unwrap();
+    let gray = gray.reshape(1, height as i32).unwrap();
     // https://docs.opencv.org/3.4/d2/d2c/tutorial_sobel_derivatives.html
     let ddepth = CV_16S;
 

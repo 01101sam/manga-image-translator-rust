@@ -1,3 +1,4 @@
+mod colorizer;
 mod detector;
 mod inpainter;
 mod mask_refinement;
@@ -10,11 +11,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub use crate::settings::{
-    detector::Detector, detector::DetectorSettings, inpainter::Inpainter,
-    inpainter::InpainterSettings, inpainter::Mask, mask_refinement::MaskRefinementSettings,
-    ocr::OCRSettings, ocr::OCR, render::RenderSettings, render::Renderer, translator::Target,
-    translator::Translation, translator::Translator, translator::TranslatorSettings,
-    upscaler::Upscaler, upscaler::UpscalerSettings,
+    colorizer::Colorizer, colorizer::ColorizerSettings, detector::Detector,
+    detector::DetectorSettings, inpainter::Inpainter, inpainter::InpainterSettings,
+    inpainter::Mask, mask_refinement::MaskRefinementSettings, ocr::OCRSettings, ocr::OCR,
+    render::Alignment, render::Direction, render::RenderSettings, render::Renderer,
+    translator::Target, translator::Translation, translator::Translator,
+    translator::TranslatorSettings, upscaler::Upscaler, upscaler::UpscalerSettings,
 };
 
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
@@ -23,6 +25,9 @@ pub use crate::settings::{
 pub struct Settings {
     /// Settings for the upscaler module
     pub upscaler: UpscalerSettings,
+
+    /// Settings for the colorizer module
+    pub colorizer: ColorizerSettings,
 
     /// Settings for the detector module
     pub detector: DetectorSettings,

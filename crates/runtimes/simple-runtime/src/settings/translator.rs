@@ -30,6 +30,8 @@ pub enum Translator {
     #[default]
     Sugoi,
     Youdao,
+    Original,
+    None,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

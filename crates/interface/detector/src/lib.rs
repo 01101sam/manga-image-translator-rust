@@ -125,6 +125,13 @@ pub trait Detector: Model {
                 .collect::<Vec<_>>();
         }
 
+        let ow = image.width as i64;
+        let oh = image.height as i64;
+        textlines = textlines
+            .into_iter()
+            .filter_map(|q| q.clip_to(ow, oh))
+            .collect();
+
         Ok((textlines, mask))
     }
     async fn infer(

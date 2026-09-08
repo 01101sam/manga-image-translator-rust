@@ -25,3 +25,4 @@ rayon.workspace = true
 
 [dev-dependencies]
 ndarray-npy.workspace = true
+interface-translator.workspace = true

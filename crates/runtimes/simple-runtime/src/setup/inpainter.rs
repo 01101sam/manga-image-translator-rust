@@ -29,6 +29,8 @@ impl Inpainters {
                     // allow:clone
                     Box::new(lama_mpe::LamaLargeInpainter::new(providers.clone())) as InpainterType
                 }
+                Inpainter::None => Box::new(color::ColorInpainter::new()) as InpainterType,
+                Inpainter::Original => Box::new(color::OriginalInpainter::new()) as InpainterType,
             };
             items.insert(key, inpainter);
         }

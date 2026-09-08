@@ -1,10 +1,9 @@
-mod page;
-mod panel;
-mod segment;
+use image::{DynamicImage, GenericImageView};
+use kumiko::detect_panels;
+
 fn main() {
-    let img = image::open("/Users/frederik/code/rust/detector/crates/kumiko/xkcd.png")
-        .unwrap()
-        .to_rgb8();
+    let path = std::env::args().nth(1).expect("image path");
+    let img = image::open(path).unwrap().to_rgb8();
     let w = img.width();
     let h = img.height();
     let panels = detect_panels(img.clone().into_raw(), w, h, true, None, true);
@@ -20,7 +19,3 @@ fn main() {
         img.to_image().save(format!("{i}.png")).unwrap();
     }
 }
-
-use image::{DynamicImage, GenericImageView};
-
-use crate::page::detect_panels;

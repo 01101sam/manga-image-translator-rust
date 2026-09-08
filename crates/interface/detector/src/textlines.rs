@@ -67,6 +67,17 @@ impl Quadrilateral {
         (aabb.x, aabb.y, aabb.x + aabb.w, aabb.y + aabb.h)
     }
 
+    pub fn clip_to(self, width: i64, height: i64) -> Option<Self> {
+        let pts = self
+            .pts
+            .iter()
+            .map(|p| (p.x.clamp(0, width), p.y.clamp(0, height)))
+            .collect();
+        let q = Self::new(pts, self.score);
+        let aabb = q.aabb();
+        (aabb.w > 0 && aabb.h > 0).then_some(q)
+    }
+
     pub fn poly_distance(&self, other: &Self) -> f64 {
         Euclidean.distance(&self.polygon(), &other.polygon())
     }
@@ -566,6 +577,18 @@ mod tests {
 
         let aspect = quad.aspect_ratio();
         assert!(aspect < 0.3);
+    }
+
+    #[test]
+    fn clip_to_keeps_points_inside_and_drops_empty() {
+        let q = Quadrilateral::new(vec![(-4, -2), (12, -1), (13, 20), (-3, 18)], 0.8);
+        let clipped = q.clip_to(10, 8).expect("nonzero after clip");
+        for p in clipped.pts() {
+            assert!((0..=10).contains(&p.x));
+            assert!((0..=8).contains(&p.y));
+        }
+        let outside = Quadrilateral::new(vec![(20, 20), (24, 20), (24, 28), (20, 28)], 0.5);
+        assert!(outside.clip_to(10, 8).is_none());
     }
 
     #[test]

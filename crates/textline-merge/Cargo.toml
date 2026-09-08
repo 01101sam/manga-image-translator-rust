@@ -13,6 +13,8 @@ ordered-float.workspace = true
 log.workspace = true
 once_cell.workspace = true
 interface-translator.workspace = true
+interface-image.workspace = true
+kumiko.workspace = true
 geo.workspace = true
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }

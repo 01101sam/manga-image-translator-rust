@@ -37,6 +37,20 @@ async fn defaults_inpainter() -> impl Responder {
     HttpResponse::Ok().body(str)
 }
 
+#[get("/defaults/colorizer")]
+async fn defaults_colorizer() -> impl Responder {
+    let settings = settings::ColorizerSettings::default();
+    let str = serde_json::to_string(&settings).unwrap();
+    HttpResponse::Ok().body(str)
+}
+
+#[get("/defaults/render")]
+async fn defaults_render() -> impl Responder {
+    let settings = settings::RenderSettings::default();
+    let str = serde_json::to_string(&settings).unwrap();
+    HttpResponse::Ok().body(str)
+}
+
 #[get("/defaults/mask_refinement")]
 async fn defaults_mask_refinement() -> impl Responder {
     let settings = settings::MaskRefinementSettings::default();
@@ -96,6 +110,8 @@ pub async fn main(host: &str, port: u16) -> std::io::Result<()> {
             .service(defaults_mask_refinement)
             .service(defaults_translator)
             .service(defaults_inpainter)
+            .service(defaults_colorizer)
+            .service(defaults_render)
             .service(upload_image)
             .service(get_image)
             .service(hello)

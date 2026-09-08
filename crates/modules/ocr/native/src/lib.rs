@@ -1,6 +1,6 @@
 use std::{collections::HashMap, ops::Deref, sync::Arc};
 
-use image::GenericImageView as _;
+use image::imageops::crop_imm;
 use interface_detector::textlines::Quadrilateral;
 use interface_image::{ImageOp, Mask, RawImage};
 use interface_model::{
@@ -60,10 +60,18 @@ impl Ocr for NativeOCR {
 
         for (i, area) in areas.into_iter().enumerate() {
             let bbox = area.lock().aabb();
+            let Some((x, y, w, h)) = util::resize::clamp_crop(
+                bbox.x,
+                bbox.y,
+                bbox.x.saturating_add(bbox.w),
+                bbox.y.saturating_add(bbox.h),
+                grayscale.width() as i64,
+                grayscale.height() as i64,
+            ) else {
+                continue;
+            };
             let img = spawn_blocking!(|| {
-                let view =
-                    grayscale.view(bbox.x as u32, bbox.y as u32, bbox.w as u32, bbox.h as u32);
-                Mask::from(view.to_image())
+                Mask::from(crop_imm(&grayscale, x, y, w, h).to_image())
             })?;
             if let Some(v) = &options.debug_path {
                 img.clone()
