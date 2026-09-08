@@ -10,7 +10,10 @@ use export::Export;
 use interface_image::{DimType, Mask, RawImage};
 use opencv::{
     calib3d::{find_homography, RANSAC},
-    core::{no_array, Mat, MatTraitConst, Point, Point2f, Scalar, Size, Vector, BORDER_CONSTANT},
+    core::{
+        no_array, Mat, MatTraitConst, MatTraitManual as _, Point, Point2f, Scalar, Size, Vector,
+        BORDER_CONSTANT,
+    },
     imgproc::{self, dilate, morphology_default_border_value, warp_perspective, INTER_LINEAR},
 };
 use ordered_float::OrderedFloat;
@@ -508,42 +511,78 @@ fn warp_onto(dest: &mut RawImage, src: &RawImage, dst: [(i64, i64); 4]) -> anyho
         .into_iter()
         .map(|(x, y)| Point2f::new(x as f32, y as f32))
         .collect::<Vector<Point2f>>();
-    let m = find_homography(&src_pts, &dst_pts, &mut no_array(), RANSAC, 5.0)?;
+    let mut m = find_homography(&src_pts, &dst_pts, &mut no_array(), RANSAC, 5.0)?;
+    let h = m.data_typed_mut::<f64>()?;
+    let (x0, y0, x1, y1) = warp_roi(h, src, dest);
+    if x1 <= x0 || y1 <= y0 {
+        return Ok(());
+    }
+    // Shift the homography so the ROI's top-left lands on (0, 0) and warp only that region.
+    for c in 0..3 {
+        h[c] -= x0 as f64 * h[6 + c];
+        h[3 + c] -= y0 as f64 * h[6 + c];
+    }
     let src_mat = src.as_opencv_mat()?;
     let mut warped = Mat::default();
     warp_perspective(
         &src_mat,
         &mut warped,
         &m,
-        Size::new(dest.width as i32, dest.height as i32),
+        Size::new((x1 - x0) as i32, (y1 - y0) as i32),
         INTER_LINEAR,
         BORDER_CONSTANT,
         Scalar::all(0.0),
     )?;
     let warped = RawImage::try_from(warped)?;
-    blend_warped(dest, &warped);
+    blend_warped(dest, &warped, x0, y0);
     Ok(())
 }
 
-fn blend_warped(dest: &mut RawImage, warped: &RawImage) {
-    let n = dest.width as usize * dest.height as usize;
-    for i in 0..n {
-        let wi = i * warped.channels as usize;
-        let a = if warped.channels >= 4 {
-            warped.data[wi + 3]
-        } else {
-            255
-        };
-        if a == 0 {
-            continue;
+/// Destination pixels can only be non-transparent where their source sample falls inside
+/// (-1, w) x (-1, h); everything outside the forward image of that rectangle is border (alpha 0).
+/// Returns the half-open pixel box [x0, x1) x [y0, y1) covering it, clamped to `dest`.
+fn warp_roi(h: &[f64], src: &RawImage, dest: &RawImage) -> (usize, usize, usize, usize) {
+    let (w, hh) = (src.width as f64, src.height as f64);
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for (sx, sy) in [(-1.0, -1.0), (w, -1.0), (w, hh), (-1.0, hh)] {
+        let d = h[6] * sx + h[7] * sy + h[8];
+        let x = (h[0] * sx + h[1] * sy + h[2]) / d;
+        let y = (h[3] * sx + h[4] * sy + h[5]) / d;
+        if d <= 0.0 || !x.is_finite() || !y.is_finite() {
+            return (0, 0, dest.width as usize, dest.height as usize);
         }
-        let di = i * dest.channels as usize;
-        let t = a as f32 / 255.0;
-        dest.data[di] = ((warped.data[wi] as f32 * t) + dest.data[di] as f32 * (1.0 - t)).round() as u8;
-        dest.data[di + 1] =
-            ((warped.data[wi + 1] as f32 * t) + dest.data[di + 1] as f32 * (1.0 - t)).round() as u8;
-        dest.data[di + 2] =
-            ((warped.data[wi + 2] as f32 * t) + dest.data[di + 2] as f32 * (1.0 - t)).round() as u8;
+        (min_x, min_y) = (min_x.min(x), min_y.min(y));
+        (max_x, max_y) = (max_x.max(x), max_y.max(y));
+    }
+    let clamp = |v: f64, hi: DimType| (v as i64).clamp(0, hi as i64) as usize;
+    (
+        clamp(min_x.floor() - 1.0, dest.width),
+        clamp(min_y.floor() - 1.0, dest.height),
+        clamp(max_x.ceil() + 2.0, dest.width),
+        clamp(max_y.ceil() + 2.0, dest.height),
+    )
+}
+
+fn blend_warped(dest: &mut RawImage, warped: &RawImage, x0: usize, y0: usize) {
+    let (dc, wc) = (dest.channels as usize, warped.channels as usize);
+    for y in 0..warped.height as usize {
+        for x in 0..warped.width as usize {
+            let wi = (y * warped.width as usize + x) * wc;
+            let a = if wc >= 4 { warped.data[wi + 3] } else { 255 };
+            if a == 0 {
+                continue;
+            }
+            let di = ((y + y0) * dest.width as usize + x + x0) * dc;
+            let t = a as f32 / 255.0;
+            dest.data[di] =
+                ((warped.data[wi] as f32 * t) + dest.data[di] as f32 * (1.0 - t)).round() as u8;
+            dest.data[di + 1] = ((warped.data[wi + 1] as f32 * t)
+                + dest.data[di + 1] as f32 * (1.0 - t))
+                .round() as u8;
+            dest.data[di + 2] = ((warped.data[wi + 2] as f32 * t)
+                + dest.data[di + 2] as f32 * (1.0 - t))
+                .round() as u8;
+        }
     }
 }
 
