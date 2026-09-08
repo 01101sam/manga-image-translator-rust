@@ -28,7 +28,7 @@ pub fn all_providers() -> Vec<Providers> {
         Providers::TensorRT,
         #[cfg(target_os = "windows")]
         Providers::DirectML,
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
         Providers::CoreML,
     ]
 }
@@ -51,7 +51,7 @@ pub fn gpu_providers() -> Vec<Providers> {
 /// too few threads (M3 Max: 875ms vs 712ms per ctd run). Elsewhere ORT's default (0, physical
 /// cores) is used as documented; it has not been measured here.
 fn intra_threads() -> usize {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     {
         extern "C" {
             fn sysctlbyname(
