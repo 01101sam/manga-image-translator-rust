@@ -109,6 +109,8 @@ async fn main() {
                     .collect::<Vec<_>>();
             }
 
+            // One font system and glyph cache for the whole batch; rebuilding it per page costs ~12ms.
+            let mut png_renderer = PngRenderer::default();
             for path in input_list {
                 info!("Processing {}", path.display());
                 let mut output = output.join(&path);
@@ -184,8 +186,7 @@ async fn main() {
                             .unwrap();
                     }
                     Renderer::Png => {
-                        let mut renderer = PngRenderer::default();
-                        let img = renderer
+                        let img = png_renderer
                             .render(exp, render_config(&settings.render))
                             .expect("Failed to render png");
                         img.to_image()
