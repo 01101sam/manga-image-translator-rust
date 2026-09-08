@@ -1,0 +1,24 @@
+[package]
+name = "pixai-tagger"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+interface-model.workspace = true
+interface-image.workspace = true
+anyhow.workspace = true
+ort.workspace = true
+base-util.workspace = true
+maplit.workspace = true
+async-trait.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+env_logger.workspace = true
+
+# The bench example only sees CoreML if this crate's own graph enables it (runtimes do so via
+# their own `ort` dependency, which does not propagate to `cargo run -p pixai-tagger`).
+[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))'.dev-dependencies]
+ort = { workspace = true, features = ["coreml"] }
