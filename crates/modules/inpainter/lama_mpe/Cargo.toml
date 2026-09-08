@@ -11,12 +11,18 @@ anyhow.workspace = true
 ndarray.workspace = true
 ort.workspace = true
 base-util.workspace = true
+log.workspace = true
 maplit.workspace = true
 util.workspace = true
 fast_image_resize.workspace = true
-ort-parallel.workspace = true
 async-trait.workspace = true
 
 [dev-dependencies]
 ndarray-npy.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+env_logger.workspace = true
+
+# The bench example only sees CoreML if this crate's own graph enables it (runtimes do so via
+# their own `ort` dependency, which does not propagate to `cargo run -p lama_mpe`).
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+ort = { workspace = true, features = ["coreml"] }
