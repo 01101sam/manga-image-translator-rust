@@ -205,9 +205,9 @@ def export(src, width, height, dst):
     # the file path and a re-exported file at the same path would silently reuse a stale compiled model.
     cache_key = hashlib.sha256(model.SerializeToString()).hexdigest()[:32]
     del model.metadata_props[:]
-    model.metadata_props.add(key="CACHE_KEY", value=cache_key)
+    model.metadata_props.add(key="COREML_CACHE_KEY", value=cache_key)
     onnx.save(model, dst)
-    print(f"saved {dst} ({Path(dst).stat().st_size / 1e6:.1f} MB, CACHE_KEY {cache_key})")
+    print(f"saved {dst} ({Path(dst).stat().st_size / 1e6:.1f} MB, COREML_CACHE_KEY {cache_key})")
 
 
 if __name__ == "__main__":
