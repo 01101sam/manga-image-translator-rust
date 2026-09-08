@@ -12,7 +12,6 @@ numpy = "0.25.0"
 dbnet.workspace = true
 base-util.workspace = true
 parking_lot = "0.12"
-paddle.workspace = true
 ctd.workspace = true
 textline-merge.workspace = true
 interface-translator.workspace = true
@@ -30,3 +29,7 @@ cuda = ["ort/cuda"]
 coreml = ["ort/coreml"]
 tensorrt = ["ort/tensorrt"]
 rocm = ["ort/rocm"]
+
+# CoreML is the default accelerator on macOS; other platforms opt in via the features above.
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { workspace = true, features = ["coreml"] }
