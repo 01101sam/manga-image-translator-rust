@@ -8,7 +8,9 @@ use interface_detector::textlines::Quadrilateral;
 use interface_detector::{DefaultOptions, Detector, PreprocessorOptions};
 use interface_image::{CpuImageProcessor, ImageOp, RawImage};
 use interface_ocr::QuadrilateralInfo;
-use interface_translator::{AsyncTranslator, LangIdDetector, Language, M2M100Size};
+use interface_translator::{
+    AsyncTranslator, Backend, LangIdDetector, Language, LlmConfig, LlmTranslator, ThinkingStrength,
+};
 use numpy::{
     ndarray::{Array2, Array3},
     IntoPyArray as _, PyArray2, PyArray3, PyArrayMethods, PyReadonlyArray3,
@@ -101,112 +103,47 @@ impl Session {
         }
     }
 
-    fn jparacrawl_translator(&self, cuda: bool, big: bool) -> PyTranslator {
-        PyTranslator {
-            inner: Arc::new(Box::new(interface_translator::JParaCrawlTranslator::new(
-                false,
-                cuda,
-                Default::default(),
-                match big {
-                    true => interface_translator::JParaCrawlSize::Large,
-                    false => interface_translator::JParaCrawlSize::Base,
-                },
-            )) as Box<dyn AsyncTranslator + Send + Sync>),
-        }
-    }
-
-    fn youdao_translator(&self, app_key: String, app_secret: String) -> PyTranslator {
-        PyTranslator {
-            inner: Arc::new(Box::new(interface_translator::YoudaoTranslator::new(
-                app_key, app_secret,
-            )) as Box<dyn AsyncTranslator + Send + Sync>),
-        }
-    }
-
-    fn papago_translator<'py>(&self, py: Python<'py>) -> PyResult<PyTranslator> {
-        let v = py.allow_threads(|| {
-            get_runtime()
-                .block_on(interface_translator::PapagoTranslator::new(false))
-                .map_err(|v| PyRuntimeError::new_err(v.to_string()))
-        })?;
+    fn llm_translator(
+        &self,
+        backend: &str,
+        api_key: String,
+        model: Option<String>,
+        base_url: Option<String>,
+        thinking: Option<bool>,
+        thinking_strength: Option<String>,
+        web_search_key: Option<String>,
+    ) -> PyResult<PyTranslator> {
+        let backend = match backend {
+            "openai" | "open_ai" => Backend::OpenAi,
+            "anthropic" => Backend::Anthropic,
+            _ => {
+                return Err(PyRuntimeError::new_err(
+                    "backend must be openai or anthropic",
+                ))
+            }
+        };
+        let thinking_strength = match thinking_strength.as_deref() {
+            None => ThinkingStrength::High,
+            Some(s) => ThinkingStrength::parse(s).ok_or_else(|| {
+                PyRuntimeError::new_err("thinking_strength must be low, high, or max")
+            })?,
+        };
+        let base_url = base_url.unwrap_or_else(|| match backend {
+            Backend::OpenAi => "https://api.deepseek.com".into(),
+            Backend::Anthropic => "https://api.deepseek.com/anthropic".into(),
+        });
         Ok(PyTranslator {
-            inner: Arc::new(Box::new(v) as Box<dyn AsyncTranslator + Send + Sync>),
+            inner: Arc::new(Box::new(LlmTranslator::from_config(LlmConfig {
+                backend,
+                base_url,
+                api_key,
+                model: model.unwrap_or_else(|| "deepseek-v4-flash".into()),
+                thinking: thinking.unwrap_or(true),
+                thinking_strength,
+                web_search_key,
+                max_iters: 24,
+            })) as Box<dyn AsyncTranslator + Send + Sync>),
         })
-    }
-    fn nllb_translator(&self, cuda: bool, big: bool) -> PyTranslator {
-        PyTranslator {
-            inner: Arc::new(Box::new(interface_translator::NLLBTranslator::new(
-                cuda,
-                Default::default(),
-                if big {
-                    interface_translator::NLLBSize::Large
-                } else {
-                    interface_translator::NLLBSize::SmallDistilled
-                },
-            )) as Box<dyn AsyncTranslator + Send + Sync>),
-        }
-    }
-
-    fn m2m100_translator(&self, cuda: bool, big: bool) -> PyTranslator {
-        PyTranslator {
-            inner: Arc::new(Box::new(interface_translator::M2M100Translator::new(
-                cuda,
-                Default::default(),
-                if big {
-                    M2M100Size::Large
-                } else {
-                    M2M100Size::Small
-                },
-            )) as Box<dyn AsyncTranslator + Send + Sync>),
-        }
-    }
-
-    fn my_memory_translator(&self) -> PyTranslator {
-        PyTranslator {
-            inner: Arc::new(Box::new(interface_translator::MyMemoryTranslator::new())
-                as Box<dyn AsyncTranslator + Send + Sync>),
-        }
-    }
-
-    fn mbart50_translator(&self, cuda: bool) -> PyTranslator {
-        PyTranslator {
-            inner: Arc::new(Box::new(interface_translator::MBart50Translator::new(
-                cuda,
-                Default::default(),
-            )) as Box<dyn AsyncTranslator + Send + Sync>),
-        }
-    }
-
-    fn google_translator(&self, api_key: String) -> PyTranslator {
-        PyTranslator {
-            inner: Arc::new(
-                Box::new(interface_translator::GoogleTranslator::new(api_key))
-                    as Box<dyn AsyncTranslator + Send + Sync>,
-            ),
-        }
-    }
-
-    fn deepl_translator(&self, auth: String) -> PyTranslator {
-        PyTranslator {
-            inner: Arc::new(Box::new(interface_translator::DeeplTranslator::new(auth))
-                as Box<dyn AsyncTranslator + Send + Sync>),
-        }
-    }
-    fn caiyun_translator(&self, token: String, request_id: String) -> PyTranslator {
-        PyTranslator {
-            inner: Arc::new(Box::new(interface_translator::CaiyunTranslator::new(
-                token, request_id,
-            )) as Box<dyn AsyncTranslator + Send + Sync>),
-        }
-    }
-
-    fn sugoi_translator(&self, cuda: bool) -> PyTranslator {
-        PyTranslator {
-            inner: Arc::new(Box::new(interface_translator::SugoiTranslator::new(
-                cuda,
-                Default::default(),
-            )) as Box<dyn AsyncTranslator + Send + Sync>),
-        }
     }
 
     fn ctd_detector(&self) -> PyDetector {
@@ -300,26 +237,16 @@ impl PyTranslator {
     pub fn translate<'py>(
         &self,
         py: Python<'py>,
-        input: Vec<String>,
-        from: &str,
+        ocr_json: String,
+        tags: Option<String>,
         to: &str,
-    ) -> PyResult<Vec<String>> {
+    ) -> PyResult<String> {
         let to =
             Language::from_name(to).ok_or(PyRuntimeError::new_err("language not supported"))?;
         py.allow_threads(|| {
-            let t = self.inner.translate_vec(
-                &input,
-                None,
-                Some(
-                    Language::from_name(from)
-                        .ok_or(PyRuntimeError::new_err("language not supported"))?,
-                ),
-                &to,
-            );
             get_runtime()
-                .block_on(t)
+                .block_on(self.inner.translate(&ocr_json, tags.as_deref(), to))
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-                .map(|v| v.text)
         })
     }
 }

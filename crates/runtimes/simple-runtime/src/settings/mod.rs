@@ -4,6 +4,7 @@ mod inpainter;
 mod mask_refinement;
 mod ocr;
 mod render;
+mod tagger;
 mod translator;
 mod upscaler;
 
@@ -14,9 +15,9 @@ pub use crate::settings::{
     colorizer::Colorizer, colorizer::ColorizerSettings, detector::Detector,
     detector::DetectorSettings, inpainter::Inpainter, inpainter::InpainterSettings,
     inpainter::Mask, mask_refinement::MaskRefinementSettings, ocr::OCRSettings, ocr::OCR,
-    render::Alignment, render::Direction, render::RenderSettings, render::Renderer,
-    translator::Target, translator::Translation, translator::Translator,
-    translator::TranslatorSettings, upscaler::Upscaler, upscaler::UpscalerSettings,
+    render::Alignment, render::Direction, render::RenderSettings, render::Renderer, tagger::Tagger,
+    tagger::TaggerSettings, translator::TranslatorMode, translator::TranslatorSettings,
+    upscaler::Upscaler, upscaler::UpscalerSettings,
 };
 
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
@@ -40,6 +41,9 @@ pub struct Settings {
 
     /// Settings for the inpainter module
     pub inpainter: InpainterSettings,
+
+    /// Settings for the tagger module
+    pub tagger: TaggerSettings,
 
     /// Settings for the translator module
     pub translator: TranslatorSettings,

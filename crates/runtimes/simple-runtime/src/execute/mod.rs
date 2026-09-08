@@ -4,6 +4,7 @@ mod dict;
 mod inpainter;
 mod mask_refinement;
 mod ocr;
+mod tagger;
 mod textline_merge;
 mod translator;
 mod upscaler;
@@ -107,7 +108,10 @@ impl Models {
             render_textblocks(&upscaled_img, &textblocks, debug_path)?;
         }
 
-        let textblocks = timed!("pre_dict", self.run_pre_dict(textblocks, &config.translator)?);
+        let textblocks = timed!(
+            "pre_dict",
+            self.run_pre_dict(textblocks, &config.translator)?
+        );
         if let Some(debug_path) = &debug_path {
             if config.translator.pre_dict.is_some() {
                 save_json(
@@ -117,9 +121,19 @@ impl Models {
             }
         }
 
+        let tags = timed!(
+            "tagger",
+            self.run_tagger(&upscaled_img, &config.tagger, config.translator.mode, &ip)
+                .await
+        );
+        if let (Some(debug_path), Some(tags)) = (&debug_path, &tags) {
+            std::fs::write(debug_path.join("3_tags.txt"), tags)?;
+        }
+
         let textblocks = timed!(
             "translate",
-            self.run_translators(textblocks, &config.translator).await?
+            self.run_translators(textblocks, &config.translator, tags.as_deref())
+                .await?
         );
 
         if let Some(debug_path) = &debug_path {
@@ -189,16 +203,14 @@ fn write_mask(mask: &interface_image::Mask, path: &Option<PathBuf>) -> anyhow::R
     }
 }
 
-fn passthrough_export(
-    img: RawImage,
-    alpha: Option<Vec<u8>>,
-) -> anyhow::Result<Option<Export>> {
+fn passthrough_export(img: RawImage, alpha: Option<Vec<u8>>) -> anyhow::Result<Option<Export>> {
     let img = match alpha {
         Some(a) => img.add_a(a),
         None => img,
     };
     let dyn_img = img.to_image()?;
-    let overlay = DynamicImage::ImageRgba8(image::RgbaImage::new(dyn_img.width(), dyn_img.height()));
+    let overlay =
+        DynamicImage::ImageRgba8(image::RgbaImage::new(dyn_img.width(), dyn_img.height()));
     Ok(Some(Export::new(dyn_img, overlay, vec![], None)))
 }
 

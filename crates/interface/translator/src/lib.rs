@@ -1,107 +1,163 @@
-use std::borrow::Cow;
+mod agent;
+mod backend;
+mod language;
 
-pub use aio_translator::*;
-use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use std::sync::Arc;
 
-#[derive(Clone, Copy, Hash, Eq, PartialEq)]
-pub struct LanguageWrapper(pub Language);
+use serde::{Deserialize, Serialize};
 
-impl JsonSchema for LanguageWrapper {
-    fn schema_name() -> Cow<'static, str> {
-        "LanguageWrapper".into()
+pub use language::{is_valuable_text, Detector, LangIdDetector, Language, LanguageWrapper};
+
+use crate::agent::{run_agent, UreqTransport};
+
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Backend {
+    #[default]
+    #[serde(rename = "openai")]
+    OpenAi,
+    Anthropic,
+}
+
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingStrength {
+    Low,
+    #[default]
+    High,
+    Max,
+}
+
+impl ThinkingStrength {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::High => "high",
+            Self::Max => "max",
+        }
     }
 
-    fn schema_id() -> Cow<'static, str> {
-        concat!(module_path!(), "::", "LanguageWrapper").into()
+    pub fn budget_tokens(self) -> u32 {
+        match self {
+            Self::Low => 2048,
+            Self::High => 8192,
+            Self::Max => 16384,
+        }
     }
-    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        {
-            let mut map = serde_json::Map::new();
-            map.insert(
-                "oneOf".into(),
-                serde_json::Value::Array({
-                    let mut enum_values = Vec::new();
-                    enum_values.push(to_enum_schema("cht", "Chinese Traditional"));
-                    enum_values.push(to_enum_schema("chs", "Chinese Simplified"));
-                    for lang in Language::all() {
-                        let name = lang.to_name().unwrap();
-                        if let Some(code) = lang.to_639_1() {
-                            enum_values.push(to_enum_schema(code, name));
-                        }
-                        if let Some(code) = lang.to_639_3() {
-                            enum_values.push(to_enum_schema(code, name));
-                        }
-                    }
-                    enum_values
-                }),
-            );
-            schemars::Schema::from(map)
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "low" => Some(Self::Low),
+            "high" => Some(Self::High),
+            "max" => Some(Self::Max),
+            _ => None,
         }
     }
 }
 
-fn to_enum_schema(name: &str, desc: &str) -> Value {
-    use schemars::_private::{
-        get_title_and_description, insert_metadata_property_if_nonempty, new_unit_enum_variant,
-    };
-    let mut schema = new_unit_enum_variant(name);
-    let (title, desc): (&str, &str) = get_title_and_description(desc);
-
-    insert_metadata_property_if_nonempty(&mut schema, "title", title);
-    insert_metadata_property_if_nonempty(&mut schema, "description", desc);
-    schema.to_value()
+pub trait Transport: Send + Sync {
+    fn post_json(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value>;
 }
 
-impl<'de> Deserialize<'de> for LanguageWrapper {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct EnumVisitor;
+#[derive(Clone)]
+pub struct LlmConfig {
+    pub backend: Backend,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub thinking: bool,
+    pub thinking_strength: ThinkingStrength,
+    pub web_search_key: Option<String>,
+    pub max_iters: usize,
+}
 
-        impl<'de> serde::de::Visitor<'de> for EnumVisitor {
-            type Value = LanguageWrapper;
+#[derive(Clone)]
+pub struct LlmTranslator {
+    pub(crate) backend: Backend,
+    pub(crate) base_url: String,
+    pub(crate) api_key: String,
+    pub(crate) model: String,
+    pub(crate) thinking: bool,
+    pub(crate) thinking_strength: ThinkingStrength,
+    pub(crate) web_search_key: Option<String>,
+    pub(crate) max_iters: usize,
+    pub(crate) transport: Arc<dyn Transport>,
+}
 
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f, "a string matching one of the enum variants")
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<LanguageWrapper, E>
-            where
-                E: serde::de::Error,
-            {
-                let lang = value.trim().to_lowercase();
-                if lang == "cht" {
-                    return Ok(LanguageWrapper(Language::ChineseTraditional));
-                } else if lang == "chs" {
-                    return Ok(LanguageWrapper(Language::Chinese));
-                }
-                (if lang.len() == 2 {
-                    Language::from_639_1(&lang)
-                } else {
-                    Language::from_639_3(&lang)
-                })
-                .map(LanguageWrapper)
-                .ok_or_else(|| E::custom(format!("invalid lang code: \"{}\"", value)))
-            }
+impl LlmTranslator {
+    pub fn from_config(config: LlmConfig) -> Self {
+        Self {
+            backend: config.backend,
+            base_url: config.base_url,
+            api_key: config.api_key,
+            model: config.model,
+            thinking: config.thinking,
+            thinking_strength: config.thinking_strength,
+            web_search_key: config.web_search_key,
+            max_iters: if config.max_iters == 0 {
+                24
+            } else {
+                config.max_iters
+            },
+            transport: Arc::new(UreqTransport),
         }
+    }
 
-        deserializer.deserialize_str(EnumVisitor)
+    pub fn with_transport(mut self, transport: Arc<dyn Transport>) -> Self {
+        self.transport = transport;
+        self
+    }
+
+    pub fn with_max_iters(mut self, max_iters: usize) -> Self {
+        self.max_iters = max_iters;
+        self
+    }
+
+    pub fn translate_blocking(
+        &self,
+        ocr_json: &str,
+        tags: Option<&str>,
+        target: Language,
+    ) -> anyhow::Result<String> {
+        run_agent(self, ocr_json, tags, target)
     }
 }
 
-impl Serialize for LanguageWrapper {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let str = self
-            .0
-            .to_639_1()
-            .or(self.0.to_639_3())
-            .unwrap_or_else(|| self.0.to_name().unwrap());
-        serializer.serialize_str(str)
+#[async_trait::async_trait]
+pub trait AsyncTranslator: Send + Sync {
+    async fn translate(
+        &self,
+        ocr_json: &str,
+        tags: Option<&str>,
+        target: Language,
+    ) -> anyhow::Result<String>;
+}
+
+#[async_trait::async_trait]
+impl AsyncTranslator for LlmTranslator {
+    async fn translate(
+        &self,
+        ocr_json: &str,
+        tags: Option<&str>,
+        target: Language,
+    ) -> anyhow::Result<String> {
+        let this = self.clone();
+        let ocr_json = ocr_json.to_owned();
+        let tags = tags.map(str::to_owned);
+        tokio::task::spawn_blocking(move || {
+            this.translate_blocking(&ocr_json, tags.as_deref(), target)
+        })
+        .await?
     }
 }
+
+pub use agent::{system_prompt, tool_specs, user_message};

@@ -1,0 +1,726 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Settings",
+  "description": "Settings for the simple runtime",
+  "type": "object",
+  "properties": {
+    "colorizer": {
+      "description": "Settings for the colorizer module",
+      "$ref": "#/$defs/ColorizerSettings",
+      "default": {
+        "colorization_size": 576,
+        "colorizer": "None",
+        "denoise_sigma": 30
+      }
+    },
+    "detector": {
+      "description": "Settings for the detector module",
+      "$ref": "#/$defs/DetectorSettings",
+      "default": {
+        "detector": "DBNet",
+        "options": {
+          "box_threshold": 0.7,
+          "detect_size": 2048,
+          "text_threshold": 0.5,
+          "unclip_ratio": 2.3
+        },
+        "preprocessor": {
+          "auto_rotate": false,
+          "gamma_correct": false,
+          "invert": false,
+          "rotate": false
+        }
+      }
+    },
+    "inpainter": {
+      "description": "Settings for the inpainter module",
+      "$ref": "#/$defs/InpainterSettings",
+      "default": {
+        "inpaint_color": [
+          255,
+          255,
+          255
+        ],
+        "inpainter": "LamaLarge",
+        "inpainting_size": 2048,
+        "mask": "RefinedMask"
+      }
+    },
+    "mask_refinement": {
+      "description": "Settings for the mask refinement",
+      "$ref": "#/$defs/MaskRefinementSettings",
+      "default": {
+        "dilation_offset": 20.0,
+        "furigana": false,
+        "ignore_bubble": 0,
+        "kernel_size": 3,
+        "method": "FitText"
+      }
+    },
+    "ocr": {
+      "description": "Settings for the OCR module",
+      "$ref": "#/$defs/OCRSettings",
+      "default": {
+        "filter_text": [],
+        "ignore_bubble": 0,
+        "min_text_length": 1,
+        "ocr": "Ocr48px",
+        "prob": 0.2,
+        "use_mocr_merge": false
+      }
+    },
+    "render": {
+      "description": "Settings for the render module",
+      "$ref": "#/$defs/RenderSettings",
+      "default": {
+        "alignment": "Auto",
+        "direction": "Auto",
+        "disable_font_border": false,
+        "font_size": null,
+        "font_size_minimum": -1.0,
+        "font_size_offset": 0.0,
+        "force_simple_sort": false,
+        "line_spacing": null,
+        "renderer": "Png",
+        "rtl": true
+      }
+    },
+    "tagger": {
+      "description": "Settings for the tagger module",
+      "$ref": "#/$defs/TaggerSettings",
+      "default": {
+        "character_threshold": 0.8500000238418579,
+        "general_threshold": 0.30000001192092896,
+        "tagger": "Pixai"
+      }
+    },
+    "translator": {
+      "description": "Settings for the translator module",
+      "$ref": "#/$defs/TranslatorSettings",
+      "default": {
+        "backend": "openai",
+        "base_url": null,
+        "filter_lang": [],
+        "mode": "Llm",
+        "model": "deepseek-v4-flash",
+        "post_dict": null,
+        "pre_dict": null,
+        "target": "chs",
+        "thinking": true,
+        "thinking_strength": "high",
+        "web_search": false
+      }
+    },
+    "upscaler": {
+      "description": "Settings for the upscaler module",
+      "$ref": "#/$defs/UpscalerSettings",
+      "default": {
+        "padding": 0,
+        "patch_size": null,
+        "upscaler": null
+      }
+    }
+  },
+  "$defs": {
+    "Alignment": {
+      "type": "string",
+      "enum": [
+        "Auto",
+        "Left",
+        "Center",
+        "Right"
+      ]
+    },
+    "Backend": {
+      "type": "string",
+      "enum": [
+        "openai",
+        "anthropic"
+      ]
+    },
+    "Colorizer": {
+      "type": "string",
+      "enum": [
+        "None"
+      ]
+    },
+    "ColorizerSettings": {
+      "type": "object",
+      "properties": {
+        "colorization_size": {
+          "type": "integer",
+          "format": "int32",
+          "default": 576
+        },
+        "colorizer": {
+          "$ref": "#/$defs/Colorizer",
+          "default": "None"
+        },
+        "denoise_sigma": {
+          "type": "integer",
+          "format": "int32",
+          "default": 30
+        }
+      }
+    },
+    "DefaultOptions": {
+      "type": "object",
+      "properties": {
+        "box_threshold": {
+          "description": "Threshold for bbox generation\nto small = more false positives/ noise, background artifacts, or partial text.\nto big = false negatives/ actual text that had slightly lower confidence is discarded.\nallowed range is from 0.0 to 1.0",
+          "type": "number",
+          "format": "double",
+          "default": 0.7
+        },
+        "detect_size": {
+          "description": "Text detector used for creating a text mask from an image\nTODO: guide",
+          "type": "integer",
+          "format": "uint64",
+          "default": 2048,
+          "minimum": 0
+        },
+        "text_threshold": {
+          "description": "Threshold for text detection\nsmaller values = more detections + more false positives\nlarger values = fewer detections + more false negatives\nallowed range is from 0.0 to 1.0",
+          "type": "number",
+          "format": "double",
+          "default": 0.5
+        },
+        "unclip_ratio": {
+          "description": "How much to extend text skeleton to form bounding box\nsmaller values = smaller text skeleton.\nto small = more false negatives/partial detections\nlarger values = bigger text skeleton detections .\nto big =  more false positives/Multiple close text lines/words may be merged\nSuggested values:\n- `1.0 – 1.5`: Use for tight text layouts, well-separated characters or lines, high-resolution images.\n- `1.5 – 2.0`: General-purpose setting. Provides a good balance between recall and precision.\n- `2.0 – 2.5`: Use when text is thin, faint, or sparse—e.g., scanned documents or light fonts.\n- `> 2.5`: Rarely needed. May cause nearby text instances to merge or overlap.",
+          "type": "number",
+          "format": "double",
+          "default": 2.3
+        }
+      }
+    },
+    "Detector": {
+      "type": "string",
+      "enum": [
+        "DBNet",
+        "Ctd"
+      ]
+    },
+    "DetectorSettings": {
+      "type": "object",
+      "properties": {
+        "detector": {
+          "description": "Text detector used for creating a text mask from an image",
+          "$ref": "#/$defs/Detector",
+          "default": "DBNet"
+        },
+        "options": {
+          "description": "Detector specific options",
+          "$ref": "#/$defs/DefaultOptions",
+          "default": {
+            "box_threshold": 0.7,
+            "detect_size": 2048,
+            "text_threshold": 0.5,
+            "unclip_ratio": 2.3
+          }
+        },
+        "preprocessor": {
+          "description": "General Options to apply before detection",
+          "$ref": "#/$defs/PreprocessorOptions",
+          "default": {
+            "auto_rotate": false,
+            "gamma_correct": false,
+            "invert": false,
+            "rotate": false
+          }
+        }
+      }
+    },
+    "Direction": {
+      "type": "string",
+      "enum": [
+        "Auto",
+        "Horizontal",
+        "Vertical"
+      ]
+    },
+    "Inpainter": {
+      "type": "string",
+      "enum": [
+        "LamaAot",
+        "LamaLarge",
+        "LamaMpe",
+        "None",
+        "Original"
+      ]
+    },
+    "InpainterSettings": {
+      "type": "object",
+      "properties": {
+        "inpaint_color": {
+          "description": "If no ai is used for inpainting than use this color",
+          "type": "array",
+          "default": [
+            255,
+            255,
+            255
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0
+          },
+          "maxItems": 3,
+          "minItems": 3
+        },
+        "inpainter": {
+          "description": "Inpainting model to use",
+          "$ref": "#/$defs/Inpainter",
+          "default": "LamaLarge"
+        },
+        "inpainting_size": {
+          "description": "Size of image used for inpainting (too large will result in OOM)",
+          "type": "integer",
+          "format": "uint16",
+          "default": 2048,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "mask": {
+          "description": "this is not the mask that is given to the inpainter, but what part of the inpainted image should be extracted(overlayed on the orignal image)",
+          "$ref": "#/$defs/Mask",
+          "default": "RefinedMask"
+        }
+      }
+    },
+    "LanguageWrapper": {
+      "oneOf": [
+        {
+          "title": "简体中文",
+          "const": "chs"
+        },
+        {
+          "title": "繁体中文",
+          "const": "cht"
+        },
+        {
+          "title": "英文",
+          "const": "en"
+        },
+        {
+          "title": "日文",
+          "const": "ja"
+        }
+      ]
+    },
+    "Mask": {
+      "oneOf": [
+        {
+          "description": "The detected mask needs to be refined to remove artifacts when inpainting. Its alsmost a perfect match to the actual letters, but does contain some noise",
+          "type": "string",
+          "const": "Mask"
+        },
+        {
+          "description": "The refined mask is used for inpainting, but a bit more dilated & without the noise",
+          "type": "string",
+          "const": "RefinedMask"
+        },
+        {
+          "description": "this is cuts out the parts which are in both mask and refined mask(filters noise)",
+          "type": "string",
+          "const": "Both"
+        }
+      ]
+    },
+    "MaskRefinementSettings": {
+      "type": "object",
+      "properties": {
+        "dilation_offset": {
+          "description": "By how much to extend the text mask to remove left-over text pixels of the original image.\nbigger means the mask gets extended further",
+          "type": "number",
+          "format": "double",
+          "default": 20.0
+        },
+        "furigana": {
+          "description": "Mask gets extended to the right/top to cover furigana characters",
+          "type": "boolean",
+          "default": false
+        },
+        "ignore_bubble": {
+          "description": "The threshold for ignoring text in non bubble areas, with valid values ranging from 1 to 50, does not ignore others. Recommendation 5 to 10. If it is too low, normal bubble areas may be ignored, and if it is too large, non bubble areas may be considered normal bubbles",
+          "type": "integer",
+          "format": "uint8",
+          "default": 0,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "kernel_size": {
+          "description": "Set the convolution kernel size of the text erasure area to completely clean up text residues\nbigger means the mask gets extended further",
+          "type": "integer",
+          "format": "uint8",
+          "default": 3,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "method": {
+          "$ref": "#/$defs/Method",
+          "default": "FitText"
+        }
+      }
+    },
+    "Method": {
+      "type": "string",
+      "enum": [
+        "FitText",
+        "FillMask"
+      ]
+    },
+    "OCR": {
+      "type": "string",
+      "enum": [
+        "MangaOcr",
+        "Native",
+        "Ctc48px",
+        "Ocr48px"
+      ]
+    },
+    "OCRSettings": {
+      "type": "object",
+      "properties": {
+        "filter_text": {
+          "description": "Filter regions by their text with a regex. Example usage: '.*badtext.*'",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "ignore_bubble": {
+          "description": "Skip non-bubble text. 1 to 50, 0 disables",
+          "type": "integer",
+          "format": "uint8",
+          "default": 0,
+          "maximum": 255,
+          "minimum": 0
+        },
+        "min_text_length": {
+          "description": "Minimum text length of a text region",
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 0
+        },
+        "ocr": {
+          "description": "Optical character recognition (OCR) model to use",
+          "$ref": "#/$defs/OCR",
+          "default": "Ocr48px"
+        },
+        "prob": {
+          "description": "Minimum probability of a text region to be considered valid. If None, uses the model default",
+          "type": "number",
+          "format": "double",
+          "default": 0.2
+        },
+        "use_mocr_merge": {
+          "description": "Use bbox merge when Manga OCR inference.\ntodo: not used",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "PreprocessorOptions": {
+      "type": "object",
+      "properties": {
+        "auto_rotate": {
+          "description": "Rotate the image for detection to prefer vertical textlines. Might improve detection.",
+          "type": "boolean",
+          "default": false
+        },
+        "gamma_correct": {
+          "description": "Applies gamma correction for detection. Might improve detection.",
+          "type": "boolean",
+          "default": false
+        },
+        "invert": {
+          "description": "Invert the image colors for detection. Might improve detection.",
+          "type": "boolean",
+          "default": false
+        },
+        "rotate": {
+          "description": "Rotate the image for detection. Might improve detection.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "RenderSettings": {
+      "type": "object",
+      "properties": {
+        "alignment": {
+          "$ref": "#/$defs/Alignment",
+          "default": "Auto"
+        },
+        "direction": {
+          "$ref": "#/$defs/Direction",
+          "default": "Auto"
+        },
+        "disable_font_border": {
+          "type": "boolean",
+          "default": false
+        },
+        "font_size": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float",
+          "default": null
+        },
+        "font_size_minimum": {
+          "type": "number",
+          "format": "float",
+          "default": -1.0
+        },
+        "font_size_offset": {
+          "type": "number",
+          "format": "float",
+          "default": 0.0
+        },
+        "force_simple_sort": {
+          "type": "boolean",
+          "default": false
+        },
+        "line_spacing": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float",
+          "default": null
+        },
+        "renderer": {
+          "$ref": "#/$defs/Renderer",
+          "default": "Png"
+        },
+        "rtl": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "Renderer": {
+      "type": "string",
+      "enum": [
+        "Png",
+        "Raw",
+        "Html"
+      ]
+    },
+    "Tagger": {
+      "type": "string",
+      "enum": [
+        "Pixai"
+      ]
+    },
+    "TaggerSettings": {
+      "description": "Image tagging that feeds the `<tags>` block of the LLM translator",
+      "type": "object",
+      "properties": {
+        "character_threshold": {
+          "description": "Minimum probability for character tags (and the franchises derived from them)",
+          "type": "number",
+          "format": "float",
+          "default": 0.8500000238418579
+        },
+        "general_threshold": {
+          "description": "Minimum probability for general tags",
+          "type": "number",
+          "format": "float",
+          "default": 0.30000001192092896
+        },
+        "tagger": {
+          "description": "`None` translates without tags",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tagger"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "Pixai"
+        }
+      }
+    },
+    "ThinkingStrength": {
+      "type": "string",
+      "enum": [
+        "low",
+        "high",
+        "max"
+      ]
+    },
+    "TranslatorMode": {
+      "type": "string",
+      "enum": [
+        "Llm",
+        "Original",
+        "None"
+      ]
+    },
+    "TranslatorSettings": {
+      "type": "object",
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/Backend",
+          "default": "openai"
+        },
+        "base_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "filter_lang": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/LanguageWrapper"
+          }
+        },
+        "mode": {
+          "$ref": "#/$defs/TranslatorMode",
+          "default": "Llm"
+        },
+        "model": {
+          "type": "string",
+          "default": "deepseek-v4-flash"
+        },
+        "post_dict": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "pre_dict": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "target": {
+          "$ref": "#/$defs/LanguageWrapper",
+          "default": "chs"
+        },
+        "thinking": {
+          "type": "boolean",
+          "default": true
+        },
+        "thinking_strength": {
+          "$ref": "#/$defs/ThinkingStrength",
+          "default": "high"
+        },
+        "web_search": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "Upscaler": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "Esrgan2x",
+            "Esrgan4x",
+            "EsrganAnime4x",
+            "Anime4k"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Waifu2xCuNetArt": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Waifu2xCuNetArt"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Waifu2xSwinUnetArt2x": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Waifu2xSwinUnetArt2x"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "Waifu2xSwinUnetArt4x": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Waifu2xSwinUnetArt4x"
+          ]
+        }
+      ]
+    },
+    "UpscalerSettings": {
+      "type": "object",
+      "properties": {
+        "padding": {
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
+        },
+        "patch_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        },
+        "upscaler": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Upscaler"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      }
+    }
+  }
+}
