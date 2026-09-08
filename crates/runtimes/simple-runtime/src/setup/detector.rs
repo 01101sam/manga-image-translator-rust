@@ -21,10 +21,6 @@ impl Detectors {
                     Box::new(dbnet::DbNetDetector::new(providers.clone(), false)) as DetectorType
                 }
                 // Detector::DBNetConvNext => todo!(),
-                Detector::Paddle => {
-                    // allow:clone[arc]
-                    Box::new(paddle::PaddleDetector::new(providers.clone())) as DetectorType
-                }
                 // allow:clone[arc]
                 Detector::Ctd => Box::new(ctd::CtdDetector::new(providers.clone())) as DetectorType,
             };
