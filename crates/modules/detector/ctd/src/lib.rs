@@ -1,9 +1,12 @@
 mod refine_mask;
 
-use std::{ops::Deref, sync::Arc};
+use std::{
+    ops::Deref,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::anyhow;
-use base_util::onnx::{new_session, Providers};
+use base_util::onnx::{new_session_mlprogram, Providers};
 
 use interface_detector::{textlines::Quadrilateral, DefaultOptions, Detector};
 use interface_image::{ImageOp, Interpolation, Mask, RawImageCow, RawImageView};
@@ -13,8 +16,7 @@ use interface_model::{
 };
 use maplit::hashmap;
 use ndarray::{s, stack, Array2, Array4, ArrayView4, ArrayViewD, Axis};
-use ort::{session::RunOptions, value::Tensor};
-use ort_parallel::AsyncSessionPool;
+use ort::{session::Session, value::Tensor};
 use util::{
     dbnet::SegDetectorRepresenter,
     det_arrange::{det_rearrange_forward, det_unarrange, shoud_rearrange},
@@ -22,7 +24,7 @@ use util::{
 
 pub struct CtdDetector {
     providers: Arc<Vec<Providers>>,
-    model: ModelWrap<AsyncSessionPool>,
+    model: ModelWrap<Mutex<Session>>,
 }
 
 impl CtdDetector {
@@ -37,13 +39,12 @@ impl CtdDetector {
 
 #[async_trait::async_trait]
 impl ModelLoad for CtdDetector {
-    impl_model_load_helpers!(model, AsyncSessionPool);
+    impl_model_load_helpers!(model, Mutex<Session>);
 
     async fn reload(&self) -> anyhow::Result<ModelRead<'_, Self::T>> {
         let p = self.download_model("model", "model.onnx").await?;
-        let b = new_session(&self.providers)?;
-        let p = AsyncSessionPool::commit_from_file(b, &p, 10)?;
-        *self.model.write().await = Some(p);
+        let session = new_session_mlprogram(&self.providers)?.commit_from_file(&p)?;
+        *self.model.write().await = Some(Mutex::new(session));
         Ok(self.get_model().await.expect("Model was set before"))
     }
 }
@@ -70,24 +71,21 @@ impl Detector for CtdDetector {
         let (im_w, im_h) = (img_.width, img_.height);
         let session = self.load().await?;
         let session = session.deref();
-        let opt = RunOptions::new()?;
         let (lines_map, mask) = match shoud_rearrange(img_, 1024) {
             true => {
                 let (batch_list, rv) = det_rearrange_forward(img.view(), 1024, 4, img_processor)?;
-                let mut out = vec![];
-                for batch in batch_list {
-                    out.push(det_batch_forward_ctd(session, &opt, batch.view()).await?);
-                }
-                let (lines_map, mask) = det_unarrange(out, rv)?;
-                (lines_map, mask)
+                let out = batch_list
+                    .iter()
+                    .map(|batch| det_batch_forward_ctd(session, batch.view()))
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                det_unarrange(out, rv)?
             }
             false => {
                 let (img_in, _, dw, dh) =
                     preprocess_img(img.view(), img_processor, (1024, 1024), true, false)?;
                 let tensor = Tensor::from_array(img_in)?;
-                let outputs = session
-                    .run_async(ort::inputs!["input" => tensor], &opt)
-                    .await?;
+                let mut session = session.lock().expect("session mutex poisoned");
+                let outputs = session.run(ort::inputs!["input" => tensor])?;
 
                 let mask: ArrayViewD<f32> = outputs["mask"].try_extract_array()?;
                 let lines_map: ArrayViewD<f32> = outputs["lines"].try_extract_array()?;
@@ -154,16 +152,15 @@ impl Detector for CtdDetector {
         Ok((qu, mask_refined))
     }
 }
-async fn det_batch_forward_ctd<'a, 'b>(
-    session: &'b AsyncSessionPool,
-    run_options: &RunOptions,
-    batch: ArrayView4<'a, u8>,
+/// Runs the session synchronously on the calling thread; see `dbnet` for why `RunAsync` is avoided.
+fn det_batch_forward_ctd(
+    session: &Mutex<Session>,
+    batch: ArrayView4<u8>,
 ) -> anyhow::Result<(Array4<f32>, Array4<f32>)> {
     let batch = batch.mapv(|v| v as f32 / 255.).permuted_axes([0, 3, 1, 2]);
     let tensor = Tensor::from_array(batch)?;
-    let outputs = session
-        .run_async(ort::inputs!["input" => tensor], run_options)
-        .await?;
+    let mut session = session.lock().expect("session mutex poisoned");
+    let outputs = session.run(ort::inputs!["input" => tensor])?;
 
     let mask: ArrayViewD<f32> = outputs["mask"].try_extract_array()?;
     let lines: ArrayViewD<f32> = outputs["lines"].try_extract_array()?;
