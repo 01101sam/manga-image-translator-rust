@@ -56,28 +56,39 @@ pub fn lama_resize_image<'a>(
     Ok((image, mask))
 }
 
+pub fn lama_pad_dim(n: u16) -> u16 {
+    // FFC 在 /8 特征图上做 FFT；只 pad 到 8 时该层可以是奇数（如 1464/8=183），
+    // ONNX Add 会变成 182 vs 183。pad 到 16 保证 /8 为偶数。
+    const PAD: u16 = 16;
+    let r = n % PAD;
+    if r == 0 {
+        n
+    } else {
+        n + PAD - r
+    }
+}
+
 pub fn lama_add_border(
-    mut image: RawImage,
-    mut mask: Mask,
+    image: RawImage,
+    mask: Mask,
     img_processor: &Arc<dyn ImageOp + Send + Sync>,
 ) -> (RawImage, Mask, u16, u16) {
-    let w = image.width;
-    let h = image.height;
-    let pad_size = 8;
-    let new_h = if h % pad_size != 0 {
-        (pad_size - (h % pad_size)) + h
-    } else {
-        h
-    };
-    let new_w = if w % pad_size != 0 {
-        (pad_size - (w % pad_size)) + w
-    } else {
-        w
-    };
+    let new_w = lama_pad_dim(image.width);
+    let new_h = lama_pad_dim(image.height);
+    let (image, mask) = lama_pad_canvas(image, mask, new_w, new_h, img_processor);
+    (image, mask, new_w, new_h)
+}
 
-    if new_h != h || new_w != w {
-        let temp = img_processor.add_border_wh(image.view(), new_w, new_h);
-        if let RawImageCow::Owned(o) = temp {
+/// Zero-pads image and mask at the bottom/right to `new_w` x `new_h` (no-op when already that size).
+pub fn lama_pad_canvas(
+    mut image: RawImage,
+    mut mask: Mask,
+    new_w: u16,
+    new_h: u16,
+    img_processor: &Arc<dyn ImageOp + Send + Sync>,
+) -> (RawImage, Mask) {
+    if new_h != image.height || new_w != image.width {
+        if let RawImageCow::Owned(o) = img_processor.add_border_wh(image.view(), new_w, new_h) {
             image = o;
         }
 
@@ -96,5 +107,21 @@ pub fn lama_add_border(
             height: m.height,
         };
     }
-    (image, mask, new_w, new_h)
+    (image, mask)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lama_pad_dim;
+
+    #[test]
+    fn pad_keeps_ffc_spatial_even() {
+        for n in [1u16, 7, 8, 9, 15, 16, 1463, 1464, 1472] {
+            let p = lama_pad_dim(n);
+            assert_eq!(p % 16, 0, "n={n}");
+            assert_eq!((p / 8) % 2, 0, "n={n} p={p}");
+        }
+        assert_eq!(lama_pad_dim(1464), 1472);
+        assert_eq!(lama_pad_dim(8), 16);
+    }
 }
