@@ -7,13 +7,18 @@ mod upscaler;
 pub use detector::DetectorType;
 pub use detector::Detectors;
 use interface_translator::LangIdDetector;
+pub use translator::create_translator;
 pub use upscaler::UpscalerType;
 pub use upscaler::Upscalers;
+
+use std::sync::Arc;
+
+use base_util::onnx::all_providers;
+use pixai_tagger::PixaiTagger;
 
 use crate::settings::Colorizer;
 use crate::settings::Detector;
 use crate::settings::Inpainter;
-use crate::settings::Translator;
 use crate::settings::Upscaler;
 use crate::settings::OCR;
 use crate::setup::colorizer::ColorizerType;
@@ -22,16 +27,15 @@ use crate::setup::inpainter::InpainterType;
 use crate::setup::inpainter::Inpainters;
 use crate::setup::ocr::OCRs;
 use crate::setup::ocr::OcrType;
-use crate::setup::translator::TranslatorType;
-use crate::setup::translator::Translators;
 
 pub struct Models {
     upscalers: Upscalers,
     colorizers: Colorizers,
     detectors: Detectors,
     ocrs: OCRs,
-    translators: Translators,
     inpainters: Inpainters,
+    /// `None` once tagging failed (model not downloadable): the pipeline then runs without tags.
+    pub tagger: Option<PixaiTagger>,
     pub lang_detector: LangIdDetector,
 }
 
@@ -48,12 +52,6 @@ impl Models {
     pub fn get_ocr(&self, ocr: OCR) -> &OcrType {
         self.ocrs.get(ocr)
     }
-    pub async fn get_translator(
-        &mut self,
-        translator: Translator,
-    ) -> anyhow::Result<&mut TranslatorType> {
-        self.translators.get(translator).await
-    }
     pub fn get_inpainter(&self, inpainter: Inpainter) -> &InpainterType {
         self.inpainters.get(inpainter)
     }
@@ -61,17 +59,16 @@ impl Models {
         max_batch_size_upscaler: usize,
         max_batch_size_ocr: usize,
         fast: bool,
-        cuda: bool,
+        _cuda: bool,
     ) -> Self {
-        //TODO: providers based on input
         Models {
             lang_detector: LangIdDetector::new().unwrap(),
             detectors: Detectors::new(),
             colorizers: Colorizers::new(),
             upscalers: Upscalers::new(max_batch_size_upscaler, fast),
             inpainters: Inpainters::new(),
+            tagger: Some(PixaiTagger::new(Arc::new(all_providers()))),
             ocrs: OCRs::new(max_batch_size_ocr),
-            translators: Translators::new(cuda),
         }
     }
 }

@@ -10,6 +10,7 @@ members = [
     "crates/modules/inpainter/*",
     "crates/modules/ocr/*",
     "crates/modules/renderer/*",
+    "crates/modules/tagger/*",
     "crates/modules/upscaler/*",
     "crates/modules/watermarks/lsb",
     "crates/modules/watermarks/rexiv",
@@ -65,6 +66,7 @@ lama_aot = { path = "crates/modules/inpainter/lama_aot" }
 lama_large = { path = "crates/modules/inpainter/lama_large" }
 lama_mpe = { path = "crates/modules/inpainter/lama_mpe" }
 manga-ocr = { path = "crates/modules/ocr/manga-ocr" }
+pixai-tagger = { path = "crates/modules/tagger/pixai" }
 mask-refinement = { path = "crates/mask-refinement" }
 export = { path = "crates/modules/renderer/export" }
 png = { path = "crates/modules/renderer/png" }

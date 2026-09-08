@@ -2,9 +2,7 @@ use interface_colorizer::ColorizerOptions;
 use interface_image::RawImage;
 use log::info;
 
-use crate::{
-    execute::ImageProcessor, settings::ColorizerSettings, setup::Models,
-};
+use crate::{execute::ImageProcessor, settings::ColorizerSettings, setup::Models};
 
 impl Models {
     pub async fn run_colorizer(
