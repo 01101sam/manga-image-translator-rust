@@ -12,9 +12,9 @@ const ITERS: usize = 5;
 const MAX_BATCH_SIZE: usize = 16;
 
 fn fnv(bytes: impl IntoIterator<Item = u8>) -> u64 {
-    bytes
-        .into_iter()
-        .fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3))
+    bytes.into_iter().fold(0xcbf29ce484222325u64, |h, b| {
+        (h ^ b as u64).wrapping_mul(0x100000001b3)
+    })
 }
 
 fn median(mut xs: Vec<f64>) -> f64 {

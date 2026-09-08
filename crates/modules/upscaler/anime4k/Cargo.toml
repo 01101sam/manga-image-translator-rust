@@ -13,6 +13,14 @@ maplit.workspace = true
 half.workspace = true
 ndarray.workspace = true
 anyhow.workspace = true
-ort-parallel.workspace = true
 async-trait.workspace = true
 util.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+env_logger.workspace = true
+
+# The bench example only sees CoreML if this crate's own graph enables it (runtimes do so via
+# their own `ort` dependency, which does not propagate to `cargo run -p anime4k`).
+[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))'.dev-dependencies]
+ort = { workspace = true, features = ["coreml"] }

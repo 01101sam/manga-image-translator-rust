@@ -1,4 +1,7 @@
-use std::{fmt::Display, sync::Arc};
+use std::{
+    fmt::Display,
+    sync::{Arc, Mutex},
+};
 
 use base_util::onnx::{new_session, Providers};
 use half::f16;
@@ -9,12 +12,11 @@ use interface_model::{
 use interface_upscaler::Upscaler;
 use maplit::hashmap;
 use ndarray::{ArrayView3, ArrayViewD, Axis};
-use ort::{inputs, session::RunOptions, value::Tensor};
-use ort_parallel::AsyncSessionPool;
+use ort::{inputs, session::Session, value::Tensor};
 use util::spawn_blocking;
 
 pub struct Anime4KUpscaler {
-    model: ModelWrap<AsyncSessionPool>,
+    model: ModelWrap<Mutex<Session>>,
     model_kind: Anime4KModel,
     providers: Arc<Vec<Providers>>,
 }
@@ -53,15 +55,17 @@ impl Display for Anime4KModel {
 
 #[async_trait::async_trait]
 impl ModelLoad for Anime4KUpscaler {
-    impl_model_load_helpers!(model, AsyncSessionPool);
+    impl_model_load_helpers!(model, Mutex<Session>);
 
     async fn reload(&self) -> anyhow::Result<ModelRead<'_, Self::T>> {
         let model = self.model_kind.to_string();
         let path = self
             .download_model(&model, &format!("{model}.onnx"))
             .await?;
-        let session = AsyncSessionPool::commit_from_file(new_session(&self.providers)?, &path, 10)?;
-        *self.model.write().await = Some(session);
+        // CoreML takes no node of these fp16 graphs (either model format): output and timing are
+        // identical to the CPU EP (2x_S: 21ms at 371x512, 75ms at 743x1024 on an M3 Max).
+        let session = new_session(&self.providers)?.commit_from_file(&path)?;
+        *self.model.write().await = Some(Mutex::new(session));
         Ok(self.get_model().await.expect("loaded before"))
     }
 }
@@ -90,20 +94,17 @@ impl Upscaler for Anime4KUpscaler {
         _: usize,
         _: &Arc<dyn interface_image::ImageOp + Send + Sync>,
     ) -> anyhow::Result<RawImage> {
-        let t = spawn_blocking!(|| {
+        let model = self.load().await?;
+        // Synchronous `Session::run` on purpose: the `ort-parallel` pool (ORT `RunAsync`) ran the
+        // second inference of every session at ~100ms instead of ~25ms (2x_S, 371x512).
+        let out = spawn_blocking!(|| {
             let image = image
                 .as_ndarray()?
                 .mapv(|v| f16::from_f32(v as f32 / 255.0))
                 .permuted_axes((2, 0, 1))
                 .insert_axis(Axis(0));
-            let t = Tensor::from_array(image)?;
-            Ok::<_, anyhow::Error>(t)
-        })??;
-
-        let model = self.load().await?;
-        let settings = RunOptions::new()?;
-        let out = model.run_async(inputs! {"input"=>t}, &settings).await?;
-        let out = spawn_blocking!(|| {
+            let mut session = model.lock().expect("session mutex poisoned");
+            let out = session.run(inputs! {"input"=>Tensor::from_array(image)?})?;
             let out: ArrayViewD<f16> = out[0].try_extract_array()?.remove_axis(Axis(0));
             let out: ArrayView3<f16> = out.into_dimensionality()?;
             let out = out

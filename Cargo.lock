@@ -397,7 +397,6 @@ dependencies = [
  "maplit",
  "ndarray",
  "ort",
- "ort-parallel",
  "tokio",
  "util",
 ]
@@ -2123,7 +2122,6 @@ dependencies = [
  "maplit",
  "ndarray",
  "ort",
- "ort-parallel",
  "tokio",
  "util",
 ]
@@ -4695,17 +4693,6 @@ dependencies = [
  "ort-sys",
  "smallvec 2.0.0-alpha.10",
  "tracing",
-]
-
-[[package]]
-name = "ort-parallel"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f4864a9ffb8b09f036209f0d6ca0583dbd9713cbfa9cfb258774124dc0473e1"
-dependencies = [
- "ort",
- "parking_lot",
- "tokio",
 ]
 
 [[package]]
