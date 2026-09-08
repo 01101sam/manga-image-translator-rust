@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, ops::Deref, path::PathBuf, sync::Arc};
 
 use base_util::onnx::{new_session, Providers};
-use image::GenericImageView;
+use image::imageops::crop_imm;
 use interface_detector::textlines::Quadrilateral;
 use interface_image::{ImageOp, Mask};
 use interface_model::{
@@ -11,15 +11,14 @@ use interface_model::{
 use interface_ocr::{OcrOptions, QuadrilateralInfo};
 use maplit::hashmap;
 use ndarray::{s, stack, Array4, ArrayView2, Axis};
-use ort::{inputs, session::RunOptions, value::Tensor};
-use ort_parallel::AsyncSessionPool;
+use ort::{inputs, session::Session, value::Tensor};
 use parking_lot::Mutex;
 use tokio::task::spawn_blocking;
 use util::spawn_blocking;
 
 pub struct MangaOCRModels {
-    enc: AsyncSessionPool,
-    dec: AsyncSessionPool,
+    enc: std::sync::Mutex<Session>,
+    dec: std::sync::Mutex<Session>,
     vocab: Vec<String>,
 }
 
@@ -30,8 +29,17 @@ impl MangaOCRModels {
         vocab: PathBuf,
         providers: &[Providers],
     ) -> anyhow::Result<Self> {
-        let enc = AsyncSessionPool::commit_from_file(new_session(providers)?, &enc, 10)?;
-        let dec = AsyncSessionPool::commit_from_file(new_session(providers)?, &dec, 10)?;
+        // CoreML loses on both graphs (30 lines on an M3 Max: 7.5s -> 2.0s). The NeuralNetwork
+        // format shatters the ViT encoder into 87 partitions (3.8s vs 1.3s per page on the CPU) and
+        // the greedy decoder into 34 (3.7s vs 0.55s); the MLProgram format fails to compile the
+        // encoder ("ios18.conv: output size is too small").
+        let no_coreml: Vec<_> = providers
+            .iter()
+            .filter(|p| !matches!(p, Providers::CoreML))
+            .cloned()
+            .collect();
+        let enc = std::sync::Mutex::new(new_session(&no_coreml)?.commit_from_file(&enc)?);
+        let dec = std::sync::Mutex::new(new_session(&no_coreml)?.commit_from_file(&dec)?);
 
         let vocab = std::fs::read_to_string(vocab)?
             .lines()
@@ -100,29 +108,22 @@ impl MangaOCR {
         let t = Tensor::from_array(pre)?;
         let models = self.load().await?;
         let models = models.deref();
-        let run_options = RunOptions::new()?;
 
-        let out = models
-            .enc
-            .run_async(inputs! {"pixel_values" => t}, &run_options)
-            .await?;
+        // Synchronous `Session::run` on purpose; see `dbnet` for why `RunAsync` is avoided.
+        let mut enc = models.enc.lock().expect("session mutex poisoned");
+        let out = enc.run(inputs! {"pixel_values" => t})?;
         let hs = &out[0];
+        let mut dec = models.dec.lock().expect("session mutex poisoned");
 
         let mut token_ids: Vec<i64> = vec![sos_idnex];
         for _ in 0..self.max_length {
             let input = ArrayView2::from_shape((1, token_ids.len()), &token_ids)?;
             let t = Tensor::from_array(input.to_owned())?;
 
-            let out = models
-                .dec
-                .run_async(
-                    inputs! {
-                        "encoder_hidden_states" => hs,
-                        "input_ids" => t,
-                    },
-                    &run_options,
-                )
-                .await?;
+            let out = dec.run(inputs! {
+                "encoder_hidden_states" => hs,
+                "input_ids" => t,
+            })?;
             let logits = out["logits"].try_extract_array::<f32>()?;
             let v = logits.slice(s![0, -1, ..]);
             let token_id = v
@@ -166,10 +167,18 @@ impl interface_ocr::Ocr for MangaOCR {
 
         for (i, area) in areas.iter().enumerate() {
             let bbox = area.lock().aabb();
+            let Some((x, y, w, h)) = util::resize::clamp_crop(
+                bbox.x,
+                bbox.y,
+                bbox.x.saturating_add(bbox.w),
+                bbox.y.saturating_add(bbox.h),
+                grayscale.width() as i64,
+                grayscale.height() as i64,
+            ) else {
+                continue;
+            };
             let img = spawn_blocking!(|| {
-                let view =
-                    grayscale.view(bbox.x as u32, bbox.y as u32, bbox.w as u32, bbox.h as u32);
-                Mask::from(view.to_image())
+                Mask::from(crop_imm(&grayscale, x, y, w, h).to_image())
             })?;
             if let Some(v) = &options.debug_path {
                 img.clone()
@@ -221,7 +230,7 @@ mod tests {
 
     use crate::MangaOCR;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ocr_test() {
         let img = RawImage::new("./imgs/232265329-6a560438-e887-4f7f-b6a1-a61b8648f781.png")
             .expect("Failed to load image");
