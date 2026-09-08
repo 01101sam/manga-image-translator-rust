@@ -8,7 +8,6 @@ use strum_macros::EnumIter;
 pub enum OCR {
     MangaOcr,
     Native,
-    Tesseract,
     Ctc48px,
     #[default]
     Ocr48px,
@@ -36,6 +35,8 @@ pub struct PostProcessingSettings {
     pub filter_text: Vec<String>,
     /// Minimum probability of a text region to be considered valid. If None, uses the model default
     pub prob: f64,
+    /// Skip non-bubble text. 1 to 50, 0 disables
+    pub ignore_bubble: u8,
 }
 
 impl Default for PostProcessingSettings {
@@ -44,6 +45,7 @@ impl Default for PostProcessingSettings {
             min_text_length: 1,
             filter_text: Vec::new(),
             prob: 0.2,
+            ignore_bubble: 0,
         }
     }
 }

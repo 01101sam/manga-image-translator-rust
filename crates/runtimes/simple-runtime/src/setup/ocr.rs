@@ -24,8 +24,6 @@ impl OCRs {
                 // allow:clone
                 OCR::Native => Box::new(native::NativeOCR::default()) as OcrType,
                 // allow:clone
-                OCR::Tesseract => Box::new(tesseract::TesseractOCR::default()) as OcrType,
-                // allow:clone
                 OCR::Ctc48px => {
                     Box::new(ctc_48px::Ctc48pxOcr::new(providers.clone(), max_batch_size))
                         as OcrType

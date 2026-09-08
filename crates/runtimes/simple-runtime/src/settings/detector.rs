@@ -10,14 +10,13 @@ pub enum Detector {
     #[default]
     DBNet,
     // DBNetConvNext,
-    Paddle,
     Ctd,
 }
 
 #[derive(Serialize, Deserialize, Default, JsonSchema)]
 #[serde(default)]
 pub struct DetectorSettings {
-    /// Text detector used for creating a text mask from an image, DO NOT use craft for manga, it\'s not designed for it
+    /// Text detector used for creating a text mask from an image
     pub detector: Detector,
     /// General Options to apply before detection
     pub preprocessor: PreprocessorOptions,

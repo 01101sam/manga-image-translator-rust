@@ -370,7 +370,7 @@ mod tests {
         assert_eq!(
             failure(
                 None,
-                root_path().join("models/detector/paddle/det.onnx"),
+                root_path().join("models/detector/dbnet/model.onnx"),
                 ""
             ),
             true

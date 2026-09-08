@@ -13,7 +13,6 @@ use numpy::{
     ndarray::{Array2, Array3},
     IntoPyArray as _, PyArray2, PyArray3, PyArrayMethods, PyReadonlyArray3,
 };
-use paddle::PaddleDetector;
 use parking_lot::Mutex;
 use pyo3::{exceptions::PyRuntimeError, prelude::*};
 use tokio::runtime::{Builder, Runtime};
@@ -226,18 +225,6 @@ impl Session {
             inner: Arc::new(Mutex::new(
                 // allow:clone[arc]
                 Box::new(DbNetDetector::new(self.inner.clone(), false))
-                    as Box<dyn Detector + Send + Sync>,
-            )),
-            // allow:clone[arc]
-            processor: self.processor.clone(),
-        }
-    }
-
-    fn paddle_detector(&self) -> PyDetector {
-        PyDetector {
-            inner: Arc::new(Mutex::new(
-                // allow:clone[arc]
-                Box::new(PaddleDetector::new(self.inner.clone()))
                     as Box<dyn Detector + Send + Sync>,
             )),
             // allow:clone[arc]
