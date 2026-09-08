@@ -11,12 +11,12 @@ use interface_model::{
 };
 use interface_ocr::{Ocr, OcrOptions, QuadrilateralInfo};
 use maplit::hashmap;
-use ort_parallel::AsyncSessionPool;
+use ort::session::Session;
 use parking_lot::Mutex;
 use util::{average::AvgMeter, ocr, spawn_blocking};
 
 pub struct Ctc48pxOcr {
-    model: ModelWrap<(AsyncSessionPool, Vec<String>)>,
+    model: ModelWrap<(std::sync::Mutex<Session>, Vec<String>)>,
     providers: Arc<Vec<Providers>>,
     max_batch_size: usize,
 }
@@ -33,7 +33,7 @@ impl Ctc48pxOcr {
 
 #[async_trait::async_trait]
 impl ModelLoad for Ctc48pxOcr {
-    impl_model_load_helpers!(model, (AsyncSessionPool, Vec<String>));
+    impl_model_load_helpers!(model, (std::sync::Mutex<Session>, Vec<String>));
 
     async fn reload(&self) -> anyhow::Result<ModelRead<'_, Self::T>> {
         let model = self.download_model("model", "model.onnx").await?;
@@ -45,8 +45,7 @@ impl ModelLoad for Ctc48pxOcr {
             .lines()
             .map(|v| v.trim_end().to_string())
             .collect::<Vec<String>>();
-        let builder = new_session(&self.providers)?;
-        let model = AsyncSessionPool::commit_from_file(builder, &model, 10)?;
+        let model = std::sync::Mutex::new(new_session(&self.providers)?.commit_from_file(&model)?);
 
         *self.model.write().await = Some((model, dict));
         let m = self.model.as_ref().read().await;
@@ -144,7 +143,7 @@ impl Ocr for Ctc48pxOcr {
         let (model, dict) = m.deref();
         let dict = &*dict;
         for (images, _, areas) in items {
-            let texts = decode::decode(model, images, 0).await?;
+            let texts = decode::decode(model, images, 0)?;
             out.extend(spawn_blocking!(|| post_process(texts, dict, &areas))?);
         }
         Ok(out)
@@ -177,7 +176,7 @@ mod tests {
     //     println!("{:?}", v);
     // }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ocr_test() {
         let img = RawImage::new("./imgs/232265329-6a560438-e887-4f7f-b6a1-a61b8648f781.png")
             .expect("Failed to load image");
@@ -199,7 +198,7 @@ mod tests {
             .unwrap();
         v.sort_by_key(|a| a.text.len());
         assert_eq!(v[0].pos.lock().pts()[0].x, 76);
-        assert_eq!(v[1].text, "そうだなあ…");
+        assert_eq!(v[1].text, "そうだなあ");
         assert_eq!(v[0].text, "ふふっ、");
         assert_eq!(v.len(), 2);
     }

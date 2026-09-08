@@ -20,7 +20,6 @@ base-util.workspace = true
 parking_lot.workspace = true
 opencv.workspace = true
 ordered-float.workspace = true
-ort-parallel.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

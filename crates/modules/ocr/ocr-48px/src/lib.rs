@@ -1,9 +1,13 @@
 mod hypo;
 mod infer;
 
-use std::{fs::read_to_string, ops::Deref, sync::Arc};
+use std::{
+    fs::read_to_string,
+    ops::Deref,
+    sync::{Arc, Mutex},
+};
 
-use base_util::onnx::{new_session, Providers};
+use base_util::onnx::{new_session, new_session_mlprogram, Providers};
 use interface_detector::textlines::Quadrilateral;
 use interface_image::{ImageOp, RawImage};
 use interface_model::{
@@ -12,17 +16,16 @@ use interface_model::{
 };
 use interface_ocr::{Ocr, OcrOptions, QuadrilateralInfo};
 use maplit::hashmap;
-use ort::session::RunOptions;
-use ort_parallel::AsyncSessionPool;
+use ort::session::Session;
 use util::{average::AvgMeter, ocr, spawn_blocking};
 
 use crate::infer::Pred;
 
+/// Encoder, decoder and colour-prediction sessions, in that order.
+type Sessions = (Mutex<Session>, Mutex<Session>, Mutex<Session>);
+
 pub struct Ocr48px {
-    model: ModelWrap<(
-        (AsyncSessionPool, AsyncSessionPool, AsyncSessionPool),
-        Vec<String>,
-    )>,
+    model: ModelWrap<(Sessions, Vec<String>)>,
     providers: Arc<Vec<Providers>>,
     max_seq_len: i32,
     max_batch_size: usize,
@@ -41,13 +44,7 @@ impl Ocr48px {
 
 #[async_trait::async_trait]
 impl ModelLoad for Ocr48px {
-    impl_model_load_helpers!(
-        model,
-        (
-            (AsyncSessionPool, AsyncSessionPool, AsyncSessionPool),
-            Vec<String>,
-        )
-    );
+    impl_model_load_helpers!(model, (Sessions, Vec<String>));
 
     async fn reload(&self) -> anyhow::Result<ModelRead<'_, Self::T>> {
         let decoder = self.download_model("decoder", "decoder.onnx").await?;
@@ -61,14 +58,24 @@ impl ModelLoad for Ocr48px {
             .lines()
             .map(|v| v.trim_end().to_string())
             .collect::<Vec<String>>();
-        let encoder =
-            AsyncSessionPool::commit_from_file(new_session(&self.providers)?, &encoder, 10)?;
-        let color_pred =
-            AsyncSessionPool::commit_from_file(new_session(&self.providers)?, &color_pred, 10)?;
-        let decoder =
-            AsyncSessionPool::commit_from_file(new_session(&self.providers)?, &decoder, 10)?;
+        // The encoder dominates a page (~1s per 16-crop batch on the CPU) and CoreML's MLProgram format
+        // halves it (30 lines: 2233ms -> 1300ms on an M3 Max, same text, 33 partitions instead of the
+        // NeuralNetwork format's 87). The decoder must stay off CoreML: the EP rejects the empty
+        // activation cache of the first beam step under MLProgram, and the NeuralNetwork format
+        // shatters it into 121 partitions that run 3x slower than the CPU.
+        let no_coreml: Vec<_> = self
+            .providers
+            .iter()
+            .filter(|p| !matches!(p, Providers::CoreML))
+            .cloned()
+            .collect();
+        let sessions = (
+            Mutex::new(new_session_mlprogram(&self.providers)?.commit_from_file(&encoder)?),
+            Mutex::new(new_session(&no_coreml)?.commit_from_file(&decoder)?),
+            Mutex::new(new_session(&no_coreml)?.commit_from_file(&color_pred)?),
+        );
 
-        *self.model.write().await = Some(((encoder, decoder, color_pred), dict));
+        *self.model.write().await = Some((sessions, dict));
         Ok(self.get_model().await.expect("set above"))
     }
 }
@@ -190,7 +197,6 @@ impl Ocr for Ocr48px {
         let model = self.load().await?;
         let ((encoder, decoder, color_pred), dict) = model.deref();
         let dict = &*dict;
-        let run_options = RunOptions::new()?;
         for (images, widths, areas) in items {
             let texts = infer::infer(
                 encoder,
@@ -203,9 +209,7 @@ impl Ocr for Ocr48px {
                 5,
                 max_seq_len,
                 2,
-                &run_options,
-            )
-            .await;
+            );
             let texts = spawn_blocking!(|| post_process(texts, dict, &areas))?;
             out.extend(texts);
         }
