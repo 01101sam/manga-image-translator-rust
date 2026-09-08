@@ -2,17 +2,19 @@ use std::{
     fs::{create_dir_all, File},
     io::Write,
     path::PathBuf,
+    time::Instant,
 };
 
 use clap::Parser as _;
 use config::Config;
 use html::HtmlRenderer;
 use log::{error, info, warn};
+use png::{MyAlign, PngRenderConfig, PngRenderer, RenderDirection};
 use tracing_subscriber::EnvFilter;
 use walkdir::WalkDir;
 
 use crate::{
-    settings::{Renderer, Settings},
+    settings::{Alignment, Direction, RenderSettings, Renderer, Settings},
     setup::Models,
     update::{check_crate_version, check_cuda},
 };
@@ -51,6 +53,7 @@ async fn main() {
     }
     let _ = check_crate_version("frederik-uni/manga-image-translator-rust").await;
 
+    let startup = Instant::now();
     let mut models = Models::new(
         cli.max_batch_size_upscaler,
         cli.max_batch_size_ocr,
@@ -58,12 +61,14 @@ async fn main() {
         cuda,
     )
     .await;
+    eprintln!("PERF startup {}", startup.elapsed().as_millis());
     match cli.command {
         cli::Commands::Cli {
             input,
             output,
             config,
             overwrite,
+            save_mask,
         } => {
             let mut input_list = WalkDir::new(&input)
                 .into_iter()
@@ -127,7 +132,18 @@ async fn main() {
                 } else {
                     None
                 };
-                let exp = models.execute(img, &settings, debug_path).await.unwrap();
+                let mask_out = save_mask.then(|| {
+                    let mut p = output.clone();
+                    p.set_extension("mask.png");
+                    if let Some(parent) = p.parent() {
+                        create_dir_all(parent).expect("Failed to create mask directory");
+                    }
+                    p
+                });
+                let exp = models
+                    .execute(img, &settings, debug_path, mask_out)
+                    .await
+                    .unwrap();
                 let exp = match exp {
                     Some(v) => v,
                     None => {
@@ -135,21 +151,50 @@ async fn main() {
                         continue;
                     }
                 };
+                let ocr: Vec<serde_json::Value> = exp
+                    .blocks
+                    .iter()
+                    .map(|b| {
+                        serde_json::json!({
+                            "text": b.text,
+                            "translation": b.translation(),
+                        })
+                    })
+                    .collect();
+                eprintln!(
+                    "OCR_JSON {}",
+                    serde_json::to_string(&ocr).expect("ocr json")
+                );
                 output.set_extension(out_ext);
-                if settings.render.renderer == Renderer::Html {
-                    let (data, _) = HtmlRenderer::render(vec![exp], None, false);
-                    if let Some(parent) = output.parent() {
-                        create_dir_all(parent).expect("Failed to create parent directory");
-                        html::copy_files(parent).expect("Failed to copy important js files");
-                    }
-                    File::create(output).unwrap().write_all(&data).unwrap();
-                } else {
-                    let bin = exp.export();
-                    if let Some(parent) = output.parent() {
-                        create_dir_all(parent).expect("Failed to create parent directory");
-                    }
-                    File::create(output).unwrap().write_all(&bin).unwrap();
+                if let Some(parent) = output.parent() {
+                    create_dir_all(parent).expect("Failed to create parent directory");
                 }
+                let render_t = Instant::now();
+                match settings.render.renderer {
+                    Renderer::Html => {
+                        let (data, _) = HtmlRenderer::render(vec![exp], None, false);
+                        html::copy_files(output.parent().unwrap_or(&output))
+                            .expect("Failed to copy important js files");
+                        File::create(output).unwrap().write_all(&data).unwrap();
+                    }
+                    Renderer::Raw => {
+                        File::create(output)
+                            .unwrap()
+                            .write_all(&exp.export())
+                            .unwrap();
+                    }
+                    Renderer::Png => {
+                        let mut renderer = PngRenderer::default();
+                        let img = renderer
+                            .render(exp, render_config(&settings.render))
+                            .expect("Failed to render png");
+                        img.to_image()
+                            .expect("Failed to encode png")
+                            .save(&output)
+                            .expect("Failed to save png");
+                    }
+                }
+                eprintln!("PERF render {}", render_t.elapsed().as_millis());
             }
         }
         cli::Commands::Api { host, port } => api::main(&host, port).await.unwrap(),
@@ -175,5 +220,26 @@ async fn main() {
             .expect("Failed to run egui");
             return;
         }
+    }
+}
+
+fn render_config(settings: &RenderSettings) -> PngRenderConfig {
+    PngRenderConfig {
+        align: match settings.alignment {
+            Alignment::Left => MyAlign::Left,
+            Alignment::Right => MyAlign::Right,
+            Alignment::Auto | Alignment::Center => MyAlign::Center,
+        },
+        font_size: settings.font_size,
+        font_size_offset: settings.font_size_offset,
+        font_size_minimum: settings.font_size_minimum,
+        line_height: settings.line_spacing,
+        disable_font_border: settings.disable_font_border,
+        direction: match settings.direction {
+            Direction::Auto => RenderDirection::Auto,
+            Direction::Horizontal => RenderDirection::Horizontal,
+            Direction::Vertical => RenderDirection::Vertical,
+        },
+        ..PngRenderConfig::default()
     }
 }

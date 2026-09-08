@@ -7,7 +7,13 @@ edition.workspace = true
 cosmic-text.workspace = true
 ordered-float.workspace = true
 interface-image.workspace = true
-opencv = { workspace = true, features = ["imgproc"] }
+opencv = { workspace = true, features = ["imgproc", "calib3d"] }
 env_logger.workspace = true
 export.workspace = true
+textline-merge.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+image.workspace = true
+interface-translator.workspace = true
+interface-detector.workspace = true

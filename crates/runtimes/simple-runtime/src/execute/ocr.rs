@@ -29,6 +29,31 @@ impl Models {
             .get_ocr(config.ocr)
             .detect(img, areas, OcrOptions { debug_path }, ip)
             .await?;
-        Ok(textlines)
+        let ignore = config.post_processing.ignore_bubble;
+        if ignore < 1 || ignore > 50 {
+            return Ok(textlines);
+        }
+        let mut kept = Vec::with_capacity(textlines.len());
+        for line in textlines {
+            let pos = line.pos.lock();
+            let (x1, y1, x2, y2) = pos.xyxy();
+            drop(pos);
+            let x1 = x1.max(0) as u32;
+            let y1 = y1.max(0) as u32;
+            let x2 = (x2.max(0) as u32).min(img.width as u32);
+            let y2 = (y2.max(0) as u32).min(img.height as u32);
+            if x2 <= x1 || y2 <= y1 {
+                kept.push(line);
+                continue;
+            }
+            let cropped = img.clone().to_image()?.crop_imm(x1, y1, x2 - x1, y2 - y1);
+            let raw = RawImage::from(cropped);
+            let mat = raw.as_opencv_mat()?.clone_pointee();
+            if mask_refinement::is_ignore((raw.width, raw.height), &mat, ignore)? {
+                continue;
+            }
+            kept.push(line);
+        }
+        Ok(kept)
     }
 }

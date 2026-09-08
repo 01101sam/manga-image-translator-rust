@@ -1,3 +1,5 @@
+mod sort;
+
 use std::{
     collections::{HashMap, HashSet},
     f64::consts::PI,
@@ -20,6 +22,8 @@ use petgraph::{
 };
 use serde::{Deserialize, Serialize};
 use util::text_direction::{connected_components_sets, quadrilateral_can_merge_region};
+
+pub use sort::{simple_sort, sort_panels_fill, sort_regions};
 
 pub fn dispatch(
     textlines: Vec<&QuadrilateralInfo>,
@@ -366,7 +370,15 @@ impl TextBlock {
     }
 
     pub fn obb(&self) -> Option<OBB> {
-        let coords = MultiPoint::new(vec![Point::new(0.0, 0.0)])
+        let points = self
+            .lines
+            .iter()
+            .flat_map(|line| line.iter().map(|p| Point::new(p.x as f64, p.y as f64)))
+            .collect::<Vec<_>>();
+        if points.is_empty() {
+            return None;
+        }
+        let coords = MultiPoint::new(points)
             .convex_hull()
             .minimum_rotated_rect()?;
 
@@ -385,6 +397,43 @@ impl TextBlock {
             h,
             theta: rotation,
         })
+    }
+
+    pub fn translation(&self) -> Option<&str> {
+        let key = self.translations.get("last_trans")?;
+        self.translations.get(key).map(String::as_str)
+    }
+
+    pub fn with_translation(mut self, lang: impl Into<String>, text: impl Into<String>) -> Self {
+        let lang = lang.into();
+        self.translations.insert(lang.clone(), text.into());
+        self.translations.insert("last_trans".to_owned(), lang);
+        self
+    }
+
+    pub fn vertical(&self) -> bool {
+        let mut max_area = 0.0_f64;
+        let mut aspect = 1.0;
+        for line in &self.lines {
+            let xs = line.map(|p| p.x);
+            let ys = line.map(|p| p.y);
+            let min_x = xs.iter().copied().min().unwrap_or_default();
+            let max_x = xs.iter().copied().max().unwrap_or_default();
+            let min_y = ys.iter().copied().min().unwrap_or_default();
+            let max_y = ys.iter().copied().max().unwrap_or_default();
+            let w = (max_x - min_x) as f64;
+            let h = (max_y - min_y) as f64;
+            let area = w * h;
+            if area > max_area {
+                max_area = area;
+                aspect = if h > 0.0 { w / h } else { 1.0 };
+            }
+        }
+        if max_area == 0.0 {
+            let (x1, y1, x2, y2) = self.xyxy();
+            return (x2 - x1) < (y2 - y1);
+        }
+        aspect < 1.0
     }
     pub fn new(
         lines: Vec<[MyPoint; 4]>,
@@ -459,7 +508,7 @@ fn compute_bounds(polygons: &[[i64; 8]]) -> Option<(i64, i64, i64, i64)> {
     Some((min_x, min_y, max_x, max_y))
 }
 impl TextBlock {
-    fn center(&self) -> (i64, i64) {
+    pub fn center(&self) -> (i64, i64) {
         let xyxy = self.xyxy();
         ((xyxy.0 + xyxy.2) / 2, (xyxy.1 + xyxy.3) / 2)
     }
@@ -983,5 +1032,49 @@ mod tests {
         let d = LangIdDetector::new().unwrap();
         let out = dispatch(v.iter().collect::<Vec<_>>(), 1080, 6587, &d).unwrap();
         assert_eq!(out.len(), 9)
+    }
+
+    #[test]
+    fn obb_uses_line_points() {
+        let block = crate::TextBlock {
+            lines: vec![[
+                interface_detector::textlines::MyPoint { x: 100, y: 40 },
+                interface_detector::textlines::MyPoint { x: 180, y: 40 },
+                interface_detector::textlines::MyPoint { x: 180, y: 70 },
+                interface_detector::textlines::MyPoint { x: 100, y: 70 },
+            ]],
+            text: "hi".into(),
+            font_size: 16,
+            angle: 0.0,
+            prob: 1.0,
+            fg_color: None,
+            bg_color: None,
+            skip_translate: false,
+            language: None,
+            translations: Default::default(),
+        };
+        let obb = block.obb().unwrap();
+        assert!((obb.x - 140.0).abs() < 1.0, "x={}", obb.x);
+        assert!((obb.y - 55.0).abs() < 1.0, "y={}", obb.y);
+        assert!(obb.w > 70.0 && obb.h > 20.0);
+        assert!(!block.vertical());
+    }
+
+    #[test]
+    fn translation_reads_last_trans() {
+        let block = crate::TextBlock {
+            lines: vec![],
+            text: "源".into(),
+            font_size: 12,
+            angle: 0.0,
+            prob: 1.0,
+            fg_color: None,
+            bg_color: None,
+            skip_translate: false,
+            language: None,
+            translations: Default::default(),
+        }
+        .with_translation("ENG", "hello");
+        assert_eq!(block.translation(), Some("hello"));
     }
 }

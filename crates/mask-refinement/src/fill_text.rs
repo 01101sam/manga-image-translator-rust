@@ -19,6 +19,7 @@ use opencv::{
     },
 };
 use ordered_float::OrderedFloat;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct RatioMatSlice<'a, T> {
@@ -269,80 +270,100 @@ pub fn complete_mask(
     }
 
     let mut final_mask = Mat::zeros_size(mask.size()?, mask.typ())?.to_mat()?;
-    let mut img_out = Mat::default();
-    bilateral_filter(&img, &mut img_out, 17, 80.0, 80.0, BORDER_DEFAULT)?;
-    let img = img_out;
-    for (i, cc) in textline_ccs.iter_mut().enumerate() {
-        let [x1, y1, x2, y2] = textline_rects.get_row(i).try_into()?;
-        if x1 == i32::MAX || y1 == i32::MAX || x2 == i32::MIN || y2 == i32::MIN {
-            warn!("x or y coordinate not updated");
-            continue;
-        }
-        let w1 = x2 - x1;
-        let h1 = y2 - y1;
+    // Each textline's DenseCRF is independent and single-threaded, so run them in parallel and
+    // merge the dilated regions afterwards (bitwise or is order independent).
+    let dilated: Vec<anyhow::Result<Option<(Rect, Mat)>>> = textline_ccs
+        .par_iter_mut()
+        .enumerate()
+        .map(|(i, cc)| {
+            let [x1, y1, x2, y2] = textline_rects.get_row(i).try_into()?;
+            if x1 == i32::MAX || y1 == i32::MAX || x2 == i32::MIN || y2 == i32::MIN {
+                warn!("x or y coordinate not updated");
+                return Ok(None);
+            }
+            let w1 = x2 - x1;
+            let h1 = y2 - y1;
 
-        let text_size = textlines[i].font_size().min(w1.min(h1) as f64);
-        let (x1, y1, w1, h1) = extend_rect(
-            x1,
-            y1,
-            w1,
-            h1,
-            img.cols(),
-            img.rows(),
-            (text_size * 0.1) as i32,
-        );
-        // TODO: Need to think of better way to determine dilate_size.
-        let dilate_size = (((text_size + dilation_offset) * 0.3) as i32 / 2 * 2 + 1).max(3);
-        let kern = get_structuring_element(
-            MORPH_ELLIPSE,
-            Size::new(dilate_size, dilate_size),
-            Point_::new(-1, -1),
-        )?;
-        let cc_region = cc.slice_contiguous(y1 as usize, x1 as usize, h1 as usize, w1 as usize);
-        let cc_region = match cc_region {
-            Some(v) => v,
-            None => continue,
-        };
+            let text_size = textlines[i].font_size().min(w1.min(h1) as f64);
+            let (x1, y1, w1, h1) = extend_rect(
+                x1,
+                y1,
+                w1,
+                h1,
+                img.cols(),
+                img.rows(),
+                (text_size * 0.1) as i32,
+            );
+            // TODO: Need to think of better way to determine dilate_size.
+            let dilate_size = (((text_size + dilation_offset) * 0.3) as i32 / 2 * 2 + 1).max(3);
+            let kern = get_structuring_element(
+                MORPH_ELLIPSE,
+                Size::new(dilate_size, dilate_size),
+                Point_::new(-1, -1),
+            )?;
+            let cc_region =
+                cc.slice_contiguous(y1 as usize, x1 as usize, h1 as usize, w1 as usize);
+            let cc_region = match cc_region {
+                Some(v) => v,
+                None => return Ok(None),
+            };
 
-        let x1 = x1.clamp(0, img.cols() - 1);
-        let y1 = y1.clamp(0, img.rows() - 1);
+            let x1 = x1.clamp(0, img.cols() - 1);
+            let y1 = y1.clamp(0, img.rows() - 1);
 
-        let w1 = ((x1 + w1).min(img.cols()) - x1).max(0);
-        let h1 = ((y1 + h1).min(img.rows()) - y1).max(0);
+            let w1 = ((x1 + w1).min(img.cols()) - x1).max(0);
+            let h1 = ((y1 + h1).min(img.rows()) - y1).max(0);
 
-        let roi = Rect::new(x1, y1, w1, h1);
+            let roi = Rect::new(x1, y1, w1, h1);
 
-        let mut roi_mat = Mat::roi(&img, roi)?.clone_pointee();
-        let img_region = as_slice(&mut roi_mat);
-        let cc_region = refine_mask(img_region, w1 as u32, h1 as u32, cc_region)?;
+            // A non-isolated ROI borrows its border pixels from the parent image, so filtering
+            // the ROI equals filtering the whole image and cropping.
+            // ponytail: overlapping ROIs filter shared pixels twice; filter their union once if
+            // that ever shows up in a profile.
+            let mut roi_mat = Mat::default();
+            bilateral_filter(
+                &Mat::roi(&img, roi)?,
+                &mut roi_mat,
+                17,
+                80.0,
+                80.0,
+                BORDER_DEFAULT,
+            )?;
+            let img_region = as_slice(&mut roi_mat);
+            let cc_region = refine_mask(img_region, w1 as u32, h1 as u32, cc_region)?;
 
-        let cc_region_shape = cc_region.shape();
-        let mut cc = Mat::from_slice_mut(&mut cc.data)?;
-        let mut cc = cc.reshape_mut(1, img.rows() as i32)?;
-        let cc_region = ndarray_utils::as_slice(cc_region.view());
-        let cc_region = Mat::from_slice(cc_region.as_ref())?;
-        let cc_region = cc_region.reshape(1, cc_region_shape[0] as i32)?;
-        let mut roi_mat = Mat::roi_mut(&mut cc, roi)?;
-        cc_region.copy_to(&mut roi_mat)?;
-        let (x2, y2, w2, h2) =
-            extend_rect(x1, y1, w1, h1, img.cols(), img.rows(), -(-dilate_size / 2));
-        let x2 = x2.clamp(0, cc.cols() - 1);
-        let y2 = y2.clamp(0, cc.rows() - 1);
+            let cc_region_shape = cc_region.shape();
+            let mut cc = Mat::from_slice_mut(&mut cc.data)?;
+            let mut cc = cc.reshape_mut(1, img.rows() as i32)?;
+            let cc_region = ndarray_utils::as_slice(cc_region.view());
+            let cc_region = Mat::from_slice(cc_region.as_ref())?;
+            let cc_region = cc_region.reshape(1, cc_region_shape[0] as i32)?;
+            let mut roi_mat = Mat::roi_mut(&mut cc, roi)?;
+            cc_region.copy_to(&mut roi_mat)?;
+            let (x2, y2, w2, h2) =
+                extend_rect(x1, y1, w1, h1, img.cols(), img.rows(), -(-dilate_size / 2));
+            let x2 = x2.clamp(0, cc.cols() - 1);
+            let y2 = y2.clamp(0, cc.rows() - 1);
 
-        let w2 = ((x2 + w2).min(cc.cols()) - x2).max(0);
-        let h2 = ((y2 + h2).min(cc.rows()) - y2).max(0);
-        let roi = Rect::new(x2, y2, w2, h2);
-        let src = Mat::roi(&cc, roi)?;
-        let mut temp = Mat::default();
-        dilate(
-            &src,
-            &mut temp,
-            &kern,
-            Point_::new(-1, -1),
-            1,
-            BORDER_CONSTANT,
-            morphology_default_border_value()?,
-        )?;
+            let w2 = ((x2 + w2).min(cc.cols()) - x2).max(0);
+            let h2 = ((y2 + h2).min(cc.rows()) - y2).max(0);
+            let roi = Rect::new(x2, y2, w2, h2);
+            let src = Mat::roi(&cc, roi)?;
+            let mut temp = Mat::default();
+            dilate(
+                &src,
+                &mut temp,
+                &kern,
+                Point_::new(-1, -1),
+                1,
+                BORDER_CONSTANT,
+                morphology_default_border_value()?,
+            )?;
+            Ok(Some((roi, temp)))
+        })
+        .collect();
+    for region in dilated {
+        let Some((roi, temp)) = region? else { continue };
         let mut roi_mat = Mat::roi_mut(&mut final_mask, roi)?;
         let roi_ptr: *mut BoxedRefMut<'_, Mat> = &mut roi_mat;
         unsafe {

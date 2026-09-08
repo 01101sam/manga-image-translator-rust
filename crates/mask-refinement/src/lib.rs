@@ -2,6 +2,8 @@ mod bubble;
 mod expand;
 mod fill_text;
 
+pub use bubble::is_ignore;
+
 use std::{borrow::Cow, i32, sync::Arc};
 
 use interface_detector::textlines::{BBox, MyPoint, Quadrilateral};
@@ -20,7 +22,6 @@ use serde::{Deserialize, Serialize};
 use textline_merge::TextBlock;
 
 use crate::{
-    bubble::is_ignore,
     expand::{
         expand_right_quad, expand_right_to_connect, expand_top_quad, expand_top_to_connect,
         shrink_quad_right, shrink_quad_top,

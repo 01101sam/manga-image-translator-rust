@@ -1,15 +1,20 @@
-#include "densecrf.h"
+#include "pairwise.h"
 
 typedef Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> NumpyMatF;
 
-static Eigen::MatrixXf buf2matf(const float* mem, size_t h, size_t w) {
-    return Eigen::Map<const NumpyMatF>(mem, h, w);
+// Same arithmetic as pydensecrf's expAndNormalize, but written on the output column so no
+// per-pixel VectorXf is heap-allocated (that allocation dominated the inference loop).
+static void expAndNormalize(MatrixXf& out, const MatrixXf& in) {
+    out.resize(in.rows(), in.cols());
+    for (int i = 0; i < out.cols(); i++) {
+        auto b = out.col(i);
+        b = (in.col(i).array() - in.col(i).maxCoeff()).exp();
+        b /= b.sum();
+    }
 }
 
-static void matf2buf(const Eigen::MatrixXf& mat, float* mem) {
-    Eigen::Map<NumpyMatF>(mem, mat.rows(), mat.cols()) = mat;
-}
-
+// Mirrors DenseCRF2D::addPairwiseGaussian(1, 1) + addPairwiseBilateral(23, 23, 7, 7, 7) followed
+// by DenseCRF::inference(num_iterations).
 extern "C" void run_densecrf(
     const float* unary,
     int width,
@@ -19,15 +24,34 @@ extern "C" void run_densecrf(
     int num_iterations,
     float* out_probs)
 {
-    Eigen::MatrixXf unary_mat = buf2matf(unary, n_classes, width * height);
+    const int n = width * height;
+    const MatrixXf unary_mat = Eigen::Map<const NumpyMatF>(unary, n_classes, n);
 
-    DenseCRF2D d(width, height, n_classes);
-    d.setUnaryEnergy(unary_mat);
-    auto* gaussian_compat = new PottsCompatibility(3);
-    auto* bilateral_compat = new PottsCompatibility(20);
-    d.addPairwiseGaussian(1, 1,gaussian_compat, DIAG_KERNEL, NO_NORMALIZATION);
-    d.addPairwiseBilateral(23, 23, 7, 7, 7, image, bilateral_compat, DIAG_KERNEL, NO_NORMALIZATION);
+    const float sxy = 1, bxy = 23, srgb = 7;
+    MatrixXf gaussian(2, n), bilateral(5, n);
+    for (int j = 0; j < height; j++)
+        for (int i = 0; i < width; i++) {
+            const int p = j * width + i;
+            gaussian(0, p) = i / sxy;
+            gaussian(1, p) = j / sxy;
+            bilateral(0, p) = i / bxy;
+            bilateral(1, p) = j / bxy;
+            bilateral(2, p) = image[p * 3 + 0] / srgb;
+            bilateral(3, p) = image[p * 3 + 1] / srgb;
+            bilateral(4, p) = image[p * 3 + 2] / srgb;
+        }
+    PairwisePotential gaussian_term(gaussian, new PottsCompatibility(3), DIAG_KERNEL, NO_NORMALIZATION);
+    PairwisePotential bilateral_term(bilateral, new PottsCompatibility(20), DIAG_KERNEL, NO_NORMALIZATION);
 
-    Eigen::MatrixXf result = d.inference(num_iterations);
-    matf2buf(result, out_probs);
+    MatrixXf q, tmp1, tmp2;
+    expAndNormalize(q, -unary_mat);
+    for (int it = 0; it < num_iterations; it++) {
+        tmp1 = -unary_mat;
+        gaussian_term.apply(tmp2, q);
+        tmp1 -= tmp2;
+        bilateral_term.apply(tmp2, q);
+        tmp1 -= tmp2;
+        expAndNormalize(q, tmp1);
+    }
+    Eigen::Map<NumpyMatF>(out_probs, n_classes, n) = q;
 }

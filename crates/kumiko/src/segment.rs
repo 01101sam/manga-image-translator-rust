@@ -1,4 +1,4 @@
-use std::{collections::HashSet, f64::consts::PI};
+use std::f64::consts::PI;
 
 use crate::panel::Point;
 
@@ -124,39 +124,31 @@ impl Segment {
     }
 
     fn union(&self, other: &Self) -> Option<Self> {
-        let intersect = self.intersect(other)?;
-
-        let mut dots = vec![self.a, self.b, other.a, other.b];
-        dots.retain(|&p| p != intersect.a && p != intersect.b);
-        return Some(Segment::new(dots[0], dots[1]));
+        self.intersect(other)?;
+        let mut dots = [self.a, self.b, other.a, other.b];
+        dots.sort_by_key(|p| p[0] + p[1]);
+        Some(Segment::new(dots[0], dots[3]))
     }
 
-    pub fn union_all(segments: Vec<Segment>) -> Vec<Segment> {
-        let mut unioned_segments = true;
-        let mut used: HashSet<&Segment> = HashSet::new();
-        let mut dedup_segments = Vec::new();
-        while unioned_segments {
-            unioned_segments = false;
-            for (i, s1) in segments.iter().enumerate() {
-                for j in i + 1..segments.len() {
-                    let s2 = &segments[j];
-                    if used.contains(&s2) {
-                        continue;
-                    }
-                    let s3 = s1.union(s2);
-                    if let Some(s3) = s3 {
-                        unioned_segments = true;
-                        dedup_segments.push(s3);
-                        used.insert(s1);
-                        used.insert(s2);
-                    }
-                }
-                if !used.contains(s1) {
-                    dedup_segments.push(s1.clone());
+    pub fn union_all(mut segments: Vec<Segment>) -> Vec<Segment> {
+        let mut i = 0;
+        while i < segments.len() {
+            let mut j = i + 1;
+            let mut merged = false;
+            while j < segments.len() {
+                if let Some(u) = segments[i].union(&segments[j]) {
+                    segments[i] = u;
+                    segments.swap_remove(j);
+                    merged = true;
+                } else {
+                    j += 1;
                 }
             }
+            if !merged {
+                i += 1;
+            }
         }
-        dedup_segments
+        segments
     }
 
     fn angle_with(&self, other: &Self) -> f64 {
@@ -203,5 +195,35 @@ impl Segment {
         }
 
         split_segment
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn union_contained_segment_does_not_panic() {
+        let a = Segment::new([0, 0], [10, 0]);
+        let b = Segment::new([0, 0], [5, 0]);
+        let u = a.union(&b).expect("overlap");
+        assert_eq!(u.to_xyrb(), [0, 0, 10, 0]);
+    }
+
+    #[test]
+    fn union_identical_does_not_panic() {
+        let a = Segment::new([0, 0], [10, 0]);
+        let u = a.union(&a).expect("identical");
+        assert_eq!(u.to_xyrb(), [0, 0, 10, 0]);
+    }
+
+    #[test]
+    fn union_all_merges_overlap() {
+        let out = Segment::union_all(vec![
+            Segment::new([0, 0], [5, 0]),
+            Segment::new([4, 0], [10, 0]),
+        ]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].to_xyrb(), [0, 0, 10, 0]);
     }
 }

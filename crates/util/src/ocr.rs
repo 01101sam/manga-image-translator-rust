@@ -16,30 +16,22 @@ pub fn prepare(
     max_batch_size: usize,
     debug_path: &Option<PathBuf>,
 ) -> anyhow::Result<Vec<(Array4<f32>, Vec<i32>, Vec<Arc<Mutex<Quadrilateral>>>)>> {
-    let whs = areas
-        .iter()
-        .map(|v| {
-            let aabb = v.lock().aabb();
-            let w = aabb.w;
-            let h = aabb.h;
-            let scale = text_height as f64 / w as f64;
-            (h as f64 * scale) as u32
-        })
-        .collect::<Vec<_>>();
-    let mut perm: Vec<usize> = (0..whs.len()).collect();
-    let quadrilaterals = generate_text_direction(areas.to_vec()).collect::<Vec<_>>();
-    perm.sort_by_key(|&i| whs[i]);
-
     let img = image.clone().to_image().unwrap().to_rgb8();
-    let region_imgs = quadrilaterals
-        .into_iter()
-        .map(|(v, ver)| {
-            v.lock().set_vert(ver);
-            let t = get_transformed_region(&*v.lock(), &img, text_height)?;
-            Ok::<_, anyhow::Error>((t, v))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let (region_imgs, areas): (Vec<_>, Vec<_>) = region_imgs.into_iter().unzip();
+    let mut kept = Vec::with_capacity(areas.len());
+    for (v, ver) in generate_text_direction(areas.to_vec()) {
+        v.lock().set_vert(ver);
+        let t = get_transformed_region(&*v.lock(), &img, text_height)?;
+        if let Some(t) = t {
+            kept.push((t, v));
+        }
+    }
+    let (region_imgs, areas): (Vec<_>, Vec<_>) = kept.into_iter().unzip();
+    let mut perm: Vec<usize> = (0..region_imgs.len()).collect();
+    perm.sort_by_key(|&i| {
+        let aabb = areas[i].lock().aabb();
+        let scale = text_height as f64 / aabb.w as f64;
+        (aabb.h as f64 * scale) as u32
+    });
     let v = perm
         .chunks(max_batch_size)
         .enumerate()

@@ -41,6 +41,9 @@ pub enum Commands {
         /// Overwrite already translated images
         #[arg(long)]
         overwrite: bool,
+        /// Write refined mask next to the output as *.mask.png
+        #[arg(long)]
+        save_mask: bool,
     },
 
     /// Run in API server mode

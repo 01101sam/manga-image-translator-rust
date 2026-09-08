@@ -6,10 +6,12 @@ use strum_macros::EnumIter;
     Serialize, Deserialize, Default, EnumIter, Hash, PartialEq, Eq, Copy, Clone, JsonSchema, Debug,
 )]
 pub enum Inpainter {
-    #[default]
     LamaAot,
+    #[default]
     LamaLarge,
     LamaMpe,
+    None,
+    Original,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
