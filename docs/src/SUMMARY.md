@@ -15,6 +15,7 @@
   - [CPP Dependencies](dev/cpp-deps.md)
 - [Developer Docs]()
   - [Roadmap](roadmap.md)
+  - [OCR48px E5RT 诊断](dev/ocr48px-e5rt.md)
   - [Build from Source](dev/build.md)
   - [Deploy](dev/deploy.md)
   - [Binary Data Structure v1](dev/binary-format.md)
