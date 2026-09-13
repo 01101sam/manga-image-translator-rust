@@ -58,11 +58,9 @@ impl ModelLoad for Ocr48px {
             .lines()
             .map(|v| v.trim_end().to_string())
             .collect::<Vec<String>>();
-        // The encoder dominates a page (~1s per 16-crop batch on the CPU) and CoreML's MLProgram format
-        // halves it (30 lines: 2233ms -> 1300ms on an M3 Max, same text, 33 partitions instead of the
-        // NeuralNetwork format's 87). The decoder must stay off CoreML: the EP rejects the empty
-        // activation cache of the first beam step under MLProgram, and the NeuralNetwork format
-        // shatters it into 121 partitions that run 3x slower than the CPU.
+        // 动态 MLProgram 编码器复用于不同批次大小和裁片宽度。
+        // 解码器的初始空缓存不适用于 CoreML；解码器和颜色预测器保留其它提供者。
+        // CoreML 特化动态形状时仍可能向 stdout 输出 E5RT，不经过 ORT 日志回调。
         let no_coreml: Vec<_> = self
             .providers
             .iter()
@@ -254,5 +252,40 @@ mod tests {
         assert_eq!(v[0].text, "ふふっ、");
         assert_eq!(v[1].text, "そうだなあ‥");
         assert_eq!(v.len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ocr_full_then_partial_batch() {
+        let img = RawImage::new("./imgs/232265329-6a560438-e887-4f7f-b6a1-a61b8648f781.png")
+            .expect("Failed to load image");
+        let mocr = Ocr48px::new(Arc::new(all_providers()), 255, 2);
+        let inp = vec![
+            Arc::new(Mutex::new(Quadrilateral::new(
+                vec![(208, 4), (246, 4), (246, 192), (208, 192)],
+                1.0,
+            ))),
+            Arc::new(Mutex::new(Quadrilateral::new(
+                vec![(76, 1788), (128, 1788), (128, 1930), (76, 1930)],
+                1.0,
+            ))),
+            Arc::new(Mutex::new(Quadrilateral::new(
+                vec![(76, 1788), (128, 1788), (128, 1930), (76, 1930)],
+                1.0,
+            ))),
+        ];
+        let ip = Arc::new(CpuImageProcessor::default()) as Arc<dyn ImageOp + Send + Sync>;
+        let v = mocr
+            .detect(&Arc::new(img), &inp, Default::default(), &ip)
+            .await
+            .unwrap();
+        assert_eq!(v.len(), inp.len());
+        for (area, expected) in inp.iter().zip(["そうだなあ‥", "ふふっ、", "ふふっ、"])
+        {
+            let recognized = v
+                .iter()
+                .find(|result| Arc::ptr_eq(&result.pos, area))
+                .expect("missing result for input region");
+            assert_eq!(recognized.text, expected);
+        }
     }
 }

@@ -23,3 +23,7 @@ ordered-float.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+# 单独运行测试时启用 CoreML，与 Apple 应用入口的构建保持一致。
+[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))'.dev-dependencies]
+ort = { workspace = true, features = ["coreml"] }
