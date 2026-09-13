@@ -63,10 +63,10 @@ impl Point<i32> {
 }
 
 impl Point<f64> {
-    pub fn to_i32(&self) -> Point<i32> {
+    pub fn round_ties_even(&self) -> Point<i32> {
         Point {
-            x: self.x as i32,
-            y: self.y as i32,
+            x: self.x.round_ties_even() as i32,
+            y: self.y.round_ties_even() as i32,
         }
     }
 }
@@ -322,7 +322,7 @@ impl Panel {
             add_dots.push(dot1b);
             extra_dots.push(dot1b);
 
-            let dot2b = dot1 - dist;
+            let dot2b = dot2 - dist;
 
             //if len(intermediary_dots) == 0 or Segment(dot2b, intermediary_dots[-1]).dist() > dots_along_lines_dist:
             add_dots.push(dot2b);
@@ -538,7 +538,8 @@ impl Panel {
     }
 
     pub fn find_top_panel<'a>(&self, panels: &'a [Panel]) -> Option<&'a Panel> {
-        let all_top = panels.iter().filter(|p| p.b < self.y && p.same_col(self));
+        // 共用水平边界的分镜也属于上下相邻。
+        let all_top = panels.iter().filter(|p| p.b <= self.y && p.same_col(self));
         all_top.max_by_key(|p| p.b)
     }
 
