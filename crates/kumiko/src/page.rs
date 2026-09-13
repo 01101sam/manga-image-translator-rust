@@ -1,13 +1,13 @@
-use image::{DynamicImage, RgbImage};
 use itertools::Itertools;
 use opencv::{
-    boxed_ref::BoxedRef,
     core::{
-        no_array, Mat, MatTraitConst, Point, ToInputArray, Vec4f, Vector, BORDER_DEFAULT, CV_16S,
+        no_array, Mat, MatTraitConst, Point, Size, ToInputArray, Vec4f, Vector, BORDER_DEFAULT,
+        CV_16S,
     },
     imgproc::{
-        self, approx_poly_dp, arc_length, convex_hull, create_line_segment_detector,
-        CHAIN_APPROX_SIMPLE, LSD_REFINE_NONE, RETR_EXTERNAL, THRESH_BINARY,
+        self, approx_poly_dp, arc_length, convex_hull, create_line_segment_detector, cvt_color_def,
+        get_structuring_element_def, morphology_ex_def, CHAIN_APPROX_SIMPLE, COLOR_RGB2GRAY,
+        LSD_REFINE_NONE, MORPH_CLOSE, MORPH_RECT, RETR_EXTERNAL, THRESH_BINARY, THRESH_OTSU,
     },
     prelude::LineSegmentDetectorTrait,
 };
@@ -27,10 +27,11 @@ pub fn detect_panels(
     panel_expansion: bool,
 ) -> Vec<Panel> {
     let small_panel_ratio = min_panel_size_ratio.unwrap_or(1.0 / 10.0);
-    let gray =
-        DynamicImage::from(RgbImage::from_raw(width, height, buffer.clone()).unwrap()).to_luma8();
-    let gray = Mat::from_slice(gray.as_raw()).unwrap();
-    let gray = gray.reshape(1, height as i32).unwrap();
+    // 用 OpenCV Rec.601 转灰度，不用 image crate 的 Rec.709：灰度差会移动 Sobel / Otsu / LSD
+    let flat = Mat::from_slice(&buffer).unwrap();
+    let rgb = flat.reshape(3, height as i32).unwrap();
+    let mut gray = Mat::default();
+    cvt_color_def(&rgb, &mut gray, COLOR_RGB2GRAY).unwrap();
     // https://docs.opencv.org/3.4/d2/d2c/tutorial_sobel_derivatives.html
     let ddepth = CV_16S;
 
@@ -189,7 +190,7 @@ fn exclude_small_panels(
 ) -> Vec<Panel> {
     panels
         .into_iter()
-        .filter(|v| v.is_small(1.0, width, height, small_panel_ratio))
+        .filter(|v| !v.is_small(1.0, width, height, small_panel_ratio))
         .collect::<Vec<_>>()
 }
 
@@ -293,20 +294,16 @@ fn split_panels(
     let mut did_split = true;
     while did_split {
         did_split = false;
-        let mut split_ = None;
-        let mut temp = panels.iter_mut().collect::<Vec<_>>();
-        temp.sort_by_key(|v| v.area());
-        for (i, p) in temp.into_iter().rev().enumerate() {
-            let split = p.split(width, height, small_panel_ratio, ltr, segments);
+        let mut order = (0..panels.len()).collect::<Vec<_>>();
+        order.sort_by_key(|&i| std::cmp::Reverse(panels[i].area()));
+        for i in order {
+            let split = panels[i].split(width, height, small_panel_ratio, ltr, segments);
             if let Some(split) = split {
                 did_split = true;
-                split_ = Some((split, i));
+                panels.remove(i);
+                panels.extend(split.subpanels);
                 break;
             }
-        }
-        if let Some((split, i)) = split_ {
-            panels.remove(i);
-            panels.extend(split.subpanels);
         }
     }
 }
@@ -415,7 +412,7 @@ fn merge_panels(panels: &mut Vec<Panel>) {
 }
 
 fn get_segments(
-    gray: &BoxedRef<'_, Mat>,
+    gray: &Mat,
     width: u32,
     height: u32,
     small_panel_ratio: f64,
@@ -444,7 +441,13 @@ fn get_segments(
         }
         for dline in &dlines {
             let [x0, y0, x1, y1] = dline.0;
-            let (x0, y0, x1, y1) = (x0 as i32, y0 as i32, x1 as i32, y1 as i32);
+            // 半整数向偶数舍入，与 Python 的 round 一致。
+            let (x0, y0, x1, y1) = (
+                x0.round_ties_even() as i32,
+                y0.round_ties_even() as i32,
+                x1.round_ties_even() as i32,
+                y1.round_ties_even() as i32,
+            );
             let a = x0 - x1;
             let b = y0 - y1;
             let dist = ((a.pow(2) + b.pow(2)) as f64).sqrt();
@@ -459,17 +462,15 @@ fn get_segments(
     }
     Ok(Segment::union_all(segments.unwrap_or_default()))
 }
-fn get_contours(sobel: &Mat) -> Result<Vec<Vector<Point>>, opencv::Error> {
-    let (_, thresh) = threshold(sobel, 100.0, 255.0, THRESH_BINARY)?;
-    let contours = find_contours(&thresh, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE)?;
-    let mut arr = contours.iter().collect::<Vec<_>>();
-    let mut out = vec![];
-    for _ in 0..2 {
-        if let Some(contour) = arr.pop() {
-            out.push(contour);
-        }
-    }
-    Ok(out)
+
+fn get_contours(sobel: &Mat) -> Result<Vector<Vector<Point>>, opencv::Error> {
+    // Otsu 根据页面的梯度直方图自适应选择阈值。
+    let (_, thresh) = threshold(sobel, 0.0, 255.0, THRESH_BINARY | THRESH_OTSU)?;
+    // 闭运算补上分镜边框 1–2px 缺口，RETR_EXTERNAL 才能一条轮廓对应一个分镜
+    let kernel = get_structuring_element_def(MORPH_RECT, Size::new(3, 3))?;
+    let mut closed = Mat::default();
+    morphology_ex_def(&thresh, &mut closed, MORPH_CLOSE, &kernel)?;
+    find_contours(&closed, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE)
 }
 
 fn find_contours(
@@ -494,7 +495,7 @@ fn threshold(
 }
 
 fn get_initial_panels(
-    contours: Vec<Vector<Point>>,
+    contours: Vector<Vector<Point>>,
     width: u32,
     height: u32,
     small_panel_ratio: f64,
@@ -537,7 +538,7 @@ fn convert_scale_abs(src: &Mat) -> Result<Mat, opencv::Error> {
 }
 
 fn sobel(
-    src: &BoxedRef<'_, Mat>,
+    src: &Mat,
     depth: i32,
     dx: i32,
     dy: i32,

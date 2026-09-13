@@ -72,7 +72,7 @@ impl Segment {
         }
         let result = a.to_f64() + ab.to_f64() * (ap.dot(&ab) as f64 / ab.dot(&ab) as f64);
 
-        result.to_i32()
+        result.round_ties_even()
     }
 
     pub fn may_contain(&self, point: &Point) -> bool {
@@ -169,13 +169,15 @@ impl Segment {
     }
 
     pub fn along_polygon(polygon: &[Point], mut i: usize, mut j: usize) -> Segment {
+        let n = polygon.len();
+        // 环形索引中，首个顶点的前一个顶点位于末尾。
+        let wrap = |k: usize| (k + n - 1) % n;
         let dot1 = polygon[i];
         let dot2 = polygon[j];
         let mut split_segment = Segment::new(dot1.into(), dot2.into());
         loop {
-            i = (i - 1) % polygon.len();
-            let add_segment =
-                Segment::new(polygon[i].into(), polygon[(i + 1) % polygon.len()].into());
+            i = wrap(i);
+            let add_segment = Segment::new(polygon[i].into(), polygon[(i + 1) % n].into());
             if add_segment.angle_ok_with(&split_segment) {
                 split_segment = Segment::new(add_segment.a, split_segment.b);
             } else {
@@ -184,9 +186,8 @@ impl Segment {
         }
 
         loop {
-            j = (j + 1) % polygon.len();
-            let add_segment =
-                Segment::new(polygon[(j - 1) % polygon.len()].into(), polygon[j].into());
+            j = (j + 1) % n;
+            let add_segment = Segment::new(polygon[wrap(j)].into(), polygon[j].into());
             if add_segment.angle_ok_with(&split_segment) {
                 split_segment = Segment::new(split_segment.a, add_segment.b)
             } else {
@@ -225,5 +226,27 @@ mod tests {
         ]);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].to_xyrb(), [0, 0, 10, 0]);
+    }
+
+    #[test]
+    fn projected_point_rounds_halfway_coordinates_to_even() {
+        let diagonal = Segment::new([0, 0], [4, 4]);
+        for (input, expected) in [(1, 0), (3, 2), (5, 2), (-1, 0), (-3, -2)] {
+            let point = diagonal.projected_point(&Point::new(input, 0));
+            assert_eq!([point.x, point.y], [expected, expected]);
+        }
+    }
+
+    #[test]
+    fn along_polygon_wraps_index_zero() {
+        use crate::panel::Point;
+        let poly = [
+            Point::new(0, 0),
+            Point::new(10, 0),
+            Point::new(10, 10),
+            Point::new(0, 10),
+        ];
+        let s = Segment::along_polygon(&poly, 0, 2);
+        assert_eq!(s.to_xyrb(), [0, 0, 10, 10]);
     }
 }
