@@ -10,9 +10,7 @@ image.workspace = true
 anyhow.workspace = true
 fast_image_resize.workspace = true
 rayon.workspace = true
-base-util = { workspace = true, default-features = false, features = [
-    "opencv",
-] }
+base-util = { workspace = true, features = ["opencv"] }
 ureq.workspace = true
 
 [dev-dependencies]
@@ -54,5 +52,3 @@ harness = false
 [[bench]]
 name = "rotate_left_mask_bench"
 harness = false
-
-[patch.crates-io]
