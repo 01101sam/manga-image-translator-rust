@@ -15,7 +15,6 @@ pub struct Panel {
     pub b: i32,
     splittable: bool,
     segments: Option<Vec<Segment>>,
-    coverage: Option<()>,
     ltr: bool,
 }
 
@@ -137,7 +136,6 @@ impl Panel {
             b: b as i32,
             splittable,
             segments: None,
-            coverage: None,
             ltr,
         }
     }
@@ -151,7 +149,6 @@ impl Panel {
             b: y as i32 + h as i32,
             splittable,
             segments: None,
-            coverage: None,
             ltr,
         }
     }
@@ -166,7 +163,6 @@ impl Panel {
             b,
             splittable,
             segments: None,
-            coverage: None,
             ltr,
         }
     }
@@ -735,11 +731,9 @@ impl Ord for Panel {
 }
 
 pub struct PanelSplit {
-    panel: Panel,
     pub subpanels: [Panel; 2],
     segment: Segment,
     covered_dist: f64,
-    matching_segments: Vec<Segment>,
 }
 
 impl PanelSplit {
@@ -754,11 +748,9 @@ impl PanelSplit {
         let covered_dist = matching_segments.iter().map(|s| s.dist()).sum();
 
         PanelSplit {
-            panel,
             subpanels: [subpanel1, subpanel2],
             segment: split_segment,
             covered_dist,
-            matching_segments,
         }
     }
     pub fn segments_coverage(&self) -> f64 {

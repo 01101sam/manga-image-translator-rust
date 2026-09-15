@@ -20,7 +20,6 @@ use crate::{
 };
 
 mod api;
-mod cache;
 pub mod cli;
 mod debug;
 mod dict;

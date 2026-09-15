@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use interface_image::{Mask, RawImage};
 use interface_inpainter::InpainterOptions;
 use log::info;
