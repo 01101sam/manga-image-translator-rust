@@ -6,7 +6,12 @@
   </head>
   <body>
     <h1>图片翻译测试</h1>
-    <p id="svcbar">服务：已停止（按下生成时自动启动）</p>
+    <p id="svcbar">
+      <span id="svcmsg">服务：已停止（按下生成时自动启动）</span>
+      <button type="button" id="svc_start">启动</button>
+      <button type="button" id="svc_stop" disabled>关闭</button>
+      <button type="button" id="svc_restart">重启</button>
+    </p>
     <form id="f">
       <p>
         <label>图片 <input name="image" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" required /></label>
@@ -217,6 +222,14 @@
     </table>
     <h2 id="ocr_title" hidden>文字识别</h2>
     <table id="ocr"></table>
+    <details>
+      <summary>标签识别内容</summary>
+      <pre id="tags"></pre>
+    </details>
+    <details>
+      <summary>LLM 请求与响应</summary>
+      <div id="llm"></div>
+    </details>
     <iframe id="html" hidden></iframe>
     <p><a id="dl" hidden>下载结果</a> <a id="dl_mask" hidden>下载 mask</a></p>
     <details>
@@ -250,15 +263,20 @@
         if (m) return m + " 分 " + sec + " 秒";
         return sec + " 秒";
       }
+      function setSvcButtons() {
+        $("svc_start").disabled = svcState === "ready";
+        $("svc_stop").disabled = svcState === "stopped";
+      }
       function renderSvc(d) {
         svcState = d.state || "stopped";
-        const bar = $("svcbar");
+        const msg = $("svcmsg");
         if (svcState === "stopped") {
-          bar.textContent = "服务：已停止（按下生成时自动启动）";
+          msg.textContent = "服务：已停止（按下生成时自动启动）";
+          setSvcButtons();
           return;
         }
         const label = svcState === "starting" ? "启动中" : "运行中";
-        bar.textContent =
+        msg.textContent =
           "服务：" +
           label +
           " | CPU " +
@@ -269,6 +287,7 @@
           fmtGpu(d.gpu) +
           " | 已运行 " +
           fmtUp(d.uptime_s);
+        setSvcButtons();
       }
       async function pollSvc() {
         try {
@@ -276,9 +295,23 @@
           renderSvc(await res.json());
         } catch {
           svcState = "stopped";
-          $("svcbar").textContent = "服务：已停止（按下生成时自动启动）";
+          $("svcmsg").textContent = "服务：已停止（按下生成时自动启动）";
+          setSvcButtons();
         }
       }
+      async function svcAction(path) {
+        try {
+          const res = await fetch(path, { method: "POST" });
+          renderSvc(await res.json());
+        } catch {
+          svcState = "stopped";
+          $("svcmsg").textContent = "服务：已停止（按下生成时自动启动）";
+          setSvcButtons();
+        }
+      }
+      $("svc_start").onclick = () => svcAction("/service/start");
+      $("svc_stop").onclick = () => svcAction("/service/stop");
+      $("svc_restart").onclick = () => svcAction("/service/restart");
       pollSvc();
       setInterval(pollSvc, 3000);
 
@@ -403,6 +436,37 @@
         if (wall != null) add("wall", wall);
       }
 
+      function prettyJson(v) {
+        if (typeof v === "string") return v;
+        try {
+          return JSON.stringify(v, null, 2);
+        } catch {
+          return String(v);
+        }
+      }
+      function showTags(tags) {
+        $("tags").textContent =
+          tags == null ? "无（未启用 tagger 或非 LLM 模式）" : tags;
+      }
+      function showLlm(rounds) {
+        const box = $("llm");
+        box.replaceChildren();
+        if (!rounds?.length) {
+          box.textContent = "无";
+          return;
+        }
+        for (const r of rounds) {
+          const h = document.createElement("p");
+          h.textContent = "第 " + r.round + " 轮" + (r.error ? "（失败）" : "");
+          const req = document.createElement("pre");
+          req.textContent = prettyJson(r.request);
+          const resp = document.createElement("pre");
+          resp.textContent = prettyJson(r.response);
+          box.appendChild(h);
+          box.appendChild(req);
+          box.appendChild(resp);
+        }
+      }
       function showOcr(rows) {
         const t = $("ocr");
         const title = $("ocr_title");
@@ -461,6 +525,8 @@
         $("log").textContent = "";
         showPerf([]);
         showOcr([]);
+        showTags(null);
+        showLlm([]);
         showOut({});
         const fd = new FormData();
         fd.append("image", f.image.files[0]);
@@ -480,6 +546,8 @@
         }
         showPerf(d.perf, d.wall_ms);
         showOcr(d.ocr);
+        showTags(d.tags);
+        showLlm(d.llm);
         $("log").textContent = d.log || "";
         if (!d.ok) {
           $("status").textContent = "失败";
