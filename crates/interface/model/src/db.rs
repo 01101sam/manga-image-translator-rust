@@ -35,15 +35,31 @@ impl ModelDb {
             folder = true;
         }
         if failure(Some(&base_path), &file_path, hash) {
-            download_and_extract(url, &file_path, folder)?;
+            let model_id = format!("{kind}/{name}/{file}");
+            eprintln!(
+                "模型 {model_id} 缺失或校验失败，正在从 {url} 下载到 {}；也可手动下载后放到该路径再重试。",
+                file_path.display()
+            );
+            let download = || {
+                download_and_extract(url, &file_path, folder).map_err(|e| {
+                    anyhow::anyhow!(
+                        "模型 {model_id} 下载失败（期望路径：{}，来源：{url}）：{e}。请检查网络后重试，或手动下载放到期望路径。",
+                        file_path.display()
+                    )
+                })
+            };
+            download()?;
             if failure(Some(&base_path), &file_path, hash) {
                 let _ = std::fs::remove_file(&file_path);
-                download_and_extract(url, &file_path, folder)?;
+                download()?;
                 if failure(Some(&base_path), &file_path, hash) {
                     let _ = std::fs::remove_file(&file_path);
-                    download_and_extract(url, &file_path, folder)?;
+                    download()?;
                     if failure(Some(&base_path), &file_path, hash) {
-                        panic!()
+                        return Err(anyhow::anyhow!(
+                            "模型 {model_id} 下载后连续 3 次校验失败（期望路径：{}，来源：{url}）。请删除该路径后重试，或手动下载正确文件放到该路径。",
+                            file_path.display()
+                        ));
                     }
                 }
             }
@@ -394,16 +410,85 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn test_get_panics_on_double_hash_failure() {
-        let db = ModelDb {};
-        let _ = db.get(
-            "invalid",
-            "invalid",
-            "bad.txt",
-            "https://example.com/404.tar.gz",
-            "invalidhash",
+    fn test_get_download_failure_mentions_model_and_path() {
+        let base = root_path().join("models").join("test-missing-kind");
+        let err = ModelDb {}
+            .get(
+                "test-missing-kind",
+                "test-missing-name",
+                "bad.txt",
+                "http://127.0.0.1:9/nonexistent.tar.gz",
+                "invalidhash",
+            )
+            .expect_err("不可达地址下载应返回错误");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("test-missing-kind/test-missing-name/bad.txt"),
+            "错误应指明缺失模型：{msg}"
         );
+        assert!(msg.contains("期望路径"), "错误应指明期望路径：{msg}");
+        assert!(msg.contains("手动"), "错误应说明手动放置：{msg}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_get_repeated_hash_failure_returns_readable_error() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let addr = listener.local_addr().expect("test server addr");
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = stop.clone();
+        let server = std::thread::spawn(move || {
+            while !server_stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut s, _)) => {
+                        let mut buf = [0u8; 4096];
+                        let _ = s.read(&mut buf);
+                        let body = b"not-a-model";
+                        let _ = write!(
+                            s,
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = s.write_all(body);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    Err(e) => panic!("test server accept: {e}"),
+                }
+            }
+        });
+
+        let base = root_path().join("models").join("test-hash-kind");
+        let url = format!("http://{addr}/fake-model.bin");
+        let err = ModelDb {}
+            .get(
+                "test-hash-kind",
+                "test-hash-name",
+                "fake-model.bin",
+                &url,
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .expect_err("3 次校验失败应返回错误而非 panic");
+        stop.store(true, Ordering::Relaxed);
+        let _ = server.join();
+        let _ = std::fs::remove_dir_all(&base);
+
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("test-hash-kind/test-hash-name/fake-model.bin"),
+            "错误应指明模型：{msg}"
+        );
+        assert!(msg.contains("校验"), "错误应说明校验失败：{msg}");
+        assert!(msg.contains("期望路径"), "错误应指明期望路径：{msg}");
     }
 
     #[test]
