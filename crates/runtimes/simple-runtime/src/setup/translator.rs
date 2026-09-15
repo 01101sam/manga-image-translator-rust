@@ -12,7 +12,14 @@ pub fn create_translator(settings: &TranslatorSettings) -> anyhow::Result<LlmTra
             interface_translator::Backend::OpenAi => env::var("OPENAI_API_KEY"),
             interface_translator::Backend::Anthropic => env::var("ANTHROPIC_API_KEY"),
         })
-        .context("DEEPSEEK_API_KEY not set")?;
+        .or_else(|_| {
+            option_env!("DEEPSEEK_API_KEY")
+                .map(str::to_owned)
+                .ok_or(env::VarError::NotPresent)
+        })
+        .context(
+            "未找到可用的 API key。请设置运行时 DEEPSEEK_API_KEY，或按 backend 设置 OPENAI_API_KEY / ANTHROPIC_API_KEY。也可在仓库根 .env 写入 DEEPSEEK_API_KEY 后重新编译。",
+        )?;
 
     let base_url = settings
         .base_url
@@ -54,7 +61,12 @@ mod tests {
     fn defaults_are_deepseek() {
         let s = TranslatorSettings::default();
         assert_eq!(s.model, "deepseek-v4-flash");
+        assert_eq!(s.backend, interface_translator::Backend::OpenAi);
         assert!(s.thinking);
+        assert_eq!(
+            s.thinking_strength,
+            interface_translator::ThinkingStrength::High
+        );
         assert!(!s.web_search);
     }
 }

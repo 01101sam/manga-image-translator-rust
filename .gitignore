@@ -12,3 +12,4 @@ dist
 *.mit.bin
 !python-render.py
 crates/runtimes/simple-runtime/debug
+.env
