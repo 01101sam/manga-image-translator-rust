@@ -217,7 +217,8 @@ fn filter_boxes_and_adjust(boxes: &Array3<i64>, ratio_w: f64, ratio_h: f64) -> A
     }
     let boxes = boxes.to_shared();
     let idx = boxes
-        .reshape((boxes.shape()[0], boxes.len() / boxes.shape()[0]))
+        .to_shape((boxes.shape()[0], boxes.len() / boxes.shape()[0]))
+        .expect("detection boxes reshape")
         .sum_axis(Axis(1))
         .mapv(|v| v > 0);
     let indicies = idx

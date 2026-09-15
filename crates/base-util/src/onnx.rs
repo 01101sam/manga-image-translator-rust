@@ -225,7 +225,7 @@ pub fn dyn_to_2d(arr: Array<f32, IxDyn>) -> Option<Array2<f32>> {
         let shape = arr.shape();
         let (rows, cols) = (shape[0], shape[1]);
 
-        arr.into_shape((rows, cols)).ok()
+        arr.into_shape_with_order((rows, cols)).ok()
     } else {
         None
     }

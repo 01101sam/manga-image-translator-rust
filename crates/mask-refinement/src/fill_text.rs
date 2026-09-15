@@ -392,7 +392,7 @@ fn mask_to_feat_first(rawmask: Array2<u8>) -> anyhow::Result<Array2<f32>> {
     let (h, w) = rawmask.dim();
 
     // (H, W) -> (H, W, 1)
-    let rawmask = rawmask.into_shape((h, w, 1))?;
+    let rawmask = rawmask.into_shape_with_order((h, w, 1))?;
 
     let invmask = rawmask.map(|&v| !v);
 
@@ -415,7 +415,7 @@ fn unary_from_softmax(sm: Array2<f32>, clip: Option<f32>) -> anyhow::Result<Arra
     };
 
     let rest = sm.len() / num_cls;
-    let sm_flat = sm.into_shape((num_cls, rest))?;
+    let sm_flat = sm.into_shape_with_order((num_cls, rest))?;
 
     Ok(sm_flat.mapv(|x| -x.ln()))
 }
@@ -446,5 +446,5 @@ fn refine_mask(
         .axis_iter(Axis(1))
         .map(|v| if v[0] >= v[1] { 0u8 } else { 255u8 })
         .collect::<Array1<_>>()
-        .into_shape((height as usize, width as usize))?)
+        .into_shape_with_order((height as usize, width as usize))?)
 }
