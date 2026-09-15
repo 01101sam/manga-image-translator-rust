@@ -271,10 +271,24 @@ pub fn finish_translation(args: &Value) -> anyhow::Result<String> {
     }
 }
 
+fn emit_llm_json(round: usize, url: &str, request: &Value, response: Value, error: bool) {
+    let mut payload = json!({
+        "round": round,
+        "url": url,
+        "request": request,
+        "response": response,
+    });
+    if error {
+        payload["error"] = json!(true);
+    }
+    eprintln!("LLM_JSON {payload}");
+}
+
 fn complete(
     translator: &LlmTranslator,
     conv: &Conversation,
     tools: &[ToolSpec],
+    round: usize,
 ) -> anyhow::Result<crate::backend::ModelTurn> {
     let thinking = translator.thinking.then_some(translator.thinking_strength);
     let (_path, body) =
@@ -289,8 +303,17 @@ fn complete(
             anthropic_headers(&translator.api_key),
         ),
     };
-    let resp = translator.transport.post_json(&url, &headers, body)?;
-    decode_response(translator.backend, &resp)
+    if std::env::var_os("MIT_LLM_TRACE").is_some() {
+        let result = translator.transport.post_json(&url, &headers, body.clone());
+        match &result {
+            Ok(resp) => emit_llm_json(round, &url, &body, resp.clone(), false),
+            Err(e) => emit_llm_json(round, &url, &body, json!(e.to_string()), true),
+        }
+        decode_response(translator.backend, &result?)
+    } else {
+        let resp = translator.transport.post_json(&url, &headers, body)?;
+        decode_response(translator.backend, &resp)
+    }
 }
 
 pub fn run_agent(
@@ -308,8 +331,8 @@ pub fn run_agent(
     } else {
         translator.max_iters
     };
-    for _ in 0..max_iters {
-        let turn = complete(translator, &conv, &tools)?;
+    for round in 1..=max_iters {
+        let turn = complete(translator, &conv, &tools, round)?;
         if turn.calls.is_empty() {
             bail!("model returned no tool calls; finish is required");
         }

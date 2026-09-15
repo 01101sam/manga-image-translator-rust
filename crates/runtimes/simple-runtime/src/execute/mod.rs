@@ -126,6 +126,12 @@ impl Models {
             self.run_tagger(&upscaled_img, &config.tagger, config.translator.mode, &ip)
                 .await
         );
+        if let Some(tags) = &tags {
+            match serde_json::to_string(tags) {
+                Ok(encoded) => eprintln!("TAGS_JSON {encoded}"),
+                Err(_) => eprintln!("TAGS_JSON \"\""),
+            }
+        }
         if let (Some(debug_path), Some(tags)) = (&debug_path, &tags) {
             std::fs::write(debug_path.join("3_tags.txt"), tags)?;
         }
