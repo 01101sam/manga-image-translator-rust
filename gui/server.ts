@@ -62,6 +62,43 @@ function parseOcr(text: string) {
   return [];
 }
 
+function parseTags(text: string): string | null {
+  let last: string | null = null;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith("TAGS_JSON ")) continue;
+    try {
+      const v = JSON.parse(line.slice(10));
+      last = typeof v === "string" ? v : null;
+    } catch {
+      last = null;
+    }
+  }
+  return last;
+}
+
+type LlmRound = {
+  round: number;
+  url?: string;
+  request?: unknown;
+  response?: unknown;
+  error?: boolean;
+};
+
+function parseLlm(text: string): LlmRound[] {
+  const rows: LlmRound[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith("LLM_JSON ")) continue;
+    try {
+      const v = JSON.parse(line.slice(9));
+      if (v && typeof v === "object" && typeof v.round === "number") rows.push(v);
+    } catch {
+      continue;
+    }
+  }
+  rows.sort((a, b) => a.round - b.round);
+  return rows;
+}
+
 const parsed = parsePerf("x\nPERF detector 12\nPERF ocr 3\n");
 if (parsed.length !== 2 || parsed[0].ms !== 12 || parsed[1].step !== "ocr") {
   throw new Error("parsePerf");
@@ -69,6 +106,21 @@ if (parsed.length !== 2 || parsed[0].ms !== 12 || parsed[1].step !== "ocr") {
 const ocrParsed = parseOcr('x\nOCR_JSON [{"text":"あ","translation":"a"}]\n');
 if (ocrParsed.length !== 1 || ocrParsed[0].text !== "あ") {
   throw new Error("parseOcr");
+}
+const tagsParsed = parseTags('x\nTAGS_JSON "first"\nTAGS_JSON "last tags"\n');
+if (tagsParsed !== "last tags") {
+  throw new Error("parseTags");
+}
+const llmParsed = parseLlm(
+  'x\nLLM_JSON {"round":2,"url":"u","request":{"model":"b"},"response":{"ok":2}}\nLLM_JSON {"round":1,"url":"u","request":{"model":"a"},"response":{"ok":1}}\n',
+);
+if (
+  llmParsed.length !== 2 ||
+  llmParsed[0].round !== 1 ||
+  llmParsed[1].round !== 2 ||
+  (llmParsed[0].request as { model?: string }).model !== "a"
+) {
+  throw new Error("parseLlm");
 }
 
 async function resolveBin() {
@@ -103,6 +155,14 @@ function spawnParamsFrom(form: FormData): SpawnParams {
     verbose: Math.min(3, Math.max(0, Number(form.get("verbose") ?? 0) | 0)),
     max_batch_size_ocr: Number(form.get("max_batch_size_ocr") ?? 16) || 16,
     max_batch_size_upscaler: Number(form.get("max_batch_size_upscaler") ?? 2) || 2,
+  };
+}
+
+function defaultSpawnParams(): SpawnParams {
+  return svc.spawnParams ?? {
+    verbose: 0,
+    max_batch_size_ocr: 16,
+    max_batch_size_upscaler: 2,
   };
 }
 
@@ -215,6 +275,7 @@ async function spawnService(params: SpawnParams) {
     cwd: ROOT,
     stdout: "pipe",
     stderr: "pipe",
+    env: { ...process.env, MIT_LLM_TRACE: "1" },
   });
   svc.state = "starting";
   svc.pid = proc.pid;
@@ -414,6 +475,8 @@ async function run(req: Request) {
   const windowText = linesAfter(mark);
   const perf = parsePerf(windowText);
   const parsedOcr = parseOcr(windowText);
+  const tags = parseTags(windowText);
+  const llm = parseLlm(windowText);
   let body: Record<string, unknown>;
   try {
     body = (await res.json()) as Record<string, unknown>;
@@ -422,11 +485,13 @@ async function run(req: Request) {
       ok: false,
       error: `服务返回了非 JSON（HTTP ${res.status}）`,
       perf,
+      tags,
+      llm,
       log: windowText,
     });
   }
   const ocr = Array.isArray(body.ocr) ? body.ocr : parsedOcr;
-  return json({ ...body, perf, ocr, log: windowText }, res.status);
+  return json({ ...body, perf, ocr, tags, llm, log: windowText }, res.status);
 }
 
 const server = Bun.serve({
@@ -437,6 +502,24 @@ const server = Bun.serve({
       return new Response(Bun.file(join(import.meta.dir, "index.html")));
     }
     if (req.method === "GET" && url.pathname === "/service/status") {
+      return serviceStatus();
+    }
+    if (req.method === "POST" && url.pathname === "/service/start") {
+      try {
+        await ensureService(defaultSpawnParams());
+      } catch {}
+      return serviceStatus();
+    }
+    if (req.method === "POST" && url.pathname === "/service/stop") {
+      await stopService();
+      return serviceStatus();
+    }
+    if (req.method === "POST" && url.pathname === "/service/restart") {
+      const params = defaultSpawnParams();
+      await stopService();
+      try {
+        await ensureService(params);
+      } catch {}
       return serviceStatus();
     }
     if (req.method === "POST" && url.pathname === "/run") {
