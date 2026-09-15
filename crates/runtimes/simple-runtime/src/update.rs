@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use ort::execution_providers::{CUDAExecutionProvider, ExecutionProvider};
 use reqwest::Client;
 use semver::Version;
@@ -17,7 +19,9 @@ pub fn check_cuda() -> bool {
 pub async fn check_crate_version(repo: &str) -> Result<bool, Box<dyn std::error::Error>> {
     let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
 
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()?;
     let release: Release = client
         .get(&url)
         .header("User-Agent", "reqwest")
