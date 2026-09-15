@@ -1,9 +1,44 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { extname, join } from "node:path";
+import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..");
 const PORT = Number(process.env.PORT ?? 3000);
+const PORT_S = Number(process.env.SERVICE_PORT ?? 8080);
+
+type SpawnParams = {
+  verbose: number;
+  max_batch_size_ocr: number;
+  max_batch_size_upscaler: number;
+};
+
+type ServiceState = "stopped" | "starting" | "ready";
+
+type ServiceRec = {
+  state: ServiceState;
+  pid?: number;
+  port: number;
+  startedAt?: number;
+  spawnParams?: SpawnParams;
+  lastError?: string;
+  proc?: Bun.Subprocess;
+};
+
+const svc: ServiceRec = { state: "stopped", port: PORT_S };
+
+const RING_MAX = 500;
+let lineSeq = 0;
+const ring: { seq: number; line: string }[] = [];
+
+function pushLine(line: string) {
+  ring.push({ seq: ++lineSeq, line });
+  if (ring.length > RING_MAX) ring.shift();
+}
+
+function linesAfter(seq: number) {
+  return ring
+    .filter((x) => x.seq > seq)
+    .map((x) => x.line)
+    .join("\n");
+}
 
 function parsePerf(text: string) {
   const perf: { step: string; ms: number }[] = [];
@@ -45,35 +80,292 @@ async function resolveBin() {
   return join(ROOT, "target/release/simple-runtime");
 }
 
-async function findOutputs(dir: string) {
-  let result: string | undefined;
-  let mask: string | undefined;
-  const glob = new Bun.Glob("**/*.{png,html,jpg,jpeg,webp,bin}");
-  for await (const f of glob.scan({ cwd: dir, onlyFiles: true, dot: false })) {
-    if (f.endsWith(".mask.png")) mask = join(dir, f);
-    else if (!result) result = join(dir, f);
-  }
-  return { result, mask };
-}
-
-function mimeOf(path: string) {
-  switch (extname(path).toLowerCase()) {
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".webp":
-      return "image/webp";
-    case ".html":
-      return "text/html";
-    default:
-      return "application/octet-stream";
-  }
-}
-
 function json(data: unknown, status = 200) {
   return Response.json(data, { status });
+}
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function paramsEq(a?: SpawnParams, b?: SpawnParams) {
+  return (
+    !!a &&
+    !!b &&
+    a.verbose === b.verbose &&
+    a.max_batch_size_ocr === b.max_batch_size_ocr &&
+    a.max_batch_size_upscaler === b.max_batch_size_upscaler
+  );
+}
+
+function spawnParamsFrom(form: FormData): SpawnParams {
+  return {
+    verbose: Math.min(3, Math.max(0, Number(form.get("verbose") ?? 0) | 0)),
+    max_batch_size_ocr: Number(form.get("max_batch_size_ocr") ?? 16) || 16,
+    max_batch_size_upscaler: Number(form.get("max_batch_size_upscaler") ?? 2) || 2,
+  };
+}
+
+async function runCmd(cmd: string, args: string[]) {
+  try {
+    const p = Bun.spawn([cmd, ...args], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr] = await Promise.all([
+      new Response(p.stdout).text(),
+      new Response(p.stderr).text(),
+    ]);
+    await p.exited;
+    return { ok: p.exitCode === 0, text: stdout, err: stderr };
+  } catch (e) {
+    return { ok: false, text: "", err: String(e) };
+  }
+}
+
+function drainStdout(proc: Bun.Subprocess) {
+  const stream = proc.stdout;
+  if (stream && typeof stream !== "number") void new Response(stream).text();
+}
+
+function pumpStderr(proc: Bun.Subprocess) {
+  const stream = proc.stderr;
+  if (!stream || typeof stream === "number") return;
+  void (async () => {
+    const reader = stream.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split(/\r?\n/);
+        buf = parts.pop() ?? "";
+        for (const line of parts) pushLine(line);
+      }
+      if (buf) pushLine(buf);
+    } catch {
+      return;
+    }
+  })();
+}
+
+async function healthOk(ms = 1000) {
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), ms);
+    const r = await fetch(`http://127.0.0.1:${PORT_S}/health`, { signal: ac.signal });
+    clearTimeout(t);
+    if (!r.ok) return false;
+    const body = (await r.json()) as { service?: string };
+    return body.service === "simple-runtime-api";
+  } catch {
+    return false;
+  }
+}
+
+function markStopped(err?: string) {
+  svc.state = "stopped";
+  svc.pid = undefined;
+  svc.startedAt = undefined;
+  svc.proc = undefined;
+  if (err) svc.lastError = err;
+}
+
+async function stopService() {
+  const proc = svc.proc;
+  if (!proc) {
+    markStopped();
+    return;
+  }
+  try {
+    proc.kill("SIGTERM");
+  } catch {}
+  const dead = await Promise.race([
+    proc.exited.then(() => true),
+    sleep(3000).then(() => false),
+  ]);
+  if (!dead) {
+    try {
+      proc.kill("SIGKILL");
+    } catch {}
+    await proc.exited.catch(() => {});
+  }
+  if (svc.proc === proc) markStopped();
+}
+
+async function spawnService(params: SpawnParams) {
+  const bin = await resolveBin();
+  if (!(await Bun.file(bin).exists())) {
+    const msg = `找不到 binary: ${bin}\n请先编译: cargo build -p simple-runtime --release`;
+    markStopped(msg);
+    throw new Error(msg);
+  }
+  const args = [
+    ...(params.verbose ? ["-" + "v".repeat(params.verbose)] : []),
+    "--max-batch-size-ocr",
+    String(params.max_batch_size_ocr),
+    "--max-batch-size-upscaler",
+    String(params.max_batch_size_upscaler),
+    "api",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    String(PORT_S),
+  ];
+  const proc = Bun.spawn([bin, ...args], {
+    cwd: ROOT,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  svc.state = "starting";
+  svc.pid = proc.pid;
+  svc.port = PORT_S;
+  svc.startedAt = Date.now();
+  svc.spawnParams = params;
+  svc.proc = proc;
+  svc.lastError = undefined;
+  drainStdout(proc);
+  pumpStderr(proc);
+  void proc.exited.then((code) => {
+    if (svc.proc === proc) {
+      markStopped(code === 0 || code === null ? undefined : `服务进程退出 ${code}`);
+    }
+  });
+}
+
+async function waitUntilReady() {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    if (svc.state === "stopped") {
+      throw new Error(svc.lastError || "服务进程已退出");
+    }
+    if (await healthOk(400)) {
+      svc.state = "ready";
+      return;
+    }
+    await sleep(500);
+  }
+  await stopService();
+  markStopped("服务在 60 秒内未就绪");
+  throw new Error("服务在 60 秒内未就绪");
+}
+
+async function ensureService(params: SpawnParams) {
+  if (svc.state === "ready" && !paramsEq(svc.spawnParams, params)) {
+    await stopService();
+  }
+  if (svc.state === "ready") {
+    if (await healthOk(1000)) return;
+    await stopService();
+  }
+  if (svc.state === "starting") {
+    await waitUntilReady();
+    return;
+  }
+  await spawnService(params);
+  await waitUntilReady();
+}
+
+type GpuCap = { kind: "ioreg" } | { kind: "none"; note: string };
+let gpuCap: GpuCap | undefined;
+
+function parseIoregGpu(text: string) {
+  const m = text.match(/"Device Utilization %"\s*=\s*(\d+)/);
+  return m ? Number(m[1]) : null;
+}
+
+async function probeGpu(): Promise<GpuCap> {
+  const ioreg = await runCmd("ioreg", ["-r", "-c", "IOAccelerator"]);
+  if (parseIoregGpu(ioreg.text) != null) return { kind: "ioreg" };
+  const pm = await runCmd("sudo", ["-n", "powermetrics", "--samplers", "gpu_power", "-n", "1", "-i", "1"]);
+  if (pm.ok) {
+    return {
+      kind: "none",
+      note: "ioreg 无 Device Utilization %，powermetrics 可用但不用于 3 秒轮询",
+    };
+  }
+  return {
+    kind: "none",
+    note: "无法读取 GPU 占用：ioreg 无利用率字段，powermetrics 需要免密 sudo",
+  };
+}
+
+async function readGpu() {
+  gpuCap ??= await probeGpu();
+  if (gpuCap.kind === "none") return { available: false, note: gpuCap.note };
+  const ioreg = await runCmd("ioreg", ["-r", "-c", "IOAccelerator"]);
+  const percent = parseIoregGpu(ioreg.text);
+  if (percent == null) return { available: false, note: "ioreg 本次未读到 Device Utilization %" };
+  return { available: true, percent };
+}
+
+function parsePsTime(s: string) {
+  const t = s.trim();
+  if (!t) return 0;
+  const dash = t.split("-");
+  let rest = t;
+  let days = 0;
+  if (dash.length === 2) {
+    days = Number(dash[0]);
+    rest = dash[1];
+  }
+  const parts = rest.split(":").map(Number);
+  if (parts.some((n) => Number.isNaN(n))) return 0;
+  if (parts.length === 3) return days * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return days * 86400 + parts[0] * 60 + parts[1];
+  return 0;
+}
+
+let cpuSample: { pid: number; cputime: number; ts: number } | null = null;
+
+async function readProcRes(pid: number) {
+  const ps = await runCmd("ps", ["-o", "time=,rss=", "-p", String(pid)]);
+  const cols = ps.text.trim().split(/\s+/);
+  const cputime = parsePsTime(cols[0] ?? "");
+  const rssKb = Number(cols[1] ?? "");
+  const rss_bytes = Number.isFinite(rssKb) ? Math.round(rssKb * 1024) : null;
+  const now = Date.now();
+  let cpu_pct: number | null = null;
+  if (cpuSample && cpuSample.pid === pid) {
+    const dt = (now - cpuSample.ts) / 1000;
+    if (dt > 0) cpu_pct = Math.max(0, ((cputime - cpuSample.cputime) / dt) * 100);
+  }
+  cpuSample = { pid, cputime, ts: now };
+  return { cpu_pct, rss_bytes };
+}
+
+async function serviceStatus() {
+  const running = svc.state === "ready";
+  const uptime_s =
+    running && svc.startedAt ? Math.round((Date.now() - svc.startedAt) / 1000) : null;
+  let cpu_pct: number | null = null;
+  let rss_bytes: number | null = null;
+  let gpu: { available: boolean; percent?: number; note?: string } = { available: false };
+  if (svc.pid && (svc.state === "ready" || svc.state === "starting")) {
+    const res = await readProcRes(svc.pid);
+    cpu_pct = res.cpu_pct;
+    rss_bytes = res.rss_bytes;
+    gpu = await readGpu();
+  }
+  return json({
+    state: svc.state,
+    running,
+    pid: svc.pid ?? null,
+    uptime_s,
+    cpu_pct,
+    rss_bytes,
+    gpu,
+    spawn_params: svc.spawnParams ?? null,
+  });
+}
+
+let runTail: Promise<unknown> = Promise.resolve();
+function serializeRun<T>(fn: () => Promise<T>): Promise<T> {
+  const done = runTail.then(fn, fn);
+  runTail = done.then(
+    () => {},
+    () => {},
+  );
+  return done;
 }
 
 async function run(req: Request) {
@@ -89,92 +381,52 @@ async function run(req: Request) {
     return json({ ok: false, error: "参数 JSON 无效" });
   }
 
-  const bin = await resolveBin();
-  if (!(await Bun.file(bin).exists())) {
+  const params = spawnParamsFrom(form);
+  try {
+    await ensureService(params);
+  } catch (e) {
+    return json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+
+  const out = new FormData();
+  const name = image instanceof File && image.name ? image.name : "input.png";
+  out.append("image", image, name);
+  out.append("settings", JSON.stringify(settings));
+  if (String(form.get("save_mask")) === "1") out.append("save_mask", "1");
+
+  const mark = lineSeq;
+  let res: Response;
+  try {
+    res = await fetch(`http://127.0.0.1:${PORT_S}/translate`, {
+      method: "POST",
+      body: out,
+    });
+  } catch (e) {
+    return json({ ok: false, error: `转发 /translate 失败: ${e instanceof Error ? e.message : e}` });
+  }
+
+  const drainUntil = Date.now() + 300;
+  while (Date.now() < drainUntil) {
+    const t = linesAfter(mark);
+    if (t.includes("PERF render") || t.includes("OCR_JSON ")) break;
+    await sleep(20);
+  }
+  const windowText = linesAfter(mark);
+  const perf = parsePerf(windowText);
+  const parsedOcr = parseOcr(windowText);
+  let body: Record<string, unknown>;
+  try {
+    body = (await res.json()) as Record<string, unknown>;
+  } catch {
     return json({
       ok: false,
-      error: `找不到 binary: ${bin}\n请先编译: cargo build -p simple-runtime --release`,
-    });
-  }
-
-  const job = await mkdtemp(join(tmpdir(), "mit-gui-"));
-  try {
-    const name = image instanceof File && image.name ? image.name : "input.png";
-    const ext = extname(name) || ".png";
-    const inputDir = join(job, "in");
-    const outputDir = join(job, "out");
-    await mkdir(inputDir);
-    await mkdir(outputDir);
-    await Bun.write(join(inputDir, `input${ext}`), image);
-    const cfg = join(job, "config.json");
-    await Bun.write(cfg, JSON.stringify(settings));
-
-    const verbose = Math.min(3, Math.max(0, Number(form.get("verbose") ?? 0) | 0));
-    const args = [
-      ...(verbose ? ["-" + "v".repeat(verbose)] : []),
-      "--max-batch-size-ocr",
-      String(form.get("max_batch_size_ocr") ?? "16"),
-      "--max-batch-size-upscaler",
-      String(form.get("max_batch_size_upscaler") ?? "2"),
-      "cli",
-      "-i",
-      inputDir,
-      "-o",
-      outputDir,
-      "-c",
-      cfg,
-      "--overwrite",
-      ...(String(form.get("save_mask")) === "1" ? ["--save-mask"] : []),
-    ];
-
-    const t0 = performance.now();
-    const proc = Bun.spawn([bin, ...args], {
-      cwd: ROOT,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [stdout, stderr] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    await proc.exited;
-    const wall_ms = Math.round(performance.now() - t0);
-    const perf = parsePerf(stderr);
-    const ocr = parseOcr(stderr);
-    const log = [stdout, stderr].filter(Boolean).join("\n");
-    if (proc.exitCode !== 0) {
-      return json({
-        ok: false,
-        error: log.trim() || `exit ${proc.exitCode}`,
-        perf,
-        ocr,
-        wall_ms,
-        log,
-      });
-    }
-    const { result, mask } = await findOutputs(outputDir);
-    if (!result) {
-      return json({ ok: false, error: "没有输出文件", perf, wall_ms, log });
-    }
-    const data = Buffer.from(await Bun.file(result).arrayBuffer()).toString("base64");
-    const maskData = mask
-      ? Buffer.from(await Bun.file(mask).arrayBuffer()).toString("base64")
-      : null;
-    return json({
-      ok: true,
-      mime: mimeOf(result),
-      filename: result.split("/").pop(),
-      data,
-      mask: maskData,
-      mask_mime: mask ? "image/png" : null,
+      error: `服务返回了非 JSON（HTTP ${res.status}）`,
       perf,
-      ocr,
-      wall_ms,
-      log,
+      log: windowText,
     });
-  } finally {
-    await rm(job, { recursive: true, force: true });
   }
+  const ocr = Array.isArray(body.ocr) ? body.ocr : parsedOcr;
+  return json({ ...body, perf, ocr, log: windowText }, res.status);
 }
 
 const server = Bun.serve({
@@ -184,7 +436,12 @@ const server = Bun.serve({
     if (req.method === "GET" && url.pathname === "/") {
       return new Response(Bun.file(join(import.meta.dir, "index.html")));
     }
-    if (req.method === "POST" && url.pathname === "/run") return run(req);
+    if (req.method === "GET" && url.pathname === "/service/status") {
+      return serviceStatus();
+    }
+    if (req.method === "POST" && url.pathname === "/run") {
+      return serializeRun(() => run(req));
+    }
     return new Response("not found", { status: 404 });
   },
 });
