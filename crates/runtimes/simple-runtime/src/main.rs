@@ -197,7 +197,7 @@ async fn main() {
                 eprintln!("PERF render {}", render_t.elapsed().as_millis());
             }
         }
-        cli::Commands::Api { host, port } => api::main(&host, port).await.unwrap(),
+        cli::Commands::Api { host, port } => api::main(models, &host, port).await.unwrap(),
         cli::Commands::Ui => {
             let native_options = eframe::NativeOptions {
                 viewport: egui::ViewportBuilder::default()
@@ -223,7 +223,7 @@ async fn main() {
     }
 }
 
-fn render_config(settings: &RenderSettings) -> PngRenderConfig {
+pub(crate) fn render_config(settings: &RenderSettings) -> PngRenderConfig {
     PngRenderConfig {
         align: match settings.alignment {
             Alignment::Left => MyAlign::Left,
