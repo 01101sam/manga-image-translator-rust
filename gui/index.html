@@ -6,6 +6,7 @@
   </head>
   <body>
     <h1>图片翻译测试</h1>
+    <p id="svcbar">服务：已停止（按下生成时自动启动）</p>
     <form id="f">
       <p>
         <label>图片 <input name="image" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" required /></label>
@@ -225,6 +226,62 @@
 
     <script>
       const $ = (id) => document.getElementById(id);
+      let svcState = "stopped";
+
+      function fmtGiB(bytes) {
+        if (bytes == null) return "—";
+        return (bytes / 1024 ** 3).toFixed(2) + " GiB";
+      }
+      function fmtCpu(pct) {
+        if (pct == null) return "—";
+        return pct.toFixed(1) + "%";
+      }
+      function fmtGpu(gpu) {
+        if (!gpu) return "—";
+        if (gpu.available && gpu.percent != null) return gpu.percent + "%";
+        return gpu.note || "不可用";
+      }
+      function fmtUp(s) {
+        if (s == null) return "—";
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        const sec = s % 60;
+        if (h) return h + " 小时 " + m + " 分";
+        if (m) return m + " 分 " + sec + " 秒";
+        return sec + " 秒";
+      }
+      function renderSvc(d) {
+        svcState = d.state || "stopped";
+        const bar = $("svcbar");
+        if (svcState === "stopped") {
+          bar.textContent = "服务：已停止（按下生成时自动启动）";
+          return;
+        }
+        const label = svcState === "starting" ? "启动中" : "运行中";
+        bar.textContent =
+          "服务：" +
+          label +
+          " | CPU " +
+          fmtCpu(d.cpu_pct) +
+          " | 内存 " +
+          fmtGiB(d.rss_bytes) +
+          " | GPU " +
+          fmtGpu(d.gpu) +
+          " | 已运行 " +
+          fmtUp(d.uptime_s);
+      }
+      async function pollSvc() {
+        try {
+          const res = await fetch("/service/status");
+          renderSvc(await res.json());
+        } catch {
+          svcState = "stopped";
+          $("svcbar").textContent = "服务：已停止（按下生成时自动启动）";
+        }
+      }
+      pollSvc();
+      setInterval(pollSvc, 3000);
+
       const emptyNull = (v) => (v === "" ? null : v);
       const csv = (v) =>
         v
@@ -398,7 +455,8 @@
       $("f").onsubmit = async (e) => {
         e.preventDefault();
         const f = e.target;
-        $("status").textContent = "运行中";
+        $("status").textContent =
+          svcState === "ready" ? "运行中" : "服务启动中（首次加载模型较慢）";
         $("error").textContent = "";
         $("log").textContent = "";
         showPerf([]);
