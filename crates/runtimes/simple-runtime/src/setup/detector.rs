@@ -18,7 +18,7 @@ impl Detectors {
             let detector = match detector_key {
                 Detector::DBNet => {
                     // allow:clone[arc]
-                    Box::new(dbnet::DbNetDetector::new(providers.clone(), false)) as DetectorType
+                    Box::new(dbnet::DbNetDetector::new(providers.clone())) as DetectorType
                 }
                 // Detector::DBNetConvNext => todo!(),
                 // allow:clone[arc]

@@ -208,15 +208,6 @@ impl<'a> RawImageView<'a> {
     }
 }
 
-fn blend_pixel3(s_rgb: [u8; 3], o_rgba: [u8; 4]) -> [u8; 3] {
-    let alpha = o_rgba[3] as f32 / 255.0;
-    [
-        ((o_rgba[0] as f32 * alpha) + (s_rgb[0] as f32 * (1.0 - alpha))).round() as u8,
-        ((o_rgba[1] as f32 * alpha) + (s_rgb[1] as f32 * (1.0 - alpha))).round() as u8,
-        ((o_rgba[2] as f32 * alpha) + (s_rgb[2] as f32 * (1.0 - alpha))).round() as u8,
-    ]
-}
-
 fn blend_pixel4(s_rgba: [u8; 4], o_rgba: [u8; 4]) -> [u8; 4] {
     if o_rgba[3] == 255 {
         return o_rgba;

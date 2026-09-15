@@ -26,17 +26,13 @@ use maplit::hashmap;
 pub struct DbNetDetector {
     providers: Arc<Vec<Providers>>,
     model: ModelWrap<Mutex<Session>>,
-    /// Different model architecture, but based on dbnet
-    convnext: bool,
 }
 
 impl DbNetDetector {
-    ///convnext: Different model architecture, but based on dbnet
-    pub fn new(providers: Arc<Vec<Providers>>, convnext: bool) -> Self {
+    pub fn new(providers: Arc<Vec<Providers>>) -> Self {
         DbNetDetector {
             providers,
             model: Default::default(),
-            convnext,
         }
     }
 }
@@ -258,14 +254,14 @@ mod tests {
 
     #[tokio::test]
     async fn load_unload() {
-        let data = DbNetDetector::new(Arc::new(all_providers()), false);
+        let data = DbNetDetector::new(Arc::new(all_providers()));
         data.load().await.expect("failed to load model");
         data.unload().await;
     }
 
     #[tokio::test]
     async fn run() {
-        let data = DbNetDetector::new(Arc::new(all_providers()), false);
+        let data = DbNetDetector::new(Arc::new(all_providers()));
         let cpu_image_processor =
             Arc::new(CpuImageProcessor::default()) as Arc<dyn ImageOp + Send + Sync>;
         data.detect(

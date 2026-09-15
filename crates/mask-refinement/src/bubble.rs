@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use anyhow::anyhow;
-use base_util::opencv_utils::{to_continous, to_continous2};
+use base_util::opencv_utils::to_continous2;
 use ndarray::{Array3, ArrayView3, Axis};
 use opencv::{
     core::{Mat, MatTraitConst as _, MatTraitConstManual, CV_8U, CV_MAT_DEPTH},

@@ -35,7 +35,7 @@ async fn main() {
         .unwrap_or_else(|| "imgs/232264684-5a7bcf8e-707b-4925-86b0-4212382f1680.png".into());
     let providers = Arc::new(all_providers());
     let det: Box<dyn Detector + Send + Sync> = match which.as_str() {
-        "dbnet" => Box::new(dbnet::DbNetDetector::new(providers, false)),
+        "dbnet" => Box::new(dbnet::DbNetDetector::new(providers)),
         "ctd" => Box::new(ctd::CtdDetector::new(providers)),
         _ => panic!("unknown detector {which}"),
     };

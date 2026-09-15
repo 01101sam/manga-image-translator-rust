@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use base_util::onnx::{all_providers, gpu_providers};
+use base_util::onnx::all_providers;
 use strum::IntoEnumIterator;
 
 use crate::settings::OCR;

@@ -161,8 +161,7 @@ impl Session {
         PyDetector {
             inner: Arc::new(Mutex::new(
                 // allow:clone[arc]
-                Box::new(DbNetDetector::new(self.inner.clone(), false))
-                    as Box<dyn Detector + Send + Sync>,
+                Box::new(DbNetDetector::new(self.inner.clone())) as Box<dyn Detector + Send + Sync>,
             )),
             // allow:clone[arc]
             processor: self.processor.clone(),
@@ -173,8 +172,7 @@ impl Session {
         PyDetector {
             inner: Arc::new(Mutex::new(
                 // allow:clone[arc]
-                Box::new(DbNetDetector::new(self.inner.clone(), true))
-                    as Box<dyn Detector + Send + Sync>,
+                Box::new(DbNetDetector::new(self.inner.clone())) as Box<dyn Detector + Send + Sync>,
             )),
             // allow:clone[arc]
             processor: self.processor.clone(),

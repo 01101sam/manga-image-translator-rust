@@ -24,13 +24,12 @@ use rayon::prelude::*;
 #[derive(Debug, Clone)]
 pub struct RatioMatSlice<'a, T> {
     data: &'a [T],
-    rows: usize,
     cols: usize,
 }
 
 impl<'a, T> RatioMatSlice<'a, T> {
-    pub fn new(data: &'a [T], rows: usize, cols: usize) -> Self {
-        Self { data, rows, cols }
+    pub fn new(data: &'a [T], cols: usize) -> Self {
+        Self { data, cols }
     }
 
     /// Get a reference to the element at (row, col) without bounds checks
@@ -185,9 +184,8 @@ pub fn complete_mask(
     let mut valid = false;
     let mut textline_ccs: Vec<RatioMat<u8>> =
         vec![RatioMat::new(mask.rows() as usize, mask.cols() as usize); m];
-    let label_rows = labels.rows() as usize;
     let label_cols = labels.cols() as usize;
-    let labels = RatioMatSlice::new(as_slice(&mut labels), label_rows, label_cols);
+    let labels = RatioMatSlice::new(as_slice(&mut labels), label_cols);
 
     for label in 1..num_labels {
         if *stats.at_2d::<i32>(label, CC_STAT_AREA)? <= 9 {
