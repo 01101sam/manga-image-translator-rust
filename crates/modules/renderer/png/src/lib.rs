@@ -125,7 +125,7 @@ impl RenderDirection {
         match self {
             Self::Auto => stored,
             Self::Horizontal => ScriptAxis::Horizontal,
-            Self::Vertical => ScriptAxis::VerticalLtr,
+            Self::Vertical => ScriptAxis::VerticalRtl,
         }
     }
 }

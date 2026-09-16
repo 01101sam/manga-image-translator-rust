@@ -5,19 +5,19 @@ use crate::TextBlock;
 
 /// 块级阅读/排版轴：区域出生时由行几何投票一次，之后只读。
 ///
-/// 列序左→右写进名字：竖排新列一律画在右边（+x）。
+/// 列序右→左写进名字：竖排新列一律画在左边（−x），首列在最右。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ScriptAxis {
     /// 字形沿 +x，行沿 +y。
     #[default]
     Horizontal,
-    /// 字形直立沿 +y 堆叠，列沿 +x 前进（左→右）。
-    VerticalLtr,
+    /// 字形直立沿 +y 堆叠，列沿 −x 前进（右→左）。
+    VerticalRtl,
 }
 
 impl ScriptAxis {
     pub fn is_vertical(self) -> bool {
-        matches!(self, Self::VerticalLtr)
+        matches!(self, Self::VerticalRtl)
     }
 }
 
@@ -39,7 +39,7 @@ pub fn script_axis_from_line_quads(lines: &[[MyPoint; 4]]) -> ScriptAxis {
         return most_extreme_line_axis(lines);
     }
     if vertical * 2 > count {
-        ScriptAxis::VerticalLtr
+        ScriptAxis::VerticalRtl
     } else {
         ScriptAxis::Horizontal
     }
@@ -60,14 +60,14 @@ pub fn apply_page_axis_prior(blocks: &mut [TextBlock]) {
         let area = (x2 - x1).max(0) * (y2 - y1).max(0);
         match block.axis {
             ScriptAxis::Horizontal => horizontal_area += area,
-            ScriptAxis::VerticalLtr => vertical_area += area,
+            ScriptAxis::VerticalRtl => vertical_area += area,
         }
     }
     if horizontal_area == vertical_area {
         return;
     }
     let prior = if vertical_area > horizontal_area {
-        ScriptAxis::VerticalLtr
+        ScriptAxis::VerticalRtl
     } else {
         ScriptAxis::Horizontal
     };
@@ -105,13 +105,13 @@ fn line_to_tuples(line: &[MyPoint; 4]) -> [(i64, i64); 4] {
 fn most_extreme_line_axis(lines: &[[MyPoint; 4]]) -> ScriptAxis {
     // 初值沿用旧 merge 投票：全退化行（aspect 非数）时判竖。
     let mut best_ratio = -100.0;
-    let mut best_axis = ScriptAxis::VerticalLtr;
+    let mut best_axis = ScriptAxis::VerticalRtl;
     for line in lines {
         let aspect = Quadrilateral::new2(line.to_vec(), 0.0).aspect_ratio();
         if aspect.max(1.0 / aspect) > best_ratio {
             best_ratio = aspect.max(1.0 / aspect);
             best_axis = if long_edge_is_vertical(line_to_tuples(line)) {
-                ScriptAxis::VerticalLtr
+                ScriptAxis::VerticalRtl
             } else {
                 ScriptAxis::Horizontal
             };
@@ -176,7 +176,7 @@ mod tests {
         let h = |y| quad(0, y, 100, 10);
         assert_eq!(
             script_axis_from_line_quads(&[v(0), v(20), v(40)]),
-            ScriptAxis::VerticalLtr
+            ScriptAxis::VerticalRtl
         );
         assert_eq!(
             script_axis_from_line_quads(&[h(0), h(20), h(40)]),
@@ -184,7 +184,7 @@ mod tests {
         );
         assert_eq!(
             script_axis_from_line_quads(&[v(0), v(20), h(0)]),
-            ScriptAxis::VerticalLtr
+            ScriptAxis::VerticalRtl
         );
         assert_eq!(
             script_axis_from_line_quads(&[h(0), h(20), v(0)]),
@@ -202,7 +202,7 @@ mod tests {
         // 反向：竖行 aspect=0.05（倒数 20）对横行 aspect=2 → 竖胜。
         assert_eq!(
             script_axis_from_line_quads(&[quad(0, 0, 5, 100), quad(0, 0, 40, 20)]),
-            ScriptAxis::VerticalLtr
+            ScriptAxis::VerticalRtl
         );
     }
 
@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(biggest, 0);
         assert_eq!(
             script_axis_from_line_quads(&lines),
-            ScriptAxis::VerticalLtr
+            ScriptAxis::VerticalRtl
         );
     }
 
@@ -262,7 +262,7 @@ mod tests {
         let mut blocks = vec![
             test_block(vec![quad(0, 0, 300, 40)], "这是横排长文本块一", ScriptAxis::Horizontal),
             test_block(vec![quad(0, 100, 300, 40)], "这是横排长文本块二", ScriptAxis::Horizontal),
-            test_block(vec![quad(0, 200, 30, 30)], "啊", ScriptAxis::VerticalLtr),
+            test_block(vec![quad(0, 200, 30, 30)], "啊", ScriptAxis::VerticalRtl),
         ];
         apply_page_axis_prior(&mut blocks);
         assert_eq!(blocks[2].axis(), ScriptAxis::Horizontal);
@@ -271,17 +271,17 @@ mod tests {
             test_block(
                 vec![quad(0, 0, 40, 300)],
                 "这是竖排长文本块一",
-                ScriptAxis::VerticalLtr,
+                ScriptAxis::VerticalRtl,
             ),
             test_block(
                 vec![quad(100, 0, 40, 300)],
                 "这是竖排长文本块二",
-                ScriptAxis::VerticalLtr,
+                ScriptAxis::VerticalRtl,
             ),
             test_block(vec![quad(200, 0, 30, 30)], "啊", ScriptAxis::Horizontal),
         ];
         apply_page_axis_prior(&mut blocks);
-        assert_eq!(blocks[2].axis(), ScriptAxis::VerticalLtr);
+        assert_eq!(blocks[2].axis(), ScriptAxis::VerticalRtl);
     }
 
     #[test]
@@ -291,7 +291,7 @@ mod tests {
             test_block(vec![quad(0, 0, 300, 40)], "横排长文本块一", ScriptAxis::Horizontal),
             test_block(vec![quad(0, 100, 300, 40)], "横排长文本块二", ScriptAxis::Horizontal),
             test_block(vec![quad(0, 200, 300, 40)], "横排长文本块三", ScriptAxis::Horizontal),
-            test_block(vec![quad(400, 0, 40, 300)], "竖排长文本块", ScriptAxis::VerticalLtr),
+            test_block(vec![quad(400, 0, 40, 300)], "竖排长文本块", ScriptAxis::VerticalRtl),
         ];
         apply_page_axis_prior(&mut blocks);
         assert!(
@@ -299,7 +299,7 @@ mod tests {
                 .iter()
                 .all(|b| b.axis() == ScriptAxis::Horizontal)
         );
-        assert_eq!(blocks[3].axis(), ScriptAxis::VerticalLtr);
+        assert_eq!(blocks[3].axis(), ScriptAxis::VerticalRtl);
     }
 
     #[test]
@@ -311,7 +311,7 @@ mod tests {
             test_block(
                 vec![quad(0, 200, 100, 10), quad(0, 220, 10, 100)],
                 "持平块但文本很长很长",
-                ScriptAxis::VerticalLtr,
+                ScriptAxis::VerticalRtl,
             ),
         ];
         apply_page_axis_prior(&mut blocks);
@@ -322,19 +322,19 @@ mod tests {
     fn page_without_prior_keeps_axes() {
         // 全含糊页：无先验，保持原轴。
         let mut blocks = vec![
-            test_block(vec![quad(0, 0, 30, 30)], "啊", ScriptAxis::VerticalLtr),
+            test_block(vec![quad(0, 0, 30, 30)], "啊", ScriptAxis::VerticalRtl),
             test_block(vec![quad(50, 0, 30, 30)], "哦", ScriptAxis::Horizontal),
         ];
         apply_page_axis_prior(&mut blocks);
-        assert_eq!(blocks[0].axis(), ScriptAxis::VerticalLtr);
+        assert_eq!(blocks[0].axis(), ScriptAxis::VerticalRtl);
         assert_eq!(blocks[1].axis(), ScriptAxis::Horizontal);
         // 先验加权持平（等面积）：同样不改。
         let mut blocks = vec![
             test_block(vec![quad(0, 0, 200, 50)], "横排长文本块", ScriptAxis::Horizontal),
-            test_block(vec![quad(0, 100, 50, 200)], "竖排长文本块", ScriptAxis::VerticalLtr),
-            test_block(vec![quad(300, 0, 30, 30)], "啊", ScriptAxis::VerticalLtr),
+            test_block(vec![quad(0, 100, 50, 200)], "竖排长文本块", ScriptAxis::VerticalRtl),
+            test_block(vec![quad(300, 0, 30, 30)], "啊", ScriptAxis::VerticalRtl),
         ];
         apply_page_axis_prior(&mut blocks);
-        assert_eq!(blocks[2].axis(), ScriptAxis::VerticalLtr);
+        assert_eq!(blocks[2].axis(), ScriptAxis::VerticalRtl);
     }
 }

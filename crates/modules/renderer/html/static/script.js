@@ -21,9 +21,9 @@ class ImageOverlayManager {
     const div = document.createElement("div");
     div.className = "text-box";
     div.textContent = overlay.text;
-    // 与 PNG 同一轴：vertical-lr 的列沿 +x（左到右），不是日式 vertical-rl。
+    // 与 PNG 同一轴：vertical-rl 的列沿 −x（右到左），传统竖排。
     div.style.writingMode =
-      overlay.axis === "vertical" ? "vertical-lr" : "horizontal-tb";
+      overlay.axis === "vertical" ? "vertical-rl" : "horizontal-tb";
 
     this.updateOverlayPosition(overlay, div);
     // $(div).fitText(0.5);

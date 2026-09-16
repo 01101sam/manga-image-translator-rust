@@ -305,7 +305,7 @@ mod tests {
         assert_eq!(u32::from_le_bytes(bytes[9..13].try_into().unwrap()), 3);
         let loaded = Export::load(bytes).expect("v3 可加载");
         assert_eq!(loaded.blocks.len(), 1);
-        assert_eq!(loaded.blocks[0].axis(), ScriptAxis::VerticalLtr);
+        assert_eq!(loaded.blocks[0].axis(), ScriptAxis::VerticalRtl);
         assert_eq!(loaded.blocks[0].translation(), Some("hi"));
         assert_eq!(loaded.get_image().width, 8);
     }
@@ -317,7 +317,7 @@ mod tests {
         bytes[9..13].copy_from_slice(&2_u32.to_le_bytes());
         bytes.pop(); // 去掉块末尾轴字节，还原 v2 布局
         let loaded = Export::load(bytes).expect("v2 可加载");
-        assert_eq!(loaded.blocks[0].axis(), ScriptAxis::VerticalLtr);
+        assert_eq!(loaded.blocks[0].axis(), ScriptAxis::VerticalRtl);
     }
 
     #[test]
