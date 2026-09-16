@@ -10,7 +10,7 @@ use export::Export;
 use interface_image::{DimType, Mask, RawImage};
 
 mod layout;
-use layout::BubbleFrame;
+use layout::{BubbleFrame, fit_font_px, shrink_isotropic};
 use opencv::{
     calib3d::{find_homography, RANSAC},
     core::{
@@ -20,7 +20,7 @@ use opencv::{
     imgproc::{self, dilate, morphology_default_border_value, warp_perspective, INTER_LINEAR},
 };
 use ordered_float::OrderedFloat;
-use textline_merge::TextBlock;
+use textline_merge::{ScriptAxis, TextBlock};
 
 pub struct PngRenderer {
     font_system: FontSystem,
@@ -78,6 +78,17 @@ pub enum RenderDirection {
     Vertical,
 }
 
+impl RenderDirection {
+    /// 设置覆盖存储轴。覆盖只影响本次绘制，不写回 block。
+    pub fn resolve(self, stored: ScriptAxis) -> ScriptAxis {
+        match self {
+            Self::Auto => stored,
+            Self::Horizontal => ScriptAxis::Horizontal,
+            Self::Vertical => ScriptAxis::VerticalLtr,
+        }
+    }
+}
+
 impl PngRenderer {
     pub fn render(&mut self, exp: Export, config: PngRenderConfig) -> anyhow::Result<RawImage> {
         let mut img = exp.get_image();
@@ -89,8 +100,8 @@ impl PngRenderer {
                 }
             });
         }
-        for block in exp.blocks {
-            self.paint_block(&mut img, &block, &config)?;
+        for (block_idx, block) in exp.blocks.into_iter().enumerate() {
+            self.paint_block(&mut img, &block, &config, block_idx)?;
         }
         Ok(img)
     }
@@ -100,6 +111,7 @@ impl PngRenderer {
         img: &mut RawImage,
         block: &TextBlock,
         config: &PngRenderConfig,
+        block_idx: usize,
     ) -> anyhow::Result<()> {
         let Some(text) = block.translation() else {
             return Ok(());
@@ -111,21 +123,18 @@ impl PngRenderer {
         else {
             return Ok(());
         };
-        let (norm_h, norm_v) = (frame.width_px as f32, frame.height_px as f32);
-        let vertical = match config.direction {
-            RenderDirection::Auto => block.vertical(),
-            RenderDirection::Horizontal => false,
-            RenderDirection::Vertical => true,
-        };
+        let (frame_w, frame_h) = (frame.width_px as f32, frame.height_px as f32);
+        let vertical = config.direction.resolve(block.axis()).is_vertical();
         let min_font = if config.font_size_minimum < 0.0 {
             ((img.width as f32 + img.height as f32) / 200.0).max(1.0)
         } else {
             config.font_size_minimum.max(1.0)
         };
-        let font_size = config
+        // 只缩小：死字段 max_fontsize 转正为上界（默认 200），短句不撑满框。
+        let preferred = config
             .font_size
             .unwrap_or(block.font_size as f32 + config.font_size_offset)
-            .max(min_font);
+            .clamp(min_font, config.max_fontsize.max(min_font));
         let (fg, bg) = fg_bg_compare(
             config.fg_color.or(block.fg_color).unwrap_or((0, 0, 0)),
             config.bg_color.or(block.bg_color).unwrap_or((255, 255, 255)),
@@ -136,16 +145,15 @@ impl PngRenderer {
             Some(bg)
         };
         let line_height = config.line_height.unwrap_or(if vertical { 1.2 } else { 1.01 });
-        let render_block = RenderTextBlock {
+        let template = RenderTextBlock {
             align: match config.align {
                 MyAlign::Left => Align::Left,
                 MyAlign::Center => Align::Center,
                 MyAlign::Right => Align::Right,
             },
-            default_font_size: font_size,
+            default_font_size: preferred,
             default_line_height: line_height,
-            vertical,
-            size: (norm_h.round() as usize, norm_v.round() as usize),
+            size: (frame.width_px as usize, frame.height_px as usize),
             texts: vec![Text {
                 text: text.to_owned(),
                 letter_spacing: config.letter_spacing,
@@ -155,15 +163,33 @@ impl PngRenderer {
                 style: Style::Normal,
                 weight: None,
                 family: config.family.clone(),
-                font_size,
+                font_size: preferred,
                 line_height,
             }],
         };
-        let box_img = self.render_block(render_block);
+        let (font_size, line_height) = fit_font_px(
+            self,
+            &template,
+            frame_w,
+            frame_h,
+            preferred,
+            min_font,
+            line_height,
+        );
+        let mut fitted = template.clone();
+        fitted.set_font_size(font_size);
+        fitted.set_line_height(line_height);
+        let mut box_img = self.render_block(fitted);
         if box_img.width == 0 || box_img.height == 0 {
             return Ok(());
         }
-        let box_img = pad_to_aspect(box_img, norm_h / norm_v, !vertical);
+        // L3 兜底：min_font + 行高 1.0 仍溢出，光栅化后各向同性缩小。
+        if box_img.width as f32 > frame_w || box_img.height as f32 > frame_h {
+            let scale = (frame_w / box_img.width as f32).min(frame_h / box_img.height as f32);
+            box_img = shrink_isotropic(&box_img, scale)?;
+            log::warn!("block={block_idx} 译文超框，min_font 行高1.0 后仍溢出，等比缩放 scale={scale:.2}");
+        }
+        let box_img = pad_to_aspect(box_img, frame_w / frame_h);
         warp_onto(img, &box_img, frame.dest)
     }
 }
@@ -268,11 +294,9 @@ impl PngRenderer {
         let metrics = to_metrics(&text);
         let mut buffer_ = Buffer::new(&mut self.font_system, metrics);
         let mut buffer = buffer_.borrow_with(&mut self.font_system);
-        if text.vertical {
-            buffer.set_size(Some(text.size.0 as f32), None);
-        } else {
-            buffer.set_size(None, Some(text.size.1 as f32))
-        }
+        // 宽度约束换行，高度永不做 Buffer 输入：
+        // width None 会永不换行，height Some 会静默丢掉超高行。
+        buffer.set_size(Some(text.size.0 as f32), None);
         let attrs = Attrs::new();
         let spans = text
             .texts
@@ -305,7 +329,16 @@ impl PngRenderer {
 
         let mut rgb = vec![[0_u8; 4]; h as usize * w as usize];
         let mut bg = vec![0_u8; h as usize * w as usize];
+        // 宽度约束下对齐会产生行内偏移（居中/右对齐），画布按内容宽分配，
+        // 写像素时必须减掉该偏移，否则内容整体落在画布外。
+        let wrap_w = text.size.0 as f32;
         for run in layouts {
+            let shift = match text.align {
+                Align::Center => (wrap_w - run.line_w) / 2.0,
+                Align::Right | Align::End => wrap_w - run.line_w,
+                _ => 0.0,
+            }
+            .round() as i32;
             for glyph in run.glyphs.iter() {
                 let physical_glyph = glyph.physical((0., 0.), 1.0);
                 let glyph_color = glyph.color_opt.unwrap_or(Color::rgb(0, 0, 0));
@@ -314,10 +347,12 @@ impl PngRenderer {
                     physical_glyph.cache_key,
                     glyph_color,
                     |x, y, color| {
-                        let x = physical_glyph.x + x;
+                        let x = physical_glyph.x - shift + x;
                         let y = run.line_y as i32 + physical_glyph.y + y;
                         let a = color.a();
-                        if a == 0 || x < 0 || y < 0 {
+                        // 字形墨水可超出 wh() 行盒（行高 < 字形实际高时末行下溢、
+                        // 右 bearing 外溢），超界像素丢弃而非 panic。
+                        if a == 0 || x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
                             return;
                         }
                         let x = x as usize;
@@ -360,41 +395,6 @@ impl PngRenderer {
         };
         bg.apply(text)
     }
-
-    pub fn max_fontsize(
-        &mut self,
-        target_size: (usize, usize),
-        mut text: RenderTextBlock,
-        eps: f32,
-    ) -> f32 {
-        let mut measure = |size: f32| {
-            let mut color_map = ColorMap::default();
-            text.set_font_size(size);
-            let buffer = self.create_buffer(&text, &mut color_map);
-            let layouts = buffer.layout_runs().collect::<Vec<_>>();
-            wh(&layouts)
-        };
-        let mut low = 0.0;
-        let mut high = 1.0;
-        while {
-            let (w, h) = measure(high);
-            w <= target_size.0 && h <= target_size.1
-        } {
-            high *= 2.0;
-        }
-
-        while high - low > eps {
-            let mid = (low + high) / 2.0;
-            let (w, h) = measure(mid);
-            if w <= target_size.0 && h <= target_size.1 {
-                low = mid;
-            } else {
-                high = mid;
-            }
-        }
-
-        low
-    }
 }
 
 fn empty_rgba() -> RawImage {
@@ -427,7 +427,8 @@ fn fg_bg_compare(fg: (u8, u8, u8), bg: (u8, u8, u8)) -> ((u8, u8, u8), (u8, u8, 
     }
 }
 
-fn pad_to_aspect(img: RawImage, r_orig: f32, horizontal: bool) -> RawImage {
+/// 补白到目标宽高比：单一居中公式，内容中心与画布中心对齐。
+fn pad_to_aspect(img: RawImage, r_orig: f32) -> RawImage {
     if img.width == 0 || img.height == 0 || r_orig <= 0.0 {
         return img;
     }
@@ -435,31 +436,12 @@ fn pad_to_aspect(img: RawImage, r_orig: f32, horizontal: bool) -> RawImage {
     if (r_temp - r_orig).abs() < 0.01 {
         return img;
     }
-    let (w, h, ox, oy) = if horizontal {
-        if r_temp > r_orig {
-            let h_ext = ((img.width as f32 / r_orig - img.height as f32) / 2.0).round() as i32;
-            if h_ext <= 0 {
-                return img;
-            }
-            (
-                img.width,
-                img.height + h_ext as u16 * 2,
-                0_u16,
-                h_ext as u16,
-            )
-        } else {
-            let w_ext = ((img.height as f32 * r_orig - img.width as f32) / 2.0).round() as i32;
-            if w_ext <= 0 {
-                return img;
-            }
-            (img.width + w_ext as u16 * 2, img.height, 0, 0)
-        }
-    } else if r_temp > r_orig {
+    let (w, h, ox, oy) = if r_temp > r_orig {
         let h_ext = ((img.width as f32 / r_orig - img.height as f32) / 2.0).round() as i32;
         if h_ext <= 0 {
             return img;
         }
-        (img.width, img.height + h_ext as u16 * 2, 0, 0)
+        (img.width, img.height + h_ext as u16 * 2, 0_u16, h_ext as u16)
     } else {
         let w_ext = ((img.height as f32 * r_orig - img.width as f32) / 2.0).round() as i32;
         if w_ext <= 0 {
@@ -578,7 +560,6 @@ pub struct RenderTextBlock {
     align: Align,
     default_font_size: f32,
     default_line_height: f32,
-    vertical: bool,
     size: (usize, usize),
     texts: Vec<Text>,
 }
@@ -587,6 +568,13 @@ impl RenderTextBlock {
     fn set_font_size(&mut self, font_size: f32) {
         self.default_font_size = font_size;
         self.texts.iter_mut().for_each(|v| v.font_size = font_size);
+    }
+
+    fn set_line_height(&mut self, line_height: f32) {
+        self.default_line_height = line_height;
+        self.texts
+            .iter_mut()
+            .for_each(|v| v.line_height = line_height);
     }
 }
 
@@ -652,7 +640,6 @@ mod tests {
             align: cosmic_text::Align::Center,
             default_font_size: 1.0,
             default_line_height: 1.2,
-            vertical: false,
             size: (1000, 2000),
             texts: vec![Text {
                 text: "Hello world, this is a test".to_owned(),

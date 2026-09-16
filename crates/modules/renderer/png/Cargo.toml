@@ -12,6 +12,7 @@ env_logger.workspace = true
 export.workspace = true
 textline-merge.workspace = true
 anyhow.workspace = true
+log.workspace = true
 
 [dev-dependencies]
 image.workspace = true

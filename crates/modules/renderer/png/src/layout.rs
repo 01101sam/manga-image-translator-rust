@@ -2,7 +2,14 @@
 //!
 //! 渲染只读 `TextBlock::axis`（存储轴），方向不在此重算。
 
+use interface_image::RawImage;
+use opencv::{
+    core::{Mat, Size},
+    imgproc::{INTER_AREA, resize},
+};
 use textline_merge::TextBlock;
+
+use crate::{ColorMap, PngRenderer, RenderTextBlock, wh};
 
 /// 渲染目标框：行集合转正 AABB 外扩半字号，再入界到图像内。
 ///
@@ -128,8 +135,7 @@ fn centroid(dest: &[(i64, i64); 4]) -> (f64, f64) {
 }
 
 /// 对边中点距：旋转框的等价位宽/高。
-pub fn dest_axes(dst: [(i64, i64); 4]) -> (f32, f32) {
-    let mid = |a: (i64, i64), b: (i64, i64)| {
+pub fn dest_axes(dst: [(i64, i64); 4]) -> (f32, f32) {    let mid = |a: (i64, i64), b: (i64, i64)| {
         (
             (a.0 + b.0) as f32 / 2.0,
             (a.1 + b.1) as f32 / 2.0,
@@ -144,12 +150,98 @@ pub fn dest_axes(dst: [(i64, i64); 4]) -> (f32, f32) {
     (norm_h, norm_v)
 }
 
+/// 只缩小适配（L1/L2）：L1 在 `[min_font, preferred]` 二分；到底仍溢出则
+/// L2 把行高收到 1.0 再二分一次。返回 `(字号, 行高)`。
+///
+/// 短句不放大：`preferred` 装得下就直接用。L2 仍溢出由调用方 L3 等比缩放兜底。
+pub fn fit_font_px(
+    renderer: &mut PngRenderer,
+    template: &RenderTextBlock,
+    frame_w: f32,
+    frame_h: f32,
+    preferred: f32,
+    min_font: f32,
+    line_height: f32,
+) -> (f32, f32) {
+    let fits = |renderer: &mut PngRenderer, font: f32, lh: f32| {
+        let (w, h) = measure(renderer, template, font, lh);
+        w as f32 <= frame_w && h as f32 <= frame_h
+    };
+    if fits(renderer, preferred, line_height) {
+        return (preferred, line_height);
+    }
+    let lo = bisect(
+        |r, font| fits(r, font, line_height),
+        renderer,
+        min_font,
+        preferred,
+    );
+    if fits(renderer, lo, line_height) {
+        return (lo, line_height);
+    }
+    if line_height > 1.0 {
+        if fits(renderer, preferred, 1.0) {
+            return (preferred, 1.0);
+        }
+        let lo = bisect(|r, font| fits(r, font, 1.0), renderer, min_font, preferred);
+        return (lo, 1.0);
+    }
+    (lo, line_height)
+}
+
+fn bisect(
+    mut fits_at: impl FnMut(&mut PngRenderer, f32) -> bool,
+    renderer: &mut PngRenderer,
+    min_font: f32,
+    preferred: f32,
+) -> f32 {
+    let mut lo = min_font;
+    let mut hi = preferred;
+    while hi - lo > 0.5 {
+        let mid = (lo + hi) / 2.0;
+        if fits_at(renderer, mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// 测量走新排版（`set_size(Some(w), None)`），不走旧截断路径。
+fn measure(
+    renderer: &mut PngRenderer,
+    template: &RenderTextBlock,
+    font: f32,
+    line_height: f32,
+) -> (usize, usize) {
+    let mut text = template.clone();
+    text.set_font_size(font);
+    text.set_line_height(line_height);
+    let mut color_map = ColorMap::default();
+    let buffer = renderer.create_buffer(&text, &mut color_map);
+    let layouts = buffer.layout_runs().collect::<Vec<_>>();
+    wh(&layouts)
+}
+
+/// L3 兜底：各向同性缩小。`INTER_AREA` 高降采样保笔画，`INTER_LINEAR` 会抹掉。
+pub fn shrink_isotropic(img: &RawImage, scale: f32) -> anyhow::Result<RawImage> {
+    let w = ((img.width as f32 * scale).round() as i32).max(1);
+    let h = ((img.height as f32 * scale).round() as i32).max(1);
+    let src = img.as_opencv_mat()?;
+    let mut dst = Mat::default();
+    resize(&src, &mut dst, Size::new(w, h), 0.0, 0.0, INTER_AREA)?;
+    Ok(RawImage::try_from(dst)?)
+}
+
 #[cfg(test)]
 mod tests {
+    use cosmic_text::{Align, Style};
     use interface_detector::textlines::MyPoint;
     use interface_translator::LangIdDetector;
 
     use super::*;
+    use crate::{RenderDirection, Text, pad_to_aspect};
 
     fn block(lines: Vec<[MyPoint; 4]>, font_size: u64, angle: f64) -> TextBlock {
         let n = lines.len().max(1);
@@ -239,5 +331,124 @@ mod tests {
         assert!(BubbleFrame::from_block(&b, 0, 1000).is_none());
         let b = block(vec![rect(10, 10, 50, 20)], 30, 0.0);
         assert!(BubbleFrame::from_block(&b, 0, 0).is_none());
+    }
+
+    fn h_template(text: &str, w: usize, h: usize, font: f32, lh: f32) -> RenderTextBlock {
+        RenderTextBlock {
+            align: Align::Center,
+            default_font_size: font,
+            default_line_height: lh,
+            size: (w, h),
+            texts: vec![Text {
+                text: text.to_owned(),
+                letter_spacing: None,
+                color: Some((0, 0, 0)),
+                bg_color: Some((255, 255, 255)),
+                stretch: None,
+                style: Style::Normal,
+                weight: None,
+                family: None,
+                font_size: font,
+                line_height: lh,
+            }],
+        }
+    }
+
+    #[test]
+    fn narrow_frame_wraps_without_dropping_glyphs() {
+        // 窄框长句（无空格 CJK，一字一 glyph）：产出多行，glyph 总数 == 字数。
+        let text = "才没有那种事呢".repeat(6);
+        let template = h_template(&text, 120, 300, 30.0, 1.2);
+        let mut renderer = PngRenderer::default();
+        let mut color_map = ColorMap::default();
+        let buffer = renderer.create_buffer(&template, &mut color_map);
+        let runs = buffer.layout_runs().collect::<Vec<_>>();
+        assert!(runs.len() > 1, "runs={}", runs.len());
+        let glyphs: usize = runs.iter().map(|r| r.glyphs.len()).sum();
+        assert_eq!(glyphs, text.chars().count());
+    }
+
+    #[test]
+    fn fit_shrinks_only() {
+        let mut renderer = PngRenderer::default();
+        // 装不下：小于 preferred，不小于 min。
+        let text = "才没有那种事呢".repeat(6);
+        let template = h_template(&text, 120, 90, 30.0, 1.2);
+        let (font, _) = fit_font_px(&mut renderer, &template, 120.0, 90.0, 30.0, 10.0, 1.2);
+        assert!(font < 30.0, "font={font}");
+        assert!(font >= 10.0, "font={font}");
+        // 装得下：短句不放大。
+        let template = h_template("Hi", 500, 200, 30.0, 1.01);
+        let (font, lh) = fit_font_px(&mut renderer, &template, 500.0, 200.0, 30.0, 10.0, 1.01);
+        assert_eq!(font, 30.0);
+        assert_eq!(lh, 1.01);
+    }
+
+    #[test]
+    fn fit_falls_back_to_unit_line_height() {
+        let mut renderer = PngRenderer::default();
+        // 极小框长句：L1/L2 都装不下 → (min, 1.0)，由 L3 兜底。
+        let text = "才没有那种事呢".repeat(6);
+        let template = h_template(&text, 30, 30, 30.0, 1.2);
+        let (font, lh) = fit_font_px(&mut renderer, &template, 30.0, 30.0, 30.0, 10.0, 1.2);
+        assert_eq!(font, 10.0);
+        assert_eq!(lh, 1.0);
+        // 行高 1.2 装不下、1.0 装得下 → L2 生效。
+        let template = h_template(&"啊".repeat(9), 35, 32, 30.0, 1.2);
+        let (font, lh) = fit_font_px(&mut renderer, &template, 35.0, 32.0, 30.0, 10.0, 1.2);
+        assert_eq!(lh, 1.0);
+        assert!(font >= 10.0 && font < 12.0, "font={font}");
+    }
+
+    #[test]
+    fn pad_centers_content_for_all_aspect_relations() {
+        // 内容横/竖 × 目标横/竖：内容中心与画布中心对齐（±1px）。
+        for (w, h, aspect) in [(100, 50, 1.0), (100, 50, 4.0), (50, 100, 1.0), (50, 100, 0.25)] {
+            let img = RawImage {
+                data: vec![0; w * h * 4],
+                width: w as u16,
+                height: h as u16,
+                channels: 4,
+            };
+            let out = pad_to_aspect(img, aspect);
+            let (ow, oh) = (out.width as f32, out.height as f32);
+            assert!((ow / oh - aspect).abs() < 0.05, "{ow}x{oh} aspect {aspect}");
+            let (cw, ch) = (w as f32, h as f32);
+            let (ccx, ccy) = ((ow - cw) / 2.0 + cw / 2.0, (oh - ch) / 2.0 + ch / 2.0);
+            assert!((ccx - ow / 2.0).abs() <= 1.0, "{ow}x{oh}");
+            assert!((ccy - oh / 2.0).abs() <= 1.0, "{ow}x{oh}");
+            // 旧贴边 bug：补白必须对称。
+            assert_eq!((ow - cw) as i32 % 2, 0);
+            assert_eq!((oh - ch) as i32 % 2, 0);
+        }
+    }
+
+    #[test]
+    fn shrink_isotropic_scales_dims() {
+        let img = RawImage {
+            data: vec![255; 100 * 50 * 4],
+            width: 100,
+            height: 50,
+            channels: 4,
+        };
+        let out = shrink_isotropic(&img, 0.5).unwrap();
+        assert_eq!((out.width, out.height), (50, 25));
+    }
+
+    #[test]
+    fn direction_resolve_prefers_override() {
+        use textline_merge::ScriptAxis;
+        assert_eq!(
+            RenderDirection::Auto.resolve(ScriptAxis::VerticalLtr),
+            ScriptAxis::VerticalLtr
+        );
+        assert_eq!(
+            RenderDirection::Horizontal.resolve(ScriptAxis::VerticalLtr),
+            ScriptAxis::Horizontal
+        );
+        assert_eq!(
+            RenderDirection::Vertical.resolve(ScriptAxis::Horizontal),
+            ScriptAxis::VerticalLtr
+        );
     }
 }
