@@ -335,7 +335,7 @@ impl TextBlock {
                 }
                 let axis = match data[offset] {
                     0 => ScriptAxis::Horizontal,
-                    1 => ScriptAxis::VerticalLtr,
+                    1 => ScriptAxis::VerticalRtl,
                     _ => return None,
                 };
                 offset += 1;
@@ -401,7 +401,7 @@ impl TextBlock {
         // v3：布局末尾 +1 字节轴。
         buffer.push(match self.axis {
             ScriptAxis::Horizontal => 0,
-            ScriptAxis::VerticalLtr => 1,
+            ScriptAxis::VerticalRtl => 1,
         });
         buffer
     }
@@ -1119,7 +1119,7 @@ mod tests {
         let det = LangIdDetector::new().unwrap();
         let lines = vec![rect(0, 0, 100, 20), rect(0, 40, 10, 60), rect(20, 40, 10, 60)];
         let expected = script_axis_from_line_quads(&lines);
-        assert_eq!(expected, crate::ScriptAxis::VerticalLtr);
+        assert_eq!(expected, crate::ScriptAxis::VerticalRtl);
         let block = TextBlock::new(
             lines,
             vec!["a".into(), "b".into(), "c".into()],

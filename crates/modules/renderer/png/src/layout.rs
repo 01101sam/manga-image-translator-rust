@@ -367,7 +367,7 @@ pub fn layout(
 ) -> Option<PlacedLayout> {
     match axis {
         ScriptAxis::Horizontal => layout_horizontal(renderer, template),
-        ScriptAxis::VerticalLtr => {
+        ScriptAxis::VerticalRtl => {
             let t = template.texts.first()?;
             let bg_id = color_map
                 .get_id(t.bg_color.unwrap_or((255, 255, 255)))
@@ -561,7 +561,7 @@ fn shape_atom(
     }
 }
 
-/// 竖排打包：列内沿 y 堆叠，满列换列，列沿 +x（左到右）。
+/// 竖排打包：列内沿 y 堆叠，满列换列，列沿 −x（右→左，首列在最右）。
 #[allow(clippy::too_many_arguments)]
 pub fn pack_vertical(
     renderer: &mut PngRenderer,
@@ -646,7 +646,8 @@ pub fn pack_vertical(
         for (j, &i) in col.iter().enumerate() {
             let atom = &atoms[i];
             let s = shaped[i].as_ref().unwrap();
-            let (cx, cy) = (k as f32 * col_pitch, j as f32 * em);
+            // 阅读序第 k 列落在 x = (总数−1−k) * pitch：首列在最右。
+            let (cx, cy) = ((cols.len() - 1 - k) as f32 * col_pitch, j as f32 * em);
             let rotated = matches!(atom, LayoutAtom::Rotated(_));
             // 内容在格内居中；旋转后内容尺寸为 (h, w)。
             let (cw, ch) = if rotated { (s.h, s.w) } else { (s.w, s.h) };
@@ -1046,16 +1047,16 @@ mod tests {
     fn direction_resolve_prefers_override() {
         use textline_merge::ScriptAxis;
         assert_eq!(
-            RenderDirection::Auto.resolve(ScriptAxis::VerticalLtr),
-            ScriptAxis::VerticalLtr
+            RenderDirection::Auto.resolve(ScriptAxis::VerticalRtl),
+            ScriptAxis::VerticalRtl
         );
         assert_eq!(
-            RenderDirection::Horizontal.resolve(ScriptAxis::VerticalLtr),
+            RenderDirection::Horizontal.resolve(ScriptAxis::VerticalRtl),
             ScriptAxis::Horizontal
         );
         assert_eq!(
             RenderDirection::Vertical.resolve(ScriptAxis::Horizontal),
-            ScriptAxis::VerticalLtr
+            ScriptAxis::VerticalRtl
         );
     }
 
@@ -1110,7 +1111,7 @@ mod tests {
     }
 
     #[test]
-    fn vertical_column_flows_down_then_right() {
+    fn vertical_column_flows_down_then_left() {
         // 单列：同 x（墨水居中 ±1px），y 递增。
         let placed = pack("あいうえお", 200, 500, 30.0);
         assert_eq!(placed.cols, 1);
@@ -1118,12 +1119,21 @@ mod tests {
         assert!(xs.iter().all(|&x| (x - xs[0]).abs() <= 1), "{xs:?}");
         let ys: Vec<i32> = placed.glyphs.iter().map(|g| g.y).collect();
         assert!(ys.windows(2).all(|w| w[1] > w[0]), "{ys:?}");
-        // 超一列高：第二列 x 更大（+x，左到右）。
+        // 超一列高：第二列 x 更小（−x，右到左，首列在最右）。
         let placed = pack("あいうえお", 200, 90, 30.0);
         assert_eq!(placed.cols, 2);
         let col1_x = placed.glyphs[0].x;
         let col2_x = placed.glyphs[3].x;
-        assert!(col2_x > col1_x, "{col1_x} vs {col2_x}");
+        assert!(col2_x < col1_x, "{col1_x} vs {col2_x}");
+        // 三列：列 x 沿阅读序递减。
+        let placed = pack("あいうえお", 200, 60, 30.0);
+        assert_eq!(placed.cols, 3);
+        let (x1, x2, x3) = (
+            placed.glyphs[0].x,
+            placed.glyphs[2].x,
+            placed.glyphs[4].x,
+        );
+        assert!(x1 > x2 && x2 > x3, "{x1} vs {x2} vs {x3}");
     }
 
     #[test]
