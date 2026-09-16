@@ -4942,6 +4942,7 @@ dependencies = [
  "interface-detector",
  "interface-image",
  "interface-translator",
+ "log",
  "opencv",
  "ordered-float",
  "textline-merge",
