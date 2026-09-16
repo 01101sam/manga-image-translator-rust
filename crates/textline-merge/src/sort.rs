@@ -236,16 +236,18 @@ mod tests {
     use interface_detector::textlines::MyPoint;
 
     use super::*;
-    use crate::TextBlock;
+    use crate::{TextBlock, script_axis_from_line_quads};
 
     fn block(x: i64, y: i64, w: i64, h: i64) -> TextBlock {
+        let lines = vec![[
+            MyPoint { x, y },
+            MyPoint { x: x + w, y },
+            MyPoint { x: x + w, y: y + h },
+            MyPoint { x, y: y + h },
+        ]];
+        let axis = script_axis_from_line_quads(&lines);
         TextBlock {
-            lines: vec![[
-                MyPoint { x, y },
-                MyPoint { x: x + w, y },
-                MyPoint { x: x + w, y: y + h },
-                MyPoint { x, y: y + h },
-            ]],
+            lines,
             text: format!("{x},{y}"),
             font_size: 12,
             angle: 0.0,
@@ -255,6 +257,7 @@ mod tests {
             skip_translate: false,
             language: None,
             translations: Default::default(),
+            axis,
         }
     }
 

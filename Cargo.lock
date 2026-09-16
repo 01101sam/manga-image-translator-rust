@@ -2152,7 +2152,9 @@ name = "export"
 version = "0.12.2"
 dependencies = [
  "image",
+ "interface-detector",
  "interface-image",
+ "interface-translator",
  "textline-merge",
 ]
 

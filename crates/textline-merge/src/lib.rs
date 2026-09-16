@@ -1,3 +1,4 @@
+mod script_axis;
 mod sort;
 
 use std::{
@@ -23,6 +24,7 @@ use petgraph::{
 use serde::{Deserialize, Serialize};
 use util::text_direction::{connected_components_sets, quadrilateral_can_merge_region};
 
+pub use script_axis::{ScriptAxis, apply_page_axis_prior, script_axis_from_line_quads};
 pub use sort::{simple_sort, sort_panels_fill, sort_regions};
 
 pub fn dispatch(
@@ -175,10 +177,16 @@ pub struct TextBlock {
     pub skip_translate: bool,
     pub language: Option<LanguageWrapper>,
     pub translations: HashMap<String, String>,
+    /// 区域出生时的排版轴（行几何投票；老 debug JSON 缺此键时默认横）。
+    #[serde(default)]
+    axis: ScriptAxis,
 }
 
 impl TextBlock {
-    pub fn load(data: &[u8]) -> Option<(Self, usize)> {
+    pub fn load(data: &[u8], version: u32) -> Option<(Self, usize)> {
+        if version != 2 && version != 3 {
+            return None;
+        }
         use std::convert::TryInto;
         let mut offset = 0;
 
@@ -312,6 +320,23 @@ impl TextBlock {
             translations.push((key, value));
         }
 
+        // v2 流无轴字节：用当前几何投票重算（修正旧 AABB 误判，非原样兼容）。
+        let axis = match version {
+            2 => script_axis_from_line_quads(&lines),
+            _ => {
+                if offset >= data.len() {
+                    return None;
+                }
+                let axis = match data[offset] {
+                    0 => ScriptAxis::Horizontal,
+                    1 => ScriptAxis::VerticalLtr,
+                    _ => return None,
+                };
+                offset += 1;
+                axis
+            }
+        };
+
         Some((
             Self {
                 font_size,
@@ -324,6 +349,7 @@ impl TextBlock {
                 lines,
                 language: None,
                 translations: translations.into_iter().collect(),
+                axis,
             },
             offset,
         ))
@@ -366,6 +392,11 @@ impl TextBlock {
             buffer.extend((value.len() as u64).to_le_bytes());
             buffer.extend(value);
         }
+        // v3：布局末尾 +1 字节轴。
+        buffer.push(match self.axis {
+            ScriptAxis::Horizontal => 0,
+            ScriptAxis::VerticalLtr => 1,
+        });
         buffer
     }
 
@@ -411,29 +442,12 @@ impl TextBlock {
         self
     }
 
+    pub fn axis(&self) -> ScriptAxis {
+        self.axis
+    }
+
     pub fn vertical(&self) -> bool {
-        let mut max_area = 0.0_f64;
-        let mut aspect = 1.0;
-        for line in &self.lines {
-            let xs = line.map(|p| p.x);
-            let ys = line.map(|p| p.y);
-            let min_x = xs.iter().copied().min().unwrap_or_default();
-            let max_x = xs.iter().copied().max().unwrap_or_default();
-            let min_y = ys.iter().copied().min().unwrap_or_default();
-            let max_y = ys.iter().copied().max().unwrap_or_default();
-            let w = (max_x - min_x) as f64;
-            let h = (max_y - min_y) as f64;
-            let area = w * h;
-            if area > max_area {
-                max_area = area;
-                aspect = if h > 0.0 { w / h } else { 1.0 };
-            }
-        }
-        if max_area == 0.0 {
-            let (x1, y1, x2, y2) = self.xyxy();
-            return (x2 - x1) < (y2 - y1);
-        }
-        aspect < 1.0
+        self.axis.is_vertical()
     }
     pub fn new(
         lines: Vec<[MyPoint; 4]>,
@@ -468,8 +482,10 @@ impl TextBlock {
                 result.push_str(txt);
             }
         }
+        let axis = script_axis_from_line_quads(&lines);
         Self {
             language: det.detect_language(&result).map(LanguageWrapper),
+            axis,
             lines,
             text: result,
             font_size,
@@ -614,7 +630,6 @@ fn merge_bboxes_text_region<'a>(
     let v = region_indices
         .into_iter()
         .map(|node_set| {
-            //TODO: should vertical or assigned_vertical be used?
             let mut nodes = node_set.into_iter().collect::<Vec<_>>();
             let txtlns = nodes.iter().map(|v| &bboxes[v.index()]).collect::<Vec<_>>();
             let fg_r = mean(txtlns.iter().filter_map(|v| v.fg.map(|v| v[0] as f64)));
@@ -623,34 +638,10 @@ fn merge_bboxes_text_region<'a>(
             let bg_r = mean(txtlns.iter().filter_map(|v| v.bg.map(|v| v[0] as f64)));
             let bg_g = mean(txtlns.iter().filter_map(|v| v.bg.map(|v| v[1] as f64)));
             let bg_b = mean(txtlns.iter().filter_map(|v| v.bg.map(|v| v[2] as f64)));
-            let vert = txtlns
-                .iter()
-                .map(|v| v.pos.lock().vertical() as u64)
-                .sum::<u64>();
-            let count = txtlns.len() as u64;
-            let vertical = if vert == count {
-                true
-            } else if vert * 2 == count {
-                let mut max_aspect_ratio = -100.0;
-                let mut lvert = true;
-                for boxx in txtlns {
-                    let baspect = boxx.pos.lock().aspect_ratio();
-                    if baspect > max_aspect_ratio {
-                        max_aspect_ratio = baspect;
-                        lvert = boxx.pos.lock().vertical();
-                    }
-                    if 1.0 / baspect > max_aspect_ratio {
-                        max_aspect_ratio = 1.0 / baspect;
-                        lvert = boxx.pos.lock().vertical();
-                    }
-                }
-                lvert
-            } else if vert * 2 > count {
-                true
-            } else {
-                false
-            };
-            if vertical {
+            // 几何轴投票：与 TextBlock::new 及 v2 加载共用同一函数，不读 OCR 覆写后的行旗标。
+            let quads: Vec<[MyPoint; 4]> =
+                txtlns.iter().map(|v| v.pos.lock().pts().clone()).collect();
+            if script_axis_from_line_quads(&quads).is_vertical() {
                 nodes.sort_by_key(|a| OrderedFloat(-bboxes[a.index()].pos.lock().centroid().x));
             } else {
                 nodes.sort_by_key(|a| OrderedFloat(bboxes[a.index()].pos.lock().centroid().y));
@@ -885,7 +876,7 @@ pub fn dispatch_main(
         .filter(|v| v.prob >= prob_thesh)
         .collect::<Vec<_>>();
     let text_regions = dispatch(textlines, width, height, det)?;
-    Ok(text_regions
+    let mut regions: Vec<TextBlock> = text_regions
         .into_iter()
         .filter_map(|mut region| {
             let original_text = region.text;
@@ -923,7 +914,10 @@ pub fn dispatch_main(
                 Some(region)
             }
         })
-        .collect())
+        .collect();
+    // 页级先验：全部块可见后，含糊小块随页级多数落定。
+    apply_page_axis_prior(&mut regions);
+    Ok(regions)
 }
 
 fn remove_leading_spaces_after_predict(stripped_text: &str) -> String {
@@ -995,11 +989,20 @@ fn remove_leading_spaces_after_predict(stripped_text: &str) -> String {
 mod tests {
     use std::sync::Arc;
 
-    use interface_detector::textlines::Quadrilateral;
+    use interface_detector::textlines::{MyPoint, Quadrilateral};
     use interface_ocr::QuadrilateralInfo;
     use interface_translator::LangIdDetector;
 
-    use crate::dispatch;
+    use crate::{TextBlock, dispatch, script_axis_from_line_quads};
+
+    fn rect(x: i64, y: i64, w: i64, h: i64) -> [MyPoint; 4] {
+        [
+            MyPoint { x, y },
+            MyPoint { x: x + w, y },
+            MyPoint { x: x + w, y: y + h },
+            MyPoint { x, y: y + h },
+        ]
+    }
 
     #[test]
     fn testssss() {
@@ -1052,6 +1055,7 @@ mod tests {
             skip_translate: false,
             language: None,
             translations: Default::default(),
+            axis: crate::ScriptAxis::Horizontal,
         };
         let obb = block.obb().unwrap();
         assert!((obb.x - 140.0).abs() < 1.0, "x={}", obb.x);
@@ -1073,8 +1077,78 @@ mod tests {
             skip_translate: false,
             language: None,
             translations: Default::default(),
+            axis: crate::ScriptAxis::Horizontal,
         }
         .with_translation("ENG", "hello");
         assert_eq!(block.translation(), Some("hello"));
+    }
+
+    #[test]
+    fn export_v3_round_trip_preserves_axis() {
+        let det = LangIdDetector::new().unwrap();
+        let lines = vec![rect(0, 0, 10, 100), rect(20, 0, 10, 100)];
+        let block = TextBlock::new(
+            lines.clone(),
+            vec!["a".into(), "b".into()],
+            30,
+            0.0,
+            1.0,
+            None,
+            None,
+            &det,
+        )
+        .with_translation("ENG", "hi");
+        assert!(block.vertical());
+        let bytes = block.export();
+        let (loaded, used) = TextBlock::load(&bytes, 3).expect("v3 往返");
+        assert_eq!(used, bytes.len());
+        assert!(loaded.vertical());
+        assert_eq!(loaded.lines, lines);
+        assert_eq!(loaded.translation(), Some("hi"));
+    }
+
+    #[test]
+    fn load_v2_recomputes_axis_from_geometry() {
+        // v2 流无轴字节：加载时按当前几何投票重算（修正旧 AABB 误判）。
+        let det = LangIdDetector::new().unwrap();
+        let lines = vec![rect(0, 0, 100, 20), rect(0, 40, 10, 60), rect(20, 40, 10, 60)];
+        let expected = script_axis_from_line_quads(&lines);
+        assert_eq!(expected, crate::ScriptAxis::VerticalLtr);
+        let block = TextBlock::new(
+            lines,
+            vec!["a".into(), "b".into(), "c".into()],
+            30,
+            0.0,
+            1.0,
+            None,
+            None,
+            &det,
+        );
+        let mut bytes = block.export();
+        bytes.pop(); // 去掉 v3 轴字节，还原 v2 布局
+        let (loaded, used) = TextBlock::load(&bytes, 2).expect("v2 可加载");
+        assert_eq!(used, bytes.len());
+        assert_eq!(loaded.axis(), expected);
+    }
+
+    #[test]
+    fn load_rejects_bad_axis_and_version() {
+        let det = LangIdDetector::new().unwrap();
+        let block = TextBlock::new(
+            vec![rect(0, 0, 100, 10)],
+            vec!["a".into()],
+            30,
+            0.0,
+            1.0,
+            None,
+            None,
+            &det,
+        );
+        let mut bytes = block.export();
+        *bytes.last_mut().unwrap() = 7;
+        assert!(TextBlock::load(&bytes, 3).is_none());
+        bytes.pop();
+        assert!(TextBlock::load(&bytes, 3).is_none());
+        assert!(TextBlock::load(&bytes, 99).is_none());
     }
 }

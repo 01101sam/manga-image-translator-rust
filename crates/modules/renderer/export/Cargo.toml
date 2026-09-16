@@ -7,3 +7,7 @@ edition.workspace = true
 textline-merge.workspace = true
 image.workspace = true
 interface-image.workspace = true
+
+[dev-dependencies]
+interface-detector.workspace = true
+interface-translator.workspace = true
