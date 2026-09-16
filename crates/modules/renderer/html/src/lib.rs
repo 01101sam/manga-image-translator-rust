@@ -60,6 +60,12 @@ impl HtmlRenderer {
                     width: obb.w as u32,
                     height: obb.h as u32,
                     rotation: obb.angle_deg() as u32,
+                    // 与 PNG 同一存储轴；JS 据此切 writing-mode。
+                    axis: if patch.axis().is_vertical() {
+                        "vertical"
+                    } else {
+                        "horizontal"
+                    },
                     color: patch.fg_color.unwrap_or((0, 0, 0)),
                     shadow: patch
                         .bg_color
@@ -90,6 +96,7 @@ pub struct JsonData {
     width: u32,
     height: u32,
     rotation: u32,
+    axis: &'static str,
     color: (u8, u8, u8),
     shadow: (u8, u8, u8, f32),
     text: String,
@@ -144,4 +151,29 @@ fn generate(
  "###,
         font_escaped, data_str, path
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::JsonData;
+
+    #[test]
+    fn json_axis_uses_horizontal_vertical() {
+        // 与 static/script.js 的 writing-mode 分支约定的取值。
+        for axis in ["horizontal", "vertical"] {
+            let json = serde_json::to_string(&JsonData {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                rotation: 0,
+                axis,
+                color: (0, 0, 0),
+                shadow: (255, 255, 255, 1.0),
+                text: String::new(),
+            })
+            .unwrap();
+            assert!(json.contains(&format!(r#""axis":"{axis}""#)), "{json}");
+        }
+    }
 }
