@@ -53,8 +53,15 @@ impl Image {
 
 impl Export {
     pub fn load(data: Vec<u8>) -> Option<Self> {
-        let skip = "mit-rust:".len() + 4;
-        let data = &data[skip..];
+        let magic = b"mit-rust:";
+        if data.len() < magic.len() + 4 || &data[..magic.len()] != magic {
+            return None;
+        }
+        let version = u32::from_le_bytes(data[magic.len()..magic.len() + 4].try_into().ok()?);
+        if version != 2 && version != 3 {
+            return None;
+        }
+        let data = &data[magic.len() + 4..];
         let (bg, off) = Image::load(data)?;
         let data = &data[off..];
         let (overlay, off) = Image::load(data)?;
@@ -68,11 +75,13 @@ impl Export {
         let mut blocks = Vec::with_capacity(count);
 
         for _ in 0..count {
-            let (block, used) = TextBlock::load(&data[offset..])?;
+            let (block, used) = TextBlock::load(&data[offset..], version)?;
             offset += used;
             blocks.push(block);
         }
-        assert_eq!(data.len(), offset);
+        if data.len() != offset {
+            return None;
+        }
 
         Some(Self {
             img: bg,
@@ -83,7 +92,7 @@ impl Export {
 
     pub fn export(self) -> Vec<u8> {
         let mut buffer = b"mit-rust:".to_vec();
-        buffer.extend(2_u32.to_le_bytes());
+        buffer.extend(3_u32.to_le_bytes());
         buffer.extend(self.img.export());
         buffer.extend(self.overlay.export());
         buffer.extend((self.blocks.len() as u64).to_le_bytes());
@@ -239,5 +248,94 @@ impl Image {
             data,
             raw,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use image::DynamicImage;
+    use interface_detector::textlines::MyPoint;
+    use interface_translator::LangIdDetector;
+    use textline_merge::{ScriptAxis, TextBlock};
+
+    use super::Export;
+
+    fn vertical_block(det: &LangIdDetector) -> TextBlock {
+        let lines = vec![
+            [
+                MyPoint { x: 0, y: 0 },
+                MyPoint { x: 10, y: 0 },
+                MyPoint { x: 10, y: 100 },
+                MyPoint { x: 0, y: 100 },
+            ],
+            [
+                MyPoint { x: 20, y: 0 },
+                MyPoint { x: 30, y: 0 },
+                MyPoint { x: 30, y: 100 },
+                MyPoint { x: 20, y: 100 },
+            ],
+        ];
+        TextBlock::new(
+            lines,
+            vec!["a".into(), "b".into()],
+            30,
+            0.0,
+            1.0,
+            None,
+            None,
+            det,
+        )
+        .with_translation("ENG", "hi")
+    }
+
+    fn export_bytes(block: TextBlock) -> Vec<u8> {
+        Export::new(
+            DynamicImage::new_rgb8(8, 8),
+            DynamicImage::new_rgba8(8, 8),
+            vec![block],
+            None,
+        )
+        .export()
+    }
+
+    #[test]
+    fn v3_round_trip_preserves_axis() {
+        let det = LangIdDetector::new().unwrap();
+        let bytes = export_bytes(vertical_block(&det));
+        assert_eq!(u32::from_le_bytes(bytes[9..13].try_into().unwrap()), 3);
+        let loaded = Export::load(bytes).expect("v3 可加载");
+        assert_eq!(loaded.blocks.len(), 1);
+        assert_eq!(loaded.blocks[0].axis(), ScriptAxis::VerticalLtr);
+        assert_eq!(loaded.blocks[0].translation(), Some("hi"));
+        assert_eq!(loaded.get_image().width, 8);
+    }
+
+    #[test]
+    fn v2_stream_loads_with_recomputed_axis() {
+        let det = LangIdDetector::new().unwrap();
+        let mut bytes = export_bytes(vertical_block(&det));
+        bytes[9..13].copy_from_slice(&2_u32.to_le_bytes());
+        bytes.pop(); // 去掉块末尾轴字节，还原 v2 布局
+        let loaded = Export::load(bytes).expect("v2 可加载");
+        assert_eq!(loaded.blocks[0].axis(), ScriptAxis::VerticalLtr);
+    }
+
+    #[test]
+    fn load_rejects_bad_input() {
+        let det = LangIdDetector::new().unwrap();
+        let bytes = export_bytes(vertical_block(&det));
+        // 未知版本
+        let mut bad = bytes.clone();
+        bad[9..13].copy_from_slice(&99_u32.to_le_bytes());
+        assert!(Export::load(bad).is_none());
+        // 非法轴字节
+        let mut bad = bytes.clone();
+        *bad.last_mut().unwrap() = 9;
+        assert!(Export::load(bad).is_none());
+        // 坏魔数与截断输入
+        let mut bad = bytes.clone();
+        bad[0] = b'X';
+        assert!(Export::load(bad).is_none());
+        assert!(Export::load(vec![1, 2, 3]).is_none());
     }
 }

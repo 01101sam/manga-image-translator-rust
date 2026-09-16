@@ -270,10 +270,11 @@ impl Quadrilateral {
     }
 }
 
-/// Direction must be provided for sorting.
-/// The longer structure vector (mean of long side vectors) of input points is used to determine the direction.
-/// It is reliable enough for text lines but not for blocks.
-fn sort_pnts(pts: [(i64, i64); 4]) -> ([MyPoint; 4], bool) {
+/// 行四边形长边均值向量的方向判定：`|mean_x| <= |mean_y|` 即竖。
+///
+/// 从 `sort_pnts` 抽出的唯一几何方向源；行排序与块级投票共用此函数，禁止另抄一份。
+/// 只看四个点，不读可被 OCR 覆写的 `vertical` 旗标。
+pub fn long_edge_is_vertical(pts: [(i64, i64); 4]) -> bool {
     let mut pairwise_vec = [(0i64, 0i64); 16];
     let mut idx = 0;
     for i in 0..4 {
@@ -320,7 +321,14 @@ fn sort_pnts(pts: [(i64, i64); 4]) -> ([MyPoint; 4], bool) {
     let mean_x = (sum_x as f64 / 2.0).abs();
     let mean_y = (sum_y as f64 / 2.0).abs();
 
-    let is_vertical = mean_x <= mean_y;
+    mean_x <= mean_y
+}
+
+/// Direction must be provided for sorting.
+/// The longer structure vector (mean of long side vectors) of input points is used to determine the direction.
+/// It is reliable enough for text lines but not for blocks.
+fn sort_pnts(pts: [(i64, i64); 4]) -> ([MyPoint; 4], bool) {
+    let is_vertical = long_edge_is_vertical(pts);
 
     let mut pts_sorted = pts;
 
