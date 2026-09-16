@@ -39,12 +39,18 @@ pub fn dispatch(
             .into_iter()
             .map(|(txtlns, fg_color, bg_color)| {
                 let mut total_logprobs = 0.0;
+                let mut block_area = 0.0;
                 for txtln in &txtlns {
                     let pos = txtln.pos.lock();
-                    total_logprobs += pos.score().ln() * pos.area();
+                    let area = pos.area();
+                    total_logprobs += pos.score().ln() * area;
+                    block_area += area;
                 }
 
-                total_logprobs /= textlines.iter().map(|v| v.pos.lock().area()).sum::<f64>();
+                // 本块面积归一（面积加权平均）；零面积退化行跳过除法，保持 prob=1。
+                if block_area > 0.0 {
+                    total_logprobs /= block_area;
+                }
                 let font_size = txtlns
                     .iter()
                     .map(|v| v.pos.lock().font_size() as u64)
@@ -1150,5 +1156,31 @@ mod tests {
         bytes.pop();
         assert!(TextBlock::load(&bytes, 3).is_none());
         assert!(TextBlock::load(&bytes, 99).is_none());
+    }
+
+    #[test]
+    fn dispatch_prob_normalized_by_block_area() {
+        // 两块各单行：prob 应等于各自行的 score，不被全图面积稀释。
+        let quads = [
+            (vec![(0, 0), (100, 0), (100, 20), (0, 20)], 0.5),
+            (vec![(1000, 1000), (1100, 1000), (1100, 1020), (1000, 1020)], 0.9),
+        ];
+        let infos: Vec<QuadrilateralInfo> = quads
+            .into_iter()
+            .map(|(pts, score)| QuadrilateralInfo {
+                text: String::new(),
+                fg: None,
+                bg: None,
+                pos: Arc::new(Quadrilateral::new(pts, score).into()),
+                prob: 1.0,
+            })
+            .collect();
+        let det = LangIdDetector::new().unwrap();
+        let out = dispatch(infos.iter().collect(), 1200, 1200, &det).unwrap();
+        assert_eq!(out.len(), 2);
+        let mut probs: Vec<f64> = out.iter().map(|b| b.prob).collect();
+        probs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!((probs[0] - 0.5).abs() < 1e-9, "prob={}", probs[0]);
+        assert!((probs[1] - 0.9).abs() < 1e-9, "prob={}", probs[1]);
     }
 }
