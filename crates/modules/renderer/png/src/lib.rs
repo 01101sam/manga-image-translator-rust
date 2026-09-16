@@ -25,6 +25,47 @@ use textline_merge::{ScriptAxis, TextBlock};
 pub struct PngRenderer {
     font_system: FontSystem,
     cache: SwashCache,
+    reports: Vec<BlockReport>,
+}
+
+/// 单块渲染报告：机器可比的排版摘要（`render` 后 `take_reports` 取走）。
+///
+/// 生产路径开销为每块一次小结构体 push。
+pub struct BlockReport {
+    pub index: usize,
+    pub axis: ScriptAxis,
+    pub font_px: f32,
+    /// L3 等比缩放（未触发为 1.0）。
+    pub scale: f32,
+    pub cols: usize,
+    pub frame_w: u32,
+    pub frame_h: u32,
+    pub comp_w: u32,
+    pub comp_h: u32,
+    /// 译文非空字符数（排版前输入）。
+    pub glyphs_in: usize,
+    /// 落笔的非空字形数（光栅化输出）。
+    pub glyphs_out: usize,
+}
+
+impl std::fmt::Display for BlockReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "block={} axis={} font={:.1} scale={:.2} cols={} frame={}x{} comp={}x{} glyphs={}/{}",
+            self.index,
+            if self.axis.is_vertical() { "V" } else { "H" },
+            self.font_px,
+            self.scale,
+            self.cols,
+            self.frame_w,
+            self.frame_h,
+            self.comp_w,
+            self.comp_h,
+            self.glyphs_out,
+            self.glyphs_in,
+        )
+    }
 }
 
 pub struct PngRenderConfig {
@@ -106,6 +147,11 @@ impl PngRenderer {
         Ok(img)
     }
 
+    /// 取走本轮 `render` 累积的逐块报告。
+    pub fn take_reports(&mut self) -> Vec<BlockReport> {
+        std::mem::take(&mut self.reports)
+    }
+
     fn paint_block(
         &mut self,
         img: &mut RawImage,
@@ -184,16 +230,30 @@ impl PngRenderer {
         let Some(placed) = layout(self, axis, &fitted, &frame, &mut color_map) else {
             return Ok(());
         };
-        let (mut box_img, _written) = rasterize_placed(self, &placed, font_size, &mut color_map);
+        let (mut box_img, written) = rasterize_placed(self, &placed, font_size, &mut color_map);
         if box_img.width == 0 || box_img.height == 0 {
             return Ok(());
         }
         // L3 兜底：min_font + 行高 1.0 仍溢出，光栅化后各向同性缩小。
+        let mut scale = 1.0;
         if box_img.width as f32 > frame_w || box_img.height as f32 > frame_h {
-            let scale = (frame_w / box_img.width as f32).min(frame_h / box_img.height as f32);
+            scale = (frame_w / box_img.width as f32).min(frame_h / box_img.height as f32);
             box_img = shrink_isotropic(&box_img, scale)?;
             log::warn!("block={block_idx} 译文超框，min_font 行高1.0 后仍溢出，等比缩放 scale={scale:.2}");
         }
+        self.reports.push(BlockReport {
+            index: block_idx,
+            axis,
+            font_px: font_size,
+            scale,
+            cols: placed.cols,
+            frame_w: frame.width_px,
+            frame_h: frame.height_px,
+            comp_w: box_img.width as u32,
+            comp_h: box_img.height as u32,
+            glyphs_in: text.chars().filter(|c| !c.is_whitespace()).count(),
+            glyphs_out: written,
+        });
         let box_img = pad_to_aspect(box_img, frame_w / frame_h);
         warp_onto(img, &box_img, frame.dest)
     }
@@ -204,6 +264,7 @@ impl Default for PngRenderer {
         Self {
             font_system: FontSystem::new(),
             cache: SwashCache::new(),
+            reports: Vec::new(),
         }
     }
 }
@@ -638,5 +699,98 @@ mod tests {
         assert_eq!(out.width, 120);
         assert_eq!(out.height, 60);
         assert!(out.data.chunks(out.channels as usize).any(|p| p[0] > 20));
+    }
+
+    #[test]
+    fn take_reports_covers_rendered_blocks() {
+        use export::Export;
+        use image::{DynamicImage, RgbImage};
+        use interface_detector::textlines::MyPoint;
+        use interface_translator::LangIdDetector;
+        use textline_merge::TextBlock;
+
+        let bg = RgbImage::new(120, 60);
+        let overlay = image::RgbaImage::new(120, 60);
+        let det = LangIdDetector::new().unwrap();
+        let block = TextBlock::new(
+            vec![[
+                MyPoint { x: 12, y: 12 },
+                MyPoint { x: 108, y: 12 },
+                MyPoint { x: 108, y: 48 },
+                MyPoint { x: 12, y: 48 },
+            ]],
+            vec!["src".into()],
+            18,
+            0.0,
+            1.0,
+            None,
+            None,
+            &det,
+        )
+        .with_translation("ENG", "Hi");
+        let exp = Export::new(
+            DynamicImage::ImageRgb8(bg),
+            DynamicImage::ImageRgba8(overlay),
+            vec![block],
+            None,
+        );
+        let mut renderer = PngRenderer::default();
+        renderer.render(exp, PngRenderConfig::default()).unwrap();
+        let reports = renderer.take_reports();
+        assert_eq!(reports.len(), 1);
+        let r = &reports[0];
+        assert_eq!(r.index, 0);
+        assert!(!r.axis.is_vertical());
+        assert_eq!((r.glyphs_out, r.glyphs_in), (2, 2));
+        assert_eq!(r.scale, 1.0);
+        assert!(r.to_string().starts_with("block=0 axis=H "));
+        // 取走后排空。
+        assert!(renderer.take_reports().is_empty());
+    }
+
+    #[test]
+    fn oversized_text_falls_back_to_isotropic_scale() {
+        use export::Export;
+        use image::{DynamicImage, RgbImage};
+        use interface_detector::textlines::MyPoint;
+        use interface_translator::LangIdDetector;
+        use textline_merge::TextBlock;
+
+        // 小框 + 长译文 + 高字号下限：min 也装不下 → L3 等比缩放兜底。
+        let bg = RgbImage::new(120, 60);
+        let overlay = image::RgbaImage::new(120, 60);
+        let det = LangIdDetector::new().unwrap();
+        let block = TextBlock::new(
+            vec![[
+                MyPoint { x: 30, y: 20 },
+                MyPoint { x: 50, y: 20 },
+                MyPoint { x: 50, y: 30 },
+                MyPoint { x: 30, y: 30 },
+            ]],
+            vec!["src".into()],
+            18,
+            0.0,
+            1.0,
+            None,
+            None,
+            &det,
+        )
+        .with_translation("CHS", &"啊".repeat(100));
+        let exp = Export::new(
+            DynamicImage::ImageRgb8(bg),
+            DynamicImage::ImageRgba8(overlay),
+            vec![block],
+            None,
+        );
+        let mut config = PngRenderConfig::default();
+        config.font_size_minimum = 20.0;
+        let mut renderer = PngRenderer::default();
+        renderer.render(exp, config).unwrap();
+        let reports = renderer.take_reports();
+        assert_eq!(reports.len(), 1);
+        let r = &reports[0];
+        assert_eq!(r.font_px, 20.0);
+        assert!(r.scale < 1.0, "scale={}", r.scale);
+        assert_eq!((r.glyphs_out, r.glyphs_in), (100, 100));
     }
 }

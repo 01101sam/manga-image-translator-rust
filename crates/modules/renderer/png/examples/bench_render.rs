@@ -27,6 +27,9 @@ const BUBBLES: &[(i64, i64, usize, i64, i64, bool, f64)] = &[
     (300, 1720, 4, 240, 30, true, 0.0),
     (80, 40, 3, 380, 24, false, 0.0),
     (500, 1980, 2, 420, 22, false, 0.0),
+    // 故意超长译文压测块：一横（窄框多行）一竖（多列）。
+    (900, 1900, 2, 200, 24, false, 0.0),
+    (1350, 850, 2, 150, 26, true, 0.0),
 ];
 
 const TRANSLATIONS: &[&str] = &[
@@ -38,6 +41,10 @@ const TRANSLATIONS: &[&str] = &[
     "没事的,别担心",
     "That is not what I meant at all",
 ];
+
+/// 故意超长的压测译文（无空格，专测换行/换列与缩小不丢字）。
+const LONG_H: &str = "这是一个故意写得非常非常长的中文译文句子用来测试横排换行与字号缩小会不会丢字";
+const LONG_V: &str = "竖排超长译文列打包测试看看列数增长与字号缩小能不能装下全部的字形不丢失";
 
 fn blocks(det: &LangIdDetector) -> Vec<TextBlock> {
     BUBBLES
@@ -67,7 +74,11 @@ fn blocks(det: &LangIdDetector) -> Vec<TextBlock> {
                 Some((250, 250, 250)),
                 det,
             )
-            .with_translation("CHS", TRANSLATIONS[b % TRANSLATIONS.len()])
+            .with_translation("CHS", match b {
+                13 => LONG_H,
+                14 => LONG_V,
+                _ => TRANSLATIONS[b % TRANSLATIONS.len()],
+            })
         })
         .collect()
 }
@@ -151,6 +162,20 @@ fn main() {
             .render(exp, PngRenderConfig::default())
             .expect("render");
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        // 每轮排空报告（防无限增长），并断言无缺失；只在最后一轮打印。
+        let reports = renderer.take_reports();
+        for r in &reports {
+            assert_eq!(
+                r.glyphs_out, r.glyphs_in,
+                "block {} lost glyphs: {r}",
+                r.index
+            );
+        }
+        if i == WARMUP + ITERS - 1 {
+            for r in &reports {
+                println!("{r}");
+            }
+        }
         fingerprint = format!(
             "out={}x{}x{} fnv={:016x}",
             out.width,
