@@ -354,7 +354,6 @@ pub struct PlacedLayout {
     pub height: u32,
     pub glyphs: Vec<PlacedGlyph>,
     /// 竖排列数 / 横排行数（渲染报告消费）。
-    #[allow(dead_code)]
     pub cols: usize,
 }
 
@@ -740,8 +739,10 @@ pub fn rasterize_placed(
             g.cache_key,
             g.color,
             |px, py, color| {
+                // 顺时针 90°：content(u,v) → (h−1−v, u)，即 dest = (X − py, Y + px)。
+                // X 存的是右缘锚点（含 −gy 翻转项），Y 存 content-x 基准。
                 let (dx, dy) = if g.rotate_90_cw {
-                    (g.x - px, g.y + py)
+                    (g.x - py, g.y + px)
                 } else {
                     (g.x + px, g.y + py)
                 };
