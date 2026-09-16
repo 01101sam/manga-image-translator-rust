@@ -8,6 +8,9 @@ use cosmic_text::{
 
 use export::Export;
 use interface_image::{DimType, Mask, RawImage};
+
+mod layout;
+use layout::BubbleFrame;
 use opencv::{
     calib3d::{find_homography, RANSAC},
     core::{
@@ -104,11 +107,11 @@ impl PngRenderer {
         if text.trim().is_empty() {
             return Ok(());
         }
-        let dst = block.min_rect()?;
-        let (norm_h, norm_v) = dest_axes(dst);
-        if norm_h < 2.0 || norm_v < 2.0 {
+        let Some(frame) = BubbleFrame::from_block(block, img.width as u32, img.height as u32)
+        else {
             return Ok(());
-        }
+        };
+        let (norm_h, norm_v) = (frame.width_px as f32, frame.height_px as f32);
         let vertical = match config.direction {
             RenderDirection::Auto => block.vertical(),
             RenderDirection::Horizontal => false,
@@ -161,7 +164,7 @@ impl PngRenderer {
             return Ok(());
         }
         let box_img = pad_to_aspect(box_img, norm_h / norm_v, !vertical);
-        warp_onto(img, &box_img, dst)
+        warp_onto(img, &box_img, frame.dest)
     }
 }
 
@@ -401,22 +404,6 @@ fn empty_rgba() -> RawImage {
         height: 0,
         channels: 4,
     }
-}
-
-fn dest_axes(dst: [(i64, i64); 4]) -> (f32, f32) {
-    let mid = |a: (i64, i64), b: (i64, i64)| {
-        (
-            (a.0 + b.0) as f32 / 2.0,
-            (a.1 + b.1) as f32 / 2.0,
-        )
-    };
-    let m01 = mid(dst[0], dst[1]);
-    let m12 = mid(dst[1], dst[2]);
-    let m23 = mid(dst[2], dst[3]);
-    let m30 = mid(dst[3], dst[0]);
-    let norm_h = ((m12.0 - m30.0).hypot(m12.1 - m30.1)).max(1.0);
-    let norm_v = ((m23.0 - m01.0).hypot(m23.1 - m01.1)).max(1.0);
-    (norm_h, norm_v)
 }
 
 fn color_difference(a: (u8, u8, u8), b: (u8, u8, u8)) -> f32 {
