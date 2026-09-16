@@ -4,12 +4,12 @@
 
 use interface_image::RawImage;
 use opencv::{
-    core::{Mat, Size},
+    core::{Mat, MatTraitConst as _, Size},
     imgproc::{INTER_AREA, resize},
 };
-use textline_merge::TextBlock;
+use textline_merge::{ScriptAxis, TextBlock};
 
-use crate::{ColorMap, PngRenderer, RenderTextBlock, wh};
+use crate::{ColorMap, PngRenderer, RenderTextBlock, backdrop_kernel, empty_rgba, wh};
 
 /// 渲染目标框：行集合转正 AABB 外扩半字号，再入界到图像内。
 ///
@@ -156,15 +156,16 @@ pub fn dest_axes(dst: [(i64, i64); 4]) -> (f32, f32) {    let mid = |a: (i64, i6
 /// 短句不放大：`preferred` 装得下就直接用。L2 仍溢出由调用方 L3 等比缩放兜底。
 pub fn fit_font_px(
     renderer: &mut PngRenderer,
+    axis: ScriptAxis,
     template: &RenderTextBlock,
-    frame_w: f32,
-    frame_h: f32,
+    frame: &BubbleFrame,
     preferred: f32,
     min_font: f32,
     line_height: f32,
 ) -> (f32, f32) {
+    let (frame_w, frame_h) = (frame.width_px as f32, frame.height_px as f32);
     let fits = |renderer: &mut PngRenderer, font: f32, lh: f32| {
-        let (w, h) = measure(renderer, template, font, lh);
+        let (w, h) = measure(renderer, axis, template, frame, font, lh);
         w as f32 <= frame_w && h as f32 <= frame_h
     };
     if fits(renderer, preferred, line_height) {
@@ -208,10 +209,12 @@ fn bisect(
     lo
 }
 
-/// 测量走新排版（`set_size(Some(w), None)`），不走旧截断路径。
+/// 测量走新排版（横排折行 / 竖排打包），不走旧截断路径。
 fn measure(
     renderer: &mut PngRenderer,
+    axis: ScriptAxis,
     template: &RenderTextBlock,
+    frame: &BubbleFrame,
     font: f32,
     line_height: f32,
 ) -> (usize, usize) {
@@ -219,9 +222,10 @@ fn measure(
     text.set_font_size(font);
     text.set_line_height(line_height);
     let mut color_map = ColorMap::default();
-    let buffer = renderer.create_buffer(&text, &mut color_map);
-    let layouts = buffer.layout_runs().collect::<Vec<_>>();
-    wh(&layouts)
+    match layout(renderer, axis, &text, frame, &mut color_map) {
+        Some(placed) => (placed.width as usize, placed.height as usize),
+        None => (0, 0),
+    }
 }
 
 /// L3 兜底：各向同性缩小。`INTER_AREA` 高降采样保笔画，`INTER_LINEAR` 会抹掉。
@@ -232,6 +236,570 @@ pub fn shrink_isotropic(img: &RawImage, scale: f32) -> anyhow::Result<RawImage> 
     let mut dst = Mat::default();
     resize(&src, &mut dst, Size::new(w, h), 0.0, 0.0, INTER_AREA)?;
     Ok(RawImage::try_from(dst)?)
+}
+
+/// 一个不可拆开的竖排原子。分段即竖排的全部混排策略。
+pub enum LayoutAtom {
+    /// 直立，占约 1em 格。
+    Upright(char),
+    /// 整形后位图顺时针转 90°。
+    Rotated(char),
+    /// 纵中横：1–2 位 ASCII 数字横排挤进约 1em 格。
+    TateChuYoko(String),
+    /// 显式换列（`\n`）。
+    Break,
+}
+
+impl LayoutAtom {
+    fn ch(&self) -> Option<char> {
+        match self {
+            Self::Upright(c) | Self::Rotated(c) => Some(*c),
+            _ => None,
+        }
+    }
+
+    /// 原子整形文本。
+    fn shape_text(&self) -> String {
+        match self {
+            Self::Upright(c) | Self::Rotated(c) => c.to_string(),
+            Self::TateChuYoko(s) => s.clone(),
+            Self::Break => String::new(),
+        }
+    }
+}
+
+/// 顺时针 90°：括号引号、长音符、浪线、破折、省略号。
+const ROTATED_EXTRA: &[char] = &[
+    '「', '」', '『', '』', '（', '）', '〔', '〕', '〈', '〉', '《', '》', '【', '】', '〖', '〗',
+    '“', '”', '‘', '’', '‹', '›', '«', '»', '〝', '〞', '﹁', '﹂', '﹃', '﹄', '[', ']', '(',
+    ')', '{', '}', '—', '–', 'ー', 'ｰ', '〜', '～', '…', '‥',
+];
+
+/// 直立字符：CJK、假名、注音、谚文、全角字母数字、问叹、部分全角标点。
+/// ASCII `!?` 例外直立（漫画气泡常见）；长音符已在旋转表先行匹配。
+fn is_upright(c: char) -> bool {
+    matches!(c,
+        '!' | '?' | '\u{FF01}' | '\u{FF1F}' | '\u{3001}' | '\u{3002}' | '\u{FF0C}' | '\u{FF0E}'
+        | '\u{FF1A}' | '\u{FF1B}' | '\u{00B7}' | '\u{3005}' | '\u{3000}'
+        | '\u{3040}'..='\u{309F}' | '\u{30A0}'..='\u{30FF}' | '\u{3100}'..='\u{312F}'
+        | '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}' | '\u{F900}'..='\u{FAFF}'
+        | '\u{20000}'..='\u{2FA1D}' | '\u{AC00}'..='\u{D7A3}' | '\u{1100}'..='\u{11FF}'
+        | '\u{FF10}'..='\u{FF5A}')
+}
+
+/// 句读位移：直立但放到 em 格右上（content 偏移 (+0.5,−0.5)em）。
+fn is_kuten(c: char) -> bool {
+    matches!(c, '\u{3001}' | '\u{3002}' | '\u{FF0C}' | '\u{FF0E}')
+}
+
+/// 列首禁则 / 列尾禁则（任务集 + 全角对应形）。
+const KINSOKU_HEAD: &[char] = &[
+    '\u{3001}', '\u{3002}', ')', '\u{FF09}', '\u{300D}', '\u{300F}', '\u{3011}', '!', '?',
+    '\u{FF01}', '\u{FF1F}',
+];
+const KINSOKU_TAIL: &[char] = &['(', '\u{FF08}', '\u{300C}', '\u{300E}', '\u{3010}'];
+
+/// 一次扫描分段：数字贪心 1–2 位成纵中横，其余查表。
+pub fn segment_atoms(text: &str) -> Vec<LayoutAtom> {
+    fn flush_digits(digits: &mut String, atoms: &mut Vec<LayoutAtom>) {
+        let mut rest = digits.as_str();
+        while rest.len() > 2 {
+            atoms.push(LayoutAtom::TateChuYoko(rest[..2].to_owned()));
+            rest = &rest[2..];
+        }
+        if !rest.is_empty() {
+            atoms.push(LayoutAtom::TateChuYoko(rest.to_owned()));
+        }
+        digits.clear();
+    }
+
+    let mut atoms = Vec::new();
+    let mut digits = String::new();
+    for c in text.chars() {
+        if c.is_ascii_digit() {
+            digits.push(c);
+            continue;
+        }
+        flush_digits(&mut digits, &mut atoms);
+        match c {
+            '\n' => atoms.push(LayoutAtom::Break),
+            '\r' => {}
+            ' ' | '\t' => atoms.push(LayoutAtom::Upright('\u{3000}')),
+            c if ROTATED_EXTRA.contains(&c) => atoms.push(LayoutAtom::Rotated(c)),
+            c if is_upright(c) => atoms.push(LayoutAtom::Upright(c)),
+            c if c.is_ascii_graphic() => atoms.push(LayoutAtom::Rotated(c)),
+            c if c.is_alphabetic() => atoms.push(LayoutAtom::Rotated(c)),
+            c if c.is_control() => {}
+            _ => atoms.push(LayoutAtom::Upright(c)),
+        }
+    }
+    flush_digits(&mut digits, &mut atoms);
+    atoms
+}
+
+/// 已定位字形：横竖共用的光栅化输入。
+pub struct PlacedGlyph {
+    pub cache_key: cosmic_text::CacheKey,
+    /// 直立：位图左上 canvas 坐标；旋转：右缘锚点（光栅化 `x − px`，推导见打包注释）。
+    pub x: i32,
+    pub y: i32,
+    pub rotate_90_cw: bool,
+    pub color: cosmic_text::Color,
+    pub metadata: usize,
+    pub is_whitespace: bool,
+}
+
+pub struct PlacedLayout {
+    pub width: u32,
+    pub height: u32,
+    pub glyphs: Vec<PlacedGlyph>,
+    /// 竖排列数 / 横排行数（渲染报告消费）。
+    #[allow(dead_code)]
+    pub cols: usize,
+}
+
+/// 按轴排版，返回扁平已定位字形列表。空文本返回 `None`。
+pub fn layout(
+    renderer: &mut PngRenderer,
+    axis: ScriptAxis,
+    template: &RenderTextBlock,
+    frame: &BubbleFrame,
+    color_map: &mut ColorMap,
+) -> Option<PlacedLayout> {
+    match axis {
+        ScriptAxis::Horizontal => layout_horizontal(renderer, template),
+        ScriptAxis::VerticalLtr => {
+            let t = template.texts.first()?;
+            let bg_id = color_map
+                .get_id(t.bg_color.unwrap_or((255, 255, 255)))
+                .unwrap();
+            pack_vertical(
+                renderer,
+                &t.text,
+                frame,
+                t.font_size,
+                t.line_height,
+                t.color.unwrap_or((0, 0, 0)),
+                bg_id,
+                &t.family,
+                color_map,
+            )
+        }
+    }
+}
+
+/// 横排：cosmic 折行，收齐字形并减掉对齐行偏移。
+pub fn layout_horizontal(
+    renderer: &mut PngRenderer,
+    template: &RenderTextBlock,
+) -> Option<PlacedLayout> {
+    let mut color_map = ColorMap::default();
+    let buffer = renderer.create_buffer(template, &mut color_map);
+    let runs = buffer.layout_runs().collect::<Vec<_>>();
+    let (w, h) = wh(&runs);
+    let wrap_w = template.size.0 as f32;
+    let mut glyphs = Vec::new();
+    for run in &runs {
+        let shift = match template.align {
+            cosmic_text::Align::Center => (wrap_w - run.line_w) / 2.0,
+            cosmic_text::Align::Right | cosmic_text::Align::End => wrap_w - run.line_w,
+            _ => 0.0,
+        }
+        .round() as i32;
+        for g in run.glyphs.iter() {
+            let physical = g.physical((0., 0.), 1.0);
+            glyphs.push(PlacedGlyph {
+                cache_key: physical.cache_key,
+                x: physical.x - shift,
+                y: run.line_y as i32 + physical.y,
+                rotate_90_cw: false,
+                color: g.color_opt.unwrap_or(cosmic_text::Color::rgb(0, 0, 0)),
+                metadata: g.metadata,
+                is_whitespace: run
+                    .text
+                    .get(g.start..g.end)
+                    .is_some_and(|s| s.chars().all(|c| c.is_whitespace())),
+            });
+        }
+    }
+    if glyphs.is_empty() {
+        return None;
+    }
+    Some(PlacedLayout {
+        width: w as u32,
+        height: h as u32,
+        cols: runs.len(),
+        glyphs,
+    })
+}
+
+struct ShapedGlyph {
+    cache_key: cosmic_text::CacheKey,
+    gx: i32,
+    gy: i32,
+    color: cosmic_text::Color,
+    metadata: usize,
+    is_whitespace: bool,
+}
+
+struct ShapedAtom {
+    glyphs: Vec<ShapedGlyph>,
+    w: f32,
+    h: f32,
+}
+
+/// 单原子整形：cosmic 只当字形器，几何由打包控制。
+fn shape_atom(
+    renderer: &mut PngRenderer,
+    text: &str,
+    font_px: f32,
+    fg: (u8, u8, u8),
+    bg_id: usize,
+    family: &Option<String>,
+) -> ShapedAtom {
+    use cosmic_text::{Attrs, Buffer, Metrics, Shaping};
+    let mut attrs = Attrs::new()
+        .color(cosmic_text::Color::rgb(fg.0, fg.1, fg.2))
+        .metrics(Metrics::new(font_px, font_px))
+        .metadata(bg_id);
+    if let Some(family) = family {
+        attrs = attrs.family(cosmic_text::Family::Name(family));
+    }
+    let metrics = Metrics::new(font_px, font_px);
+    let mut buffer = Buffer::new(&mut renderer.font_system, metrics);
+    {
+        let mut b = buffer.borrow_with(&mut renderer.font_system);
+        b.set_size(None, None);
+        b.set_text(text, &attrs, Shaping::Advanced);
+        b.shape_until_scroll(true);
+    }
+    let mut glyphs = Vec::new();
+    let (mut aw, mut ah) = (0.0f32, 0.0f32);
+    struct Raw {
+        cache_key: cosmic_text::CacheKey,
+        ax: i32,
+        ay: i32,
+        color: cosmic_text::Color,
+        metadata: usize,
+        is_whitespace: bool,
+    }
+    let mut raws = Vec::new();
+    for run in buffer.layout_runs() {
+        aw = aw.max(run.line_w);
+        ah = ah.max(run.line_top + run.line_height);
+        for g in run.glyphs.iter() {
+            let physical = g.physical((0., 0.), 1.0);
+            raws.push(Raw {
+                cache_key: physical.cache_key,
+                // 与横排同一锚定：基线 line_y + 物理偏移。with_pixels 的像素坐标
+                // 含位图自身偏移（常为负），缺了基线字形会整体落在画布上方。
+                ax: physical.x,
+                ay: run.line_y as i32 + physical.y,
+                color: g.color_opt.unwrap_or(cosmic_text::Color::rgb(0, 0, 0)),
+                metadata: g.metadata,
+                is_whitespace: text
+                    .get(g.start..g.end)
+                    .is_some_and(|s| s.chars().all(|c| c.is_whitespace())),
+            });
+        }
+    }
+    // 内容盒取墨水包络而非行盒：字形在格内按墨水居中（一横居中而非沉底），
+    // 且与字体 ascent 无关。空白原子无墨水，按 advance 占位。
+    let mut ink: Option<(i32, i32, i32, i32)> = None;
+    for r in &raws {
+        if let Some(image) = renderer.cache.get_image(&mut renderer.font_system, r.cache_key) {
+            let (x0, y0) = (
+                r.ax + image.placement.left,
+                r.ay - image.placement.top,
+            );
+            let (x1, y1) = (
+                x0 + image.placement.width as i32,
+                y0 + image.placement.height as i32,
+            );
+            ink = Some(match ink {
+                Some((ix0, iy0, ix1, iy1)) => {
+                    (ix0.min(x0), iy0.min(y0), ix1.max(x1), iy1.max(y1))
+                }
+                None => (x0, y0, x1, y1),
+            });
+        }
+    }
+    match ink {
+        Some((x0, y0, x1, y1)) if x1 > x0 && y1 > y0 => {
+            for r in &raws {
+                glyphs.push(ShapedGlyph {
+                    cache_key: r.cache_key,
+                    gx: r.ax - x0,
+                    gy: r.ay - y0,
+                    color: r.color,
+                    metadata: r.metadata,
+                    is_whitespace: r.is_whitespace,
+                });
+            }
+            ShapedAtom {
+                glyphs,
+                w: (x1 - x0) as f32,
+                h: (y1 - y0) as f32,
+            }
+        }
+        _ => {
+            for r in &raws {
+                glyphs.push(ShapedGlyph {
+                    cache_key: r.cache_key,
+                    gx: r.ax,
+                    gy: r.ay,
+                    color: r.color,
+                    metadata: r.metadata,
+                    is_whitespace: r.is_whitespace,
+                });
+            }
+            ShapedAtom {
+                glyphs,
+                w: aw.max(1.0),
+                h: ah.max(1.0),
+            }
+        }
+    }
+}
+
+/// 竖排打包：列内沿 y 堆叠，满列换列，列沿 +x（左到右）。
+#[allow(clippy::too_many_arguments)]
+pub fn pack_vertical(
+    renderer: &mut PngRenderer,
+    text: &str,
+    frame: &BubbleFrame,
+    font_px: f32,
+    line_height: f32,
+    fg: (u8, u8, u8),
+    bg_id: usize,
+    family: &Option<String>,
+    _color_map: &mut ColorMap,
+) -> Option<PlacedLayout> {
+    let atoms = segment_atoms(text);
+    // 分列：Break 强制换列；列内 y 累加超预算换列。
+    let em = font_px;
+    let col_h = frame.height_px as f32;
+    let mut cols: Vec<Vec<usize>> = vec![Vec::new()];
+    let mut y = 0.0;
+    for (i, atom) in atoms.iter().enumerate() {
+        if matches!(atom, LayoutAtom::Break) {
+            if !cols.last().is_some_and(|c| c.is_empty()) {
+                cols.push(Vec::new());
+            }
+            y = 0.0;
+            continue;
+        }
+        if y + em > col_h && y > 0.0 {
+            cols.push(Vec::new());
+            y = 0.0;
+        }
+        cols.last_mut().unwrap().push(i);
+        y += em;
+    }
+    while cols.first().is_some_and(|c| c.is_empty()) {
+        cols.remove(0);
+    }
+    while cols.last().is_some_and(|c| c.is_empty()) {
+        cols.pop();
+    }
+    if cols.is_empty() {
+        return None;
+    }
+    apply_kinsoku(&mut cols, &atoms);
+
+    // 同字复用整形结果（fit 二分会反复打包）。
+    let mut shaped_cache: std::collections::HashMap<String, ShapedAtom> =
+        std::collections::HashMap::new();
+    let mut shaped: Vec<Option<ShapedAtom>> = Vec::with_capacity(atoms.len());
+    for atom in &atoms {
+        if matches!(atom, LayoutAtom::Break) {
+            shaped.push(None);
+            continue;
+        }
+        let key = atom.shape_text();
+        if !shaped_cache.contains_key(&key) {
+            let s = shape_atom(renderer, &key, font_px, fg, bg_id, family);
+            shaped_cache.insert(key.clone(), s);
+        }
+        let s = &shaped_cache[&key];
+        shaped.push(Some(ShapedAtom {
+            glyphs: s
+                .glyphs
+                .iter()
+                .map(|g| ShapedGlyph {
+                    cache_key: g.cache_key,
+                    gx: g.gx,
+                    gy: g.gy,
+                    color: g.color,
+                    metadata: g.metadata,
+                    is_whitespace: g.is_whitespace,
+                })
+                .collect(),
+            w: s.w,
+            h: s.h,
+        }));
+    }
+
+    let col_pitch = em * line_height;
+    let rows = cols.iter().map(|c| c.len()).max().unwrap_or(0);
+    let mut glyphs = Vec::new();
+    for (k, col) in cols.iter().enumerate() {
+        for (j, &i) in col.iter().enumerate() {
+            let atom = &atoms[i];
+            let s = shaped[i].as_ref().unwrap();
+            let (cx, cy) = (k as f32 * col_pitch, j as f32 * em);
+            let rotated = matches!(atom, LayoutAtom::Rotated(_));
+            // 内容在格内居中；旋转后内容尺寸为 (h, w)。
+            let (cw, ch) = if rotated { (s.h, s.w) } else { (s.w, s.h) };
+            let mut ox = (col_pitch - cw) / 2.0;
+            let mut oy = (em - ch) / 2.0;
+            if matches!(atom.ch(), Some(c) if is_kuten(c)) {
+                ox += em * 0.5;
+                oy -= em * 0.5;
+            }
+            for g in &s.glyphs {
+                // 顺时针 90°：content(u,v) → (h−1−v, u)。
+                // 存右缘锚点 X = ox + h − 1 − gy，光栅化时 dest = (X − px, Y + px)，
+                // 不需要字形位图尺寸即可旋转。
+                let (x, y) = if rotated {
+                    (
+                        (cx + ox + s.h - 1.0 - g.gy as f32).round() as i32,
+                        (cy + oy + g.gx as f32).round() as i32,
+                    )
+                } else {
+                    (
+                        (cx + ox + g.gx as f32).round() as i32,
+                        (cy + oy + g.gy as f32).round() as i32,
+                    )
+                };
+                glyphs.push(PlacedGlyph {
+                    cache_key: g.cache_key,
+                    x,
+                    y,
+                    rotate_90_cw: rotated,
+                    color: g.color,
+                    metadata: g.metadata,
+                    is_whitespace: g.is_whitespace,
+                });
+            }
+        }
+    }
+    Some(PlacedLayout {
+        width: (cols.len() as f32 * col_pitch).ceil() as u32,
+        height: (rows as f32 * em).ceil() as u32,
+        cols: cols.len(),
+        glyphs,
+    })
+}
+
+/// 最小禁则：只在相邻列间移动一个单元，不连锁。
+fn apply_kinsoku(cols: &mut [Vec<usize>], atoms: &[LayoutAtom]) {
+    for k in 0..cols.len().saturating_sub(1) {
+        let head_forbidden = cols[k + 1]
+            .first()
+            .and_then(|&i| atoms[i].ch())
+            .is_some_and(|c| KINSOKU_HEAD.contains(&c));
+        if head_forbidden && !cols[k].is_empty() {
+            // 列首禁则字拉回上一列末（允许该列超高 1em，由画布如实量出）。
+            let i = cols[k + 1].remove(0);
+            cols[k].push(i);
+            continue;
+        }
+        let tail_forbidden = cols[k]
+            .last()
+            .and_then(|&i| atoms[i].ch())
+            .is_some_and(|c| KINSOKU_TAIL.contains(&c));
+        if tail_forbidden && !cols[k + 1].is_empty() {
+            // 列尾禁则字推到下一列首。
+            let i = cols[k].pop().unwrap();
+            cols[k + 1].insert(0, i);
+        }
+    }
+}
+
+/// 光栅化已定位字形：返回（图像，落笔的非空字形数）。
+///
+/// 旋转在写像素时做坐标变换；描边仍是 ColorMap + 形态学膨胀，与横排同一路径。
+pub fn rasterize_placed(
+    renderer: &mut PngRenderer,
+    placed: &PlacedLayout,
+    font_size: f32,
+    color_map: &mut ColorMap,
+) -> (RawImage, usize) {
+    let (w, h) = (placed.width as usize, placed.height as usize);
+    if w == 0 || h == 0 || placed.glyphs.is_empty() {
+        return (empty_rgba(), 0);
+    }
+    let mut rgb = vec![[0_u8; 4]; w * h];
+    let mut bg = vec![0_u8; w * h];
+    let mut written = 0;
+    for g in &placed.glyphs {
+        let mut touched = false;
+        renderer.cache.with_pixels(
+            &mut renderer.font_system,
+            g.cache_key,
+            g.color,
+            |px, py, color| {
+                let (dx, dy) = if g.rotate_90_cw {
+                    (g.x - px, g.y + py)
+                } else {
+                    (g.x + px, g.y + py)
+                };
+                let a = color.a();
+                if a == 0 || dx < 0 || dy < 0 || dx >= w as i32 || dy >= h as i32 {
+                    return;
+                }
+                let (dx, dy) = (dx as usize, dy as usize);
+                rgb[dy * w + dx] = [color.r(), color.g(), color.b(), a];
+                touched = true;
+                if a >= 127 {
+                    bg[dy * w + dx] = g.metadata as u8;
+                }
+            },
+        );
+        if touched && !g.is_whitespace {
+            written += 1;
+        }
+    }
+    (stroke_and_composite(rgb, bg, w, h, font_size, color_map), written)
+}
+
+/// 描边合成：bg 掩膜膨胀为描边，与前景叠合（横竖共用）。
+fn stroke_and_composite(
+    rgb: Vec<[u8; 4]>,
+    bg: Vec<u8>,
+    w: usize,
+    h: usize,
+    font_size: f32,
+    color_map: &ColorMap,
+) -> RawImage {
+    use interface_image::Mask;
+    let src = Mat::from_slice(&bg).unwrap();
+    let src = src.reshape(1, h as i32).unwrap();
+    let mut dst = Mat::default();
+    opencv::imgproc::dilate(
+        &src,
+        &mut dst,
+        &backdrop_kernel(font_size as i32).unwrap(),
+        opencv::core::Point::new(-1, -1),
+        1,
+        opencv::core::BORDER_CONSTANT,
+        opencv::imgproc::morphology_default_border_value().unwrap(),
+    )
+    .unwrap();
+    let stroked = color_map.to_image(Mask::from(dst));
+    let len = rgb.len() * 4;
+    let cap = rgb.capacity() * 4;
+    let ptr = rgb.as_ptr() as *mut u8;
+    std::mem::forget(rgb);
+    let flat: Vec<u8> = unsafe { Vec::from_raw_parts(ptr, len, cap) };
+    let text = RawImage {
+        width: w as u16,
+        height: h as u16,
+        data: flat,
+        channels: 4,
+    };
+    stroked.apply(text)
 }
 
 #[cfg(test)]
@@ -370,32 +938,70 @@ mod tests {
 
     #[test]
     fn fit_shrinks_only() {
+        use textline_merge::ScriptAxis;
         let mut renderer = PngRenderer::default();
         // 装不下：小于 preferred，不小于 min。
         let text = "才没有那种事呢".repeat(6);
         let template = h_template(&text, 120, 90, 30.0, 1.2);
-        let (font, _) = fit_font_px(&mut renderer, &template, 120.0, 90.0, 30.0, 10.0, 1.2);
+        let frame = test_frame(120, 90);
+        let (font, _) = fit_font_px(
+            &mut renderer,
+            ScriptAxis::Horizontal,
+            &template,
+            &frame,
+            30.0,
+            10.0,
+            1.2,
+        );
         assert!(font < 30.0, "font={font}");
         assert!(font >= 10.0, "font={font}");
         // 装得下：短句不放大。
         let template = h_template("Hi", 500, 200, 30.0, 1.01);
-        let (font, lh) = fit_font_px(&mut renderer, &template, 500.0, 200.0, 30.0, 10.0, 1.01);
+        let frame = test_frame(500, 200);
+        let (font, lh) = fit_font_px(
+            &mut renderer,
+            ScriptAxis::Horizontal,
+            &template,
+            &frame,
+            30.0,
+            10.0,
+            1.01,
+        );
         assert_eq!(font, 30.0);
         assert_eq!(lh, 1.01);
     }
 
     #[test]
     fn fit_falls_back_to_unit_line_height() {
+        use textline_merge::ScriptAxis;
         let mut renderer = PngRenderer::default();
         // 极小框长句：L1/L2 都装不下 → (min, 1.0)，由 L3 兜底。
         let text = "才没有那种事呢".repeat(6);
         let template = h_template(&text, 30, 30, 30.0, 1.2);
-        let (font, lh) = fit_font_px(&mut renderer, &template, 30.0, 30.0, 30.0, 10.0, 1.2);
+        let frame = test_frame(30, 30);
+        let (font, lh) = fit_font_px(
+            &mut renderer,
+            ScriptAxis::Horizontal,
+            &template,
+            &frame,
+            30.0,
+            10.0,
+            1.2,
+        );
         assert_eq!(font, 10.0);
         assert_eq!(lh, 1.0);
         // 行高 1.2 装不下、1.0 装得下 → L2 生效。
         let template = h_template(&"啊".repeat(9), 35, 32, 30.0, 1.2);
-        let (font, lh) = fit_font_px(&mut renderer, &template, 35.0, 32.0, 30.0, 10.0, 1.2);
+        let frame = test_frame(35, 32);
+        let (font, lh) = fit_font_px(
+            &mut renderer,
+            ScriptAxis::Horizontal,
+            &template,
+            &frame,
+            30.0,
+            10.0,
+            1.2,
+        );
         assert_eq!(lh, 1.0);
         assert!(font >= 10.0 && font < 12.0, "font={font}");
     }
@@ -449,6 +1055,138 @@ mod tests {
         assert_eq!(
             RenderDirection::Vertical.resolve(ScriptAxis::Horizontal),
             ScriptAxis::VerticalLtr
+        );
+    }
+
+    fn test_frame(w: u32, h: u32) -> BubbleFrame {
+        BubbleFrame {
+            dest: [
+                (0, 0),
+                (w as i64, 0),
+                (w as i64, h as i64),
+                (0, h as i64),
+            ],
+            width_px: w,
+            height_px: h,
+        }
+    }
+
+    fn pack(text: &str, frame_w: u32, frame_h: u32, font: f32) -> PlacedLayout {
+        let mut renderer = PngRenderer::default();
+        let mut color_map = ColorMap::default();
+        let frame = test_frame(frame_w, frame_h);
+        let bg_id = color_map.get_id((255, 255, 255)).unwrap();
+        pack_vertical(
+            &mut renderer,
+            text,
+            &frame,
+            font,
+            1.2,
+            (0, 0, 0),
+            bg_id,
+            &None,
+            &mut color_map,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn segment_classifies_mixed_text() {
+        let atoms = segment_atoms("あA\u{30FC}12\n\u{3001}\u{3002}");
+        assert_eq!(atoms.len(), 7);
+        assert!(matches!(atoms[0], LayoutAtom::Upright('あ')));
+        assert!(matches!(atoms[1], LayoutAtom::Rotated('A')));
+        assert!(matches!(atoms[2], LayoutAtom::Rotated('\u{30FC}')));
+        assert!(matches!(atoms[3], LayoutAtom::TateChuYoko(ref s) if s == "12"));
+        assert!(matches!(atoms[4], LayoutAtom::Break));
+        assert!(matches!(atoms[5], LayoutAtom::Upright('\u{3001}')));
+        assert!(matches!(atoms[6], LayoutAtom::Upright('\u{3002}')));
+        // 长数字串按两位切开。
+        let atoms = segment_atoms("2026");
+        assert_eq!(atoms.len(), 2);
+        assert!(matches!(atoms[0], LayoutAtom::TateChuYoko(ref s) if s == "20"));
+        assert!(matches!(atoms[1], LayoutAtom::TateChuYoko(ref s) if s == "26"));
+    }
+
+    #[test]
+    fn vertical_column_flows_down_then_right() {
+        // 单列：同 x（墨水居中 ±1px），y 递增。
+        let placed = pack("あいうえお", 200, 500, 30.0);
+        assert_eq!(placed.cols, 1);
+        let xs: Vec<i32> = placed.glyphs.iter().map(|g| g.x).collect();
+        assert!(xs.iter().all(|&x| (x - xs[0]).abs() <= 1), "{xs:?}");
+        let ys: Vec<i32> = placed.glyphs.iter().map(|g| g.y).collect();
+        assert!(ys.windows(2).all(|w| w[1] > w[0]), "{ys:?}");
+        // 超一列高：第二列 x 更大（+x，左到右）。
+        let placed = pack("あいうえお", 200, 90, 30.0);
+        assert_eq!(placed.cols, 2);
+        let col1_x = placed.glyphs[0].x;
+        let col2_x = placed.glyphs[3].x;
+        assert!(col2_x > col1_x, "{col1_x} vs {col2_x}");
+    }
+
+    #[test]
+    fn vertical_marks_rotation_and_tatechuyoko() {
+        let placed = pack("A", 200, 200, 30.0);
+        assert_eq!(placed.glyphs.len(), 1);
+        assert!(placed.glyphs[0].rotate_90_cw);
+        let placed = pack("あ", 200, 200, 30.0);
+        assert!(!placed.glyphs[0].rotate_90_cw);
+        // 纵中横：两个数字挤进一格高度。
+        let placed = pack("12", 200, 200, 30.0);
+        assert_eq!(placed.glyphs.len(), 2);
+        assert!(placed.glyphs.iter().all(|g| !g.rotate_90_cw));
+        let ys: Vec<i32> = placed.glyphs.iter().map(|g| g.y).collect();
+        assert!((ys[1] - ys[0]).abs() < 30, "{ys:?}");
+    }
+
+    #[test]
+    fn kinsoku_moves_single_unit_between_columns() {
+        // 列首禁则字拉回上一列末。
+        let atoms = segment_atoms("あい\u{3001}う");
+        let mut cols = vec![vec![0, 1], vec![2, 3]];
+        apply_kinsoku(&mut cols, &atoms);
+        assert_eq!(cols, vec![vec![0, 1, 2], vec![3]]);
+        // 列尾禁则字推到下一列首。
+        let atoms = segment_atoms("あ\u{300C}い");
+        let mut cols = vec![vec![0, 1], vec![2]];
+        apply_kinsoku(&mut cols, &atoms);
+        assert_eq!(cols, vec![vec![0], vec![1, 2]]);
+        // 首列列首 / 末列列尾无处可移，保持不动。
+        let atoms = segment_atoms("\u{3001}あ");
+        let mut cols = vec![vec![0], vec![1]];
+        apply_kinsoku(&mut cols, &atoms);
+        assert_eq!(cols, vec![vec![0], vec![1]]);
+    }
+
+    #[test]
+    fn vertical_raster_has_stroke_halo() {
+        // CacheKey 与 FontSystem 绑定：整形和光栅化必须用同一 renderer。
+        let mut renderer = PngRenderer::default();
+        let mut color_map = ColorMap::default();
+        let frame = test_frame(200, 200);
+        let bg_id = color_map.get_id((255, 255, 255)).unwrap();
+        let placed = pack_vertical(
+            &mut renderer,
+            "あ",
+            &frame,
+            30.0,
+            1.2,
+            (0, 0, 0),
+            bg_id,
+            &None,
+            &mut color_map,
+        )
+        .unwrap();
+        let (img, written) = rasterize_placed(&mut renderer, &placed, 30.0, &mut color_map);
+        assert_eq!(written, 1);
+        // 前景墨水与膨胀后的描边（纯白不透明像素）同时存在。
+        assert!(img.data.chunks(4).any(|p| p[3] > 0 && p[0] < 128));
+        assert!(
+            img.data
+                .chunks(4)
+                .any(|p| p == [255, 255, 255, 255]),
+            "描边掩膜为空"
         );
     }
 }

@@ -10,14 +10,14 @@ use export::Export;
 use interface_image::{DimType, Mask, RawImage};
 
 mod layout;
-use layout::{BubbleFrame, fit_font_px, shrink_isotropic};
+use layout::{BubbleFrame, fit_font_px, layout, rasterize_placed, shrink_isotropic};
 use opencv::{
     calib3d::{find_homography, RANSAC},
     core::{
-        no_array, Mat, MatTraitConst, MatTraitManual as _, Point, Point2f, Scalar, Size, Vector,
+        no_array, Mat, MatTraitManual as _, Point, Point2f, Scalar, Size, Vector,
         BORDER_CONSTANT,
     },
-    imgproc::{self, dilate, morphology_default_border_value, warp_perspective, INTER_LINEAR},
+    imgproc::{self, warp_perspective, INTER_LINEAR},
 };
 use ordered_float::OrderedFloat;
 use textline_merge::{ScriptAxis, TextBlock};
@@ -124,7 +124,8 @@ impl PngRenderer {
             return Ok(());
         };
         let (frame_w, frame_h) = (frame.width_px as f32, frame.height_px as f32);
-        let vertical = config.direction.resolve(block.axis()).is_vertical();
+        let axis = config.direction.resolve(block.axis());
+        let vertical = axis.is_vertical();
         let min_font = if config.font_size_minimum < 0.0 {
             ((img.width as f32 + img.height as f32) / 200.0).max(1.0)
         } else {
@@ -169,9 +170,9 @@ impl PngRenderer {
         };
         let (font_size, line_height) = fit_font_px(
             self,
+            axis,
             &template,
-            frame_w,
-            frame_h,
+            &frame,
             preferred,
             min_font,
             line_height,
@@ -179,7 +180,11 @@ impl PngRenderer {
         let mut fitted = template.clone();
         fitted.set_font_size(font_size);
         fitted.set_line_height(line_height);
-        let mut box_img = self.render_block(fitted);
+        let mut color_map = ColorMap::default();
+        let Some(placed) = layout(self, axis, &fitted, &frame, &mut color_map) else {
+            return Ok(());
+        };
+        let (mut box_img, _written) = rasterize_placed(self, &placed, font_size, &mut color_map);
         if box_img.width == 0 || box_img.height == 0 {
             return Ok(());
         }
@@ -320,80 +325,10 @@ impl PngRenderer {
         let font_size =
             text.texts.iter().map(|v| v.font_size).sum::<f32>() / text.texts.len() as f32;
         let mut color_map = ColorMap::default();
-        let buffer = self.create_buffer(&text, &mut color_map);
-        let layouts = buffer.layout_runs().collect::<Vec<_>>();
-        let (w, h) = wh(&layouts);
-        if w == 0 || h == 0 {
-            return empty_rgba();
+        match layout::layout_horizontal(self, &text) {
+            Some(placed) => rasterize_placed(self, &placed, font_size, &mut color_map).0,
+            None => empty_rgba(),
         }
-
-        let mut rgb = vec![[0_u8; 4]; h as usize * w as usize];
-        let mut bg = vec![0_u8; h as usize * w as usize];
-        // 宽度约束下对齐会产生行内偏移（居中/右对齐），画布按内容宽分配，
-        // 写像素时必须减掉该偏移，否则内容整体落在画布外。
-        let wrap_w = text.size.0 as f32;
-        for run in layouts {
-            let shift = match text.align {
-                Align::Center => (wrap_w - run.line_w) / 2.0,
-                Align::Right | Align::End => wrap_w - run.line_w,
-                _ => 0.0,
-            }
-            .round() as i32;
-            for glyph in run.glyphs.iter() {
-                let physical_glyph = glyph.physical((0., 0.), 1.0);
-                let glyph_color = glyph.color_opt.unwrap_or(Color::rgb(0, 0, 0));
-                self.cache.with_pixels(
-                    &mut self.font_system,
-                    physical_glyph.cache_key,
-                    glyph_color,
-                    |x, y, color| {
-                        let x = physical_glyph.x - shift + x;
-                        let y = run.line_y as i32 + physical_glyph.y + y;
-                        let a = color.a();
-                        // 字形墨水可超出 wh() 行盒（行高 < 字形实际高时末行下溢、
-                        // 右 bearing 外溢），超界像素丢弃而非 panic。
-                        if a == 0 || x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
-                            return;
-                        }
-                        let x = x as usize;
-                        let y = y as usize;
-                        rgb[y * w + x] = [color.r(), color.g(), color.b(), a];
-                        if a >= 127 {
-                            bg[y * w + x] = glyph.metadata as u8;
-                        }
-                    },
-                );
-            }
-        }
-
-        let src = Mat::from_slice(&bg).unwrap();
-        let src = src.reshape(1, h as i32).unwrap();
-        let mut dst = Mat::default();
-        dilate(
-            &src,
-            &mut dst,
-            &backdrop_kernel(font_size as i32).unwrap(),
-            Point::new(-1, -1),
-            1,
-            BORDER_CONSTANT,
-            morphology_default_border_value().unwrap(),
-        )
-        .unwrap();
-        let bg = color_map.to_image(Mask::from(dst));
-        let len = rgb.len() * 4;
-        let cap = rgb.capacity() * 4;
-        let ptr = rgb.as_ptr() as *mut u8;
-
-        std::mem::forget(rgb);
-
-        let flat: Vec<u8> = unsafe { Vec::from_raw_parts(ptr, len, cap) };
-        let text = RawImage {
-            width: w as DimType,
-            height: h as DimType,
-            data: flat,
-            channels: 4,
-        };
-        bg.apply(text)
     }
 }
 
