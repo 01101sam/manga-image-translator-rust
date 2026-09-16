@@ -177,7 +177,7 @@ impl Quadrilateral {
         let norm1 = v1.euclidean_norm();
         let unit_v1 = v1.to_f64() / norm1;
         let norm2 = v2.euclidean_norm();
-        let unit_v2 = v1.to_f64() / norm2;
+        let unit_v2 = v2.to_f64() / norm2;
         if unit_v1.dot(e1).abs() < 0.05
             || unit_v1.dot(e2).abs() < 0.05
             || unit_v2.dot(e1).abs() < 0.05
@@ -601,5 +601,16 @@ mod tests {
         assert_eq!(structure[1], MyPoint::from((5, 4)));
         assert_eq!(structure[2], MyPoint::from((10, 2)));
         assert_eq!(structure[3], MyPoint::from((0, 2)));
+    }
+
+    #[test]
+    fn axis_aligned_checks_both_structure_axes() {
+        // 左右边中点连线水平（v2 轴对齐），上下边中点连线倾斜（v1 不对齐）。
+        // 误写 v1 时第二轴检查恒等于第一轴，此用例会误判为 false。
+        let slanted = Quadrilateral::new(vec![(0, 0), (10, 2), (12, 8), (0, 10)], 1.0);
+        assert!(slanted.is_approximate_axis_aligned());
+        // 常见情形不受影响：轴对齐矩形仍为 true。
+        let rect = Quadrilateral::new(vec![(0, 0), (10, 0), (10, 4), (0, 4)], 1.0);
+        assert!(rect.is_approximate_axis_aligned());
     }
 }
