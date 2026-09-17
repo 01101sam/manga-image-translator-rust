@@ -93,9 +93,9 @@ final class BonjourBrowser: ObservableObject {
         case .name(let name, _):
             return name
         case .ipv4(let addr):
-            return "\(addr)"
+            return stripInterfaceZone("\(addr)")
         case .ipv6(let addr):
-            return "\(addr)"
+            return stripInterfaceZone("\(addr)")
         @unknown default:
             return "\(host)"
         }
