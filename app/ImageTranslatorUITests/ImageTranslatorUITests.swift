@@ -182,6 +182,46 @@ final class ImageTranslatorUITests: XCTestCase {
         attachShot(app, name: "config-webview")
     }
 
+    func testTabSwitchStress() throws {
+        let env = try UITestEnv.load()
+        let token = try env.tokenOrPair()
+        let app = XCUIApplication()
+        app.launchArguments = ["-paired-test", env.host, "\(env.port)", token]
+        app.launch()
+
+        let jobs = tabButton(app, "任务")
+        let config = tabButton(app, "配置")
+        let reader = tabButton(app, "阅读")
+        XCTAssertTrue(jobs.waitForExistence(timeout: 10), "jobs tab after launch")
+
+        for cycle in 1...50 {
+            jobs.tap()
+            XCTAssertTrue(
+                app.navigationBars["任务"].waitForExistence(timeout: 3),
+                "jobs unresponsive at cycle \(cycle)"
+            )
+            config.tap()
+            XCTAssertTrue(
+                app.navigationBars["配置"].waitForExistence(timeout: 3),
+                "config unresponsive at cycle \(cycle)"
+            )
+            reader.tap()
+            XCTAssertTrue(
+                app.navigationBars["阅读"].waitForExistence(timeout: 3),
+                "reader unresponsive at cycle \(cycle)"
+            )
+        }
+        attachShot(app, name: "tab-switch-stress")
+    }
+
+    private func tabButton(_ app: XCUIApplication, _ title: String) -> XCUIElement {
+        let inBar = app.tabBars.buttons[title]
+        if inBar.exists {
+            return inBar
+        }
+        return app.buttons[title].firstMatch
+    }
+
     /// Real Keychain pairing. If a prior run already persisted a token, 更换 Daemon then type a fresh code.
     private func pairViaRealDiscovery(_ app: XCUIApplication, env: UITestEnv) throws {
         let jobsTab = app.tabBars.buttons["任务"]
