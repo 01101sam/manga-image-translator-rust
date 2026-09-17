@@ -1,0 +1,250 @@
+import Foundation
+import UniformTypeIdentifiers
+
+@MainActor
+final class AppSession: ObservableObject {
+    @Published private(set) var pairing: PairingPhase
+    @Published var jobs: [JobRow] = []
+    @Published var artifacts: [String: Data] = [:]
+    @Published var engine: EngineState?
+    @Published var banner: String?
+    @Published var pairingCode: String = ""
+
+    let tokens: TokenStoring
+    let browser: BonjourBrowser
+    private let session: URLSession
+    private var pollTask: Task<Void, Never>?
+
+    init(tokens: TokenStoring = KeychainTokenStore(), session: URLSession = .shared, browser: BonjourBrowser = BonjourBrowser()) {
+        self.tokens = tokens
+        self.session = session
+        self.browser = browser
+        if let paired = tokens.load() {
+            pairing = .paired(paired.endpoint, paired.token)
+        } else {
+            pairing = .browsing
+        }
+        browser.start()
+        startPolling()
+    }
+
+    var client: DaemonClient? {
+        guard let endpoint = pairing.endpoint else { return nil }
+        return DaemonClient(session: session, endpoint: endpoint, token: pairing.token)
+    }
+
+    var isPaired: Bool {
+        if case .paired = pairing { return true }
+        return false
+    }
+
+    func select(_ endpoint: DaemonEndpoint) {
+        applyPairing(.select(endpoint))
+    }
+
+    func submitPairingCode() {
+        applyPairing(.submitCode(pairingCode))
+    }
+
+    func retryPairing() {
+        pairingCode = ""
+        applyPairing(.retry)
+    }
+
+    func forgetPairing() {
+        pairingCode = ""
+        applyPairing(.forget)
+    }
+
+    func submitImage(_ data: Data, filename: String, mime: String = "image/jpeg") async {
+        banner = nil
+        guard var api = client, api.token != nil else { return }
+        do {
+            let jobId = try await api.submitJob(image: data, filename: filename, mime: mime, overrides: nil)
+            let row = JobRow(
+                snapshot: JobSnapshot(jobId: jobId, state: .queued, positionInQueue: nil, error: nil),
+                cancelPending: false
+            )
+            jobs.insert(row, at: 0)
+        } catch DaemonError.unauthorized {
+            applyPairing(.unauthorized)
+        } catch {
+            await refreshEngineHint(fallback: error.localizedDescription)
+        }
+    }
+
+    func importURLs(_ urls: [URL]) async {
+        for url in urls {
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer {
+                if accessed { url.stopAccessingSecurityScopedResource() }
+            }
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                await importFolder(url)
+                continue
+            }
+            if url.pathExtension.lowercased() == "pdf" {
+                continue
+            }
+            guard let data = try? Data(contentsOf: url) else { continue }
+            await submitImage(data, filename: url.lastPathComponent, mime: mimeFor(url))
+        }
+    }
+
+    func requestCancel(_ jobId: String) async {
+        guard let idx = jobs.firstIndex(where: { $0.snapshot.jobId == jobId }) else { return }
+        let (next, command) = reduceJob(jobs[idx], .requestCancel)
+        jobs[idx] = next
+        guard case .cancel(let id) = command, var api = client else { return }
+        do {
+            _ = try await api.cancel(id: id)
+            applyJob(id, .cancelAccepted)
+        } catch DaemonError.unauthorized {
+            applyPairing(.unauthorized)
+        } catch {
+            applyJob(id, .cancelRejected)
+            banner = error.localizedDescription
+        }
+    }
+
+    func applyPageJob(_ jobId: String, _ life: JobLifecycle) {
+        applyJob(jobId, .snapshot(JobSnapshot(jobId: jobId, state: life, positionInQueue: nil, error: nil)))
+    }
+
+    private func importFolder(_ root: URL) async {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .contentTypeKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        for case let file as URL in enumerator {
+            let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .contentTypeKey])
+            guard values?.isRegularFile == true else { continue }
+            if let type = values?.contentType, type.conforms(to: .image),
+               let data = try? Data(contentsOf: file)
+            {
+                await submitImage(data, filename: file.lastPathComponent, mime: type.preferredMIMEType ?? "image/jpeg")
+            }
+        }
+    }
+
+    private func applyPairing(_ event: PairingEvent) {
+        let (next, command) = reducePairing(pairing, event)
+        pairing = next
+        switch command {
+        case .none:
+            break
+        case .requestPair:
+            Task { await runPairRequest() }
+        case .confirm(_, let code):
+            Task { await runPairConfirm(code) }
+        case .persist(let paired):
+            tokens.save(paired)
+            banner = nil
+        case .clearToken:
+            tokens.clear()
+            jobs = []
+            artifacts = [:]
+        }
+    }
+
+    private func runPairRequest() async {
+        guard var api = client else { return }
+        api.token = nil
+        do {
+            try await api.requestPair()
+            applyPairing(.requestSucceeded)
+        } catch {
+            applyPairing(.requestFailed(error.localizedDescription))
+        }
+    }
+
+    private func runPairConfirm(_ code: String) async {
+        guard var api = client else { return }
+        api.token = nil
+        do {
+            let token = try await api.confirm(code: code)
+            applyPairing(.confirmSucceeded(token))
+        } catch DaemonError.unauthorized {
+            applyPairing(.confirmFailed("配对码错误或已过期"))
+        } catch {
+            applyPairing(.confirmFailed(error.localizedDescription))
+        }
+    }
+
+    private func startPolling() {
+        pollTask?.cancel()
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.tick()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
+    private func tick() async {
+        guard isPaired, var api = client else { return }
+        let active = jobs.filter { $0.snapshot.state.isActive }
+        for row in active {
+            do {
+                let snap = try await api.job(id: row.snapshot.jobId)
+                applyJob(snap.jobId, .snapshot(snap))
+                if snap.state == .done {
+                    await fetchArtifact(id: snap.jobId, api: api)
+                }
+                if snap.state == .failed {
+                    await refreshEngineHint(fallback: snap.error ?? "Job 失败")
+                }
+            } catch DaemonError.unauthorized {
+                applyPairing(.unauthorized)
+                return
+            } catch {
+                break
+            }
+        }
+    }
+
+    private func fetchArtifact(id: String, api: DaemonClient) async {
+        if artifacts[id] != nil { return }
+        do {
+            let (data, _) = try await api.artifact(id: id)
+            artifacts[id] = data
+        } catch DaemonError.unauthorized {
+            applyPairing(.unauthorized)
+        } catch {
+            banner = error.localizedDescription
+        }
+    }
+
+    private func applyJob(_ jobId: String, _ event: JobEvent) {
+        guard let idx = jobs.firstIndex(where: { $0.snapshot.jobId == jobId }) else { return }
+        let (next, _) = reduceJob(jobs[idx], event)
+        jobs[idx] = next
+    }
+
+    private func refreshEngineHint(fallback: String) async {
+        guard let api = client else {
+            banner = fallback
+            return
+        }
+        do {
+            let state = try await api.engineStatus()
+            engine = state
+            if state == .stopped {
+                banner = "Engine 已停止，请到配置页启动后再提交。"
+            } else {
+                banner = fallback
+            }
+        } catch DaemonError.unauthorized {
+            applyPairing(.unauthorized)
+        } catch {
+            banner = fallback
+        }
+    }
+
+    private func mimeFor(_ url: URL) -> String {
+        UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "image/jpeg"
+    }
+}

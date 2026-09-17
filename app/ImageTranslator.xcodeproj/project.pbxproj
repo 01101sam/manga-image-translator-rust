@@ -1,0 +1,462 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		000000000000000000000101 /* ImageTranslatorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000100 /* ImageTranslatorApp.swift */; };
+		000000000000000000000103 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000102 /* RootView.swift */; };
+		000000000000000000000105 /* Domain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000104 /* Domain.swift */; };
+		000000000000000000000107 /* DaemonClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000106 /* DaemonClient.swift */; };
+		000000000000000000000109 /* MockURLProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000108 /* MockURLProtocol.swift */; };
+		00000000000000000000010B /* TokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000010A /* TokenStore.swift */; };
+		00000000000000000000010D /* BonjourBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000010C /* BonjourBrowser.swift */; };
+		00000000000000000000010F /* AppSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000010E /* AppSession.swift */; };
+		000000000000000000000111 /* JobListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000110 /* JobListView.swift */; };
+		000000000000000000000113 /* PlatformImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000112 /* PlatformImage.swift */; };
+		000000000000000000000115 /* PDFReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000114 /* PDFReaderView.swift */; };
+		000000000000000000000117 /* ConfigWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000116 /* ConfigWebView.swift */; };
+		010000000000000000000072 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 010000000000000000000071 /* Assets.xcassets */; };
+		000000000000000000000119 /* PageMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000118 /* PageMachineTests.swift */; };
+		00000000000000000000011B /* PairingMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000011A /* PairingMachineTests.swift */; };
+		00000000000000000000011D /* JobMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000011C /* JobMachineTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		010000000000000000000040 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 010000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 010000000000000000000020;
+			remoteInfo = ImageTranslator;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		000000000000000000000100 /* ImageTranslatorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageTranslatorApp.swift; sourceTree = "<group>"; };
+		000000000000000000000102 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		000000000000000000000104 /* Domain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Domain.swift; sourceTree = "<group>"; };
+		000000000000000000000106 /* DaemonClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonClient.swift; sourceTree = "<group>"; };
+		000000000000000000000108 /* MockURLProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockURLProtocol.swift; sourceTree = "<group>"; };
+		00000000000000000000010A /* TokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenStore.swift; sourceTree = "<group>"; };
+		00000000000000000000010C /* BonjourBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourBrowser.swift; sourceTree = "<group>"; };
+		00000000000000000000010E /* AppSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSession.swift; sourceTree = "<group>"; };
+		000000000000000000000110 /* JobListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobListView.swift; sourceTree = "<group>"; };
+		000000000000000000000112 /* PlatformImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformImage.swift; sourceTree = "<group>"; };
+		000000000000000000000114 /* PDFReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFReaderView.swift; sourceTree = "<group>"; };
+		000000000000000000000116 /* ConfigWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigWebView.swift; sourceTree = "<group>"; };
+		010000000000000000000070 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		010000000000000000000071 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		000000000000000000000118 /* PageMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageMachineTests.swift; sourceTree = "<group>"; };
+		00000000000000000000011A /* PairingMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingMachineTests.swift; sourceTree = "<group>"; };
+		00000000000000000000011C /* JobMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobMachineTests.swift; sourceTree = "<group>"; };
+		010000000000000000000010 /* ImageTranslator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ImageTranslator.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		010000000000000000000011 /* ImageTranslatorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ImageTranslatorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		010000000000000000000031 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		010000000000000000000034 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		010000000000000000000004 /* ImageTranslator */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000100 /* ImageTranslatorApp.swift */,
+				000000000000000000000102 /* RootView.swift */,
+				000000000000000000000104 /* Domain.swift */,
+				000000000000000000000106 /* DaemonClient.swift */,
+				000000000000000000000108 /* MockURLProtocol.swift */,
+				00000000000000000000010A /* TokenStore.swift */,
+				00000000000000000000010C /* BonjourBrowser.swift */,
+				00000000000000000000010E /* AppSession.swift */,
+				000000000000000000000110 /* JobListView.swift */,
+				000000000000000000000112 /* PlatformImage.swift */,
+				000000000000000000000114 /* PDFReaderView.swift */,
+				000000000000000000000116 /* ConfigWebView.swift */,
+				010000000000000000000070 /* Info.plist */,
+				010000000000000000000071 /* Assets.xcassets */,
+			);
+			path = ImageTranslator;
+			sourceTree = "<group>";
+		};
+		010000000000000000000005 /* ImageTranslatorTests */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000118 /* PageMachineTests.swift */,
+				00000000000000000000011A /* PairingMachineTests.swift */,
+				00000000000000000000011C /* JobMachineTests.swift */,
+			);
+			path = ImageTranslatorTests;
+			sourceTree = "<group>";
+		};
+		010000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				010000000000000000000010 /* ImageTranslator.app */,
+				010000000000000000000011 /* ImageTranslatorTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		010000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				010000000000000000000004 /* ImageTranslator */,
+				010000000000000000000005 /* ImageTranslatorTests */,
+				010000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		010000000000000000000020 /* ImageTranslator */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 010000000000000000000060 /* Build configuration list for PBXNativeTarget "ImageTranslator" */;
+			buildPhases = (
+				010000000000000000000030 /* Sources */,
+				010000000000000000000031 /* Frameworks */,
+				010000000000000000000032 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ImageTranslator;
+			productName = ImageTranslator;
+			productReference = 010000000000000000000010 /* ImageTranslator.app */;
+			productType = "com.apple.product-type.application";
+		};
+		010000000000000000000021 /* ImageTranslatorTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 010000000000000000000062 /* Build configuration list for PBXNativeTarget "ImageTranslatorTests" */;
+			buildPhases = (
+				010000000000000000000033 /* Sources */,
+				010000000000000000000034 /* Frameworks */,
+				010000000000000000000035 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				010000000000000000000041 /* PBXTargetDependency */,
+			);
+			name = ImageTranslatorTests;
+			productName = ImageTranslatorTests;
+			productReference = 010000000000000000000011 /* ImageTranslatorTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		010000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					010000000000000000000020 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					010000000000000000000021 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 010000000000000000000020;
+					};
+				};
+			};
+			buildConfigurationList = 010000000000000000000061 /* Build configuration list for PBXProject "ImageTranslator" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = "zh-Hans";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				"zh-Hans",
+			);
+			mainGroup = 010000000000000000000002;
+			productRefGroup = 010000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				010000000000000000000020 /* ImageTranslator */,
+				010000000000000000000021 /* ImageTranslatorTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		010000000000000000000032 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				010000000000000000000072 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		010000000000000000000035 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		010000000000000000000030 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000000101 /* ImageTranslatorApp.swift in Sources */,
+				000000000000000000000103 /* RootView.swift in Sources */,
+				000000000000000000000105 /* Domain.swift in Sources */,
+				000000000000000000000107 /* DaemonClient.swift in Sources */,
+				000000000000000000000109 /* MockURLProtocol.swift in Sources */,
+				00000000000000000000010B /* TokenStore.swift in Sources */,
+				00000000000000000000010D /* BonjourBrowser.swift in Sources */,
+				00000000000000000000010F /* AppSession.swift in Sources */,
+				000000000000000000000111 /* JobListView.swift in Sources */,
+				000000000000000000000113 /* PlatformImage.swift in Sources */,
+				000000000000000000000115 /* PDFReaderView.swift in Sources */,
+				000000000000000000000117 /* ConfigWebView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		010000000000000000000033 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000000119 /* PageMachineTests.swift in Sources */,
+				00000000000000000000011B /* PairingMachineTests.swift in Sources */,
+				00000000000000000000011D /* JobMachineTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		010000000000000000000041 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 010000000000000000000020 /* ImageTranslator */;
+			targetProxy = 010000000000000000000040 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		010000000000000000000050 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				XROS_DEPLOYMENT_TARGET = 1.0;
+
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		010000000000000000000051 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				XROS_DEPLOYMENT_TARGET = 1.0;
+
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		010000000000000000000052 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ImageTranslator/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "图片翻译";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wisdomworldworkshop.imagetranslator;
+				PRODUCT_NAME = ImageTranslator;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 1.0;
+
+			};
+			name = Debug;
+		};
+		010000000000000000000053 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ImageTranslator/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "图片翻译";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wisdomworldworkshop.imagetranslator;
+				PRODUCT_NAME = ImageTranslator;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 1.0;
+
+			};
+			name = Release;
+		};
+		010000000000000000000054 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wisdomworldworkshop.imagetranslator.tests;
+				PRODUCT_NAME = ImageTranslatorTests;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ImageTranslator.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ImageTranslator";
+				XROS_DEPLOYMENT_TARGET = 1.0;
+
+			};
+			name = Debug;
+		};
+		010000000000000000000055 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wisdomworldworkshop.imagetranslator.tests;
+				PRODUCT_NAME = ImageTranslatorTests;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ImageTranslator.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ImageTranslator";
+				XROS_DEPLOYMENT_TARGET = 1.0;
+
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		010000000000000000000060 /* Build configuration list for PBXNativeTarget "ImageTranslator" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				010000000000000000000052 /* Debug */,
+				010000000000000000000053 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		010000000000000000000061 /* Build configuration list for PBXProject "ImageTranslator" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				010000000000000000000050 /* Debug */,
+				010000000000000000000051 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		010000000000000000000062 /* Build configuration list for PBXNativeTarget "ImageTranslatorTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				010000000000000000000054 /* Debug */,
+				010000000000000000000055 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 010000000000000000000001 /* Project object */;
+}
