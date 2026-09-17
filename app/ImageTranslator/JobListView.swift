@@ -1,5 +1,6 @@
 import PhotosUI
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 struct JobListView: View {
@@ -7,6 +8,7 @@ struct JobListView: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var importing = false
     @State private var previewJobId: String?
+    @State private var selectedJobId: String?
 
     var body: some View {
         NavigationStack {
@@ -27,28 +29,50 @@ struct JobListView: View {
                 }
                 List {
                     ForEach(session.jobs, id: \.snapshot.jobId) { row in
-                        let rowView = JobRowView(row: row) {
+                        JobRowView(row: row) {
                             Task { await session.requestCancel(row.snapshot.jobId) }
                         }
-                        if row.snapshot.state == .done {
-                            rowView
-                                .contentShape(Rectangle())
-                                .onTapGesture { previewJobId = row.snapshot.jobId }
-                        } else {
-                            rowView
+                        .listRowBackground(
+                            selectedJobId == row.snapshot.jobId
+                                ? Color.accentColor.opacity(0.16)
+                                : Color.clear
+                        )
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedJobId = row.snapshot.jobId
+                            if canOpenJobPreview(row.snapshot.state) {
+                                previewJobId = row.snapshot.jobId
+                            }
                         }
                     }
+                    .onDelete { session.removeJobs(at: $0) }
+                    .onMove { session.moveJobs(from: $0, to: $1) }
                 }
                 .overlay {
                     if session.jobs.isEmpty {
                         ContentUnavailableView("还没有 Job", systemImage: "photo", description: Text("从相册、文件或文件夹导入图片。"))
                     }
+                    JobListKeyCatcher(
+                        onMove: { moveSelection(by: $0) },
+                        onEnter: { openSelectedPreview() }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(false)
                 }
             }
             .navigationTitle("任务")
             .onAppear { session.consumePendingHooks() }
+            .onChange(of: session.jobs.map(\.snapshot.jobId)) { _, ids in
+                if let selectedJobId, !ids.contains(selectedJobId) {
+                    self.selectedJobId = nil
+                }
+                if let previewJobId, !ids.contains(previewJobId) {
+                    self.previewJobId = nil
+                }
+            }
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
+                    EditButton()
                     PhotosPicker(selection: $photoItems, maxSelectionCount: 32, matching: .images) {
                         Label("相册", systemImage: "photo.on.rectangle")
                     }
@@ -86,19 +110,46 @@ struct JobListView: View {
                     photoItems = []
                 }
             }
-            .sheet(item: Binding(
-                get: { previewJobId.map(PreviewItem.init(id:)) },
-                set: { previewJobId = $0?.id }
-            )) { item in
-                ArtifactPreview(jobId: item.id)
-                    .environmentObject(session)
+            .sheet(isPresented: Binding(
+                get: { previewJobId != nil },
+                set: { if !$0 { previewJobId = nil } }
+            )) {
+                ArtifactPreview(
+                    jobId: previewJobId ?? "",
+                    onMoveDone: { delta in
+                        if let next = adjacentDoneJobId(jobs: session.jobs, currentId: previewJobId, delta: delta) {
+                            previewJobId = next
+                            selectedJobId = next
+                        }
+                    }
+                )
+                .environmentObject(session)
             }
         }
     }
-}
 
-private struct PreviewItem: Identifiable {
-    var id: String
+    private func moveSelection(by delta: Int) {
+        if previewJobId != nil {
+            if let next = adjacentDoneJobId(jobs: session.jobs, currentId: previewJobId, delta: delta) {
+                previewJobId = next
+                selectedJobId = next
+            }
+            return
+        }
+        let ids = session.jobs.map(\.snapshot.jobId)
+        let current = selectedJobId.flatMap { ids.firstIndex(of: $0) }
+        if let idx = moveJobHighlight(count: ids.count, current: current, delta: delta) {
+            selectedJobId = ids[idx]
+        }
+    }
+
+    private func openSelectedPreview() {
+        guard let selectedJobId,
+              let row = session.jobs.first(where: { $0.snapshot.jobId == selectedJobId }),
+              canOpenJobPreview(row.snapshot.state)
+        else { return }
+        previewJobId = selectedJobId
+    }
 }
 
 struct JobRowView: View {
@@ -106,9 +157,10 @@ struct JobRowView: View {
     let onCancel: () -> Void
 
     var body: some View {
-        HStack {
+        HStack(spacing: 12) {
+            thumbnail
             VStack(alignment: .leading, spacing: 4) {
-                Text(row.snapshot.jobId)
+                Text(shortJobId(row.snapshot.jobId))
                     .font(.caption.monospaced())
                     .lineLimit(1)
                 Text(label(for: row.snapshot))
@@ -124,6 +176,23 @@ struct JobRowView: View {
                     .disabled(row.cancelPending)
                     .accessibilityIdentifier("job-cancel")
             }
+        }
+    }
+
+    @ViewBuilder
+    private var thumbnail: some View {
+        if let data = row.thumbnail, let image = UIImage(data: data) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 44, height: 44)
+                .clipped()
+                .cornerRadius(6)
+        } else {
+            Image(systemName: "doc")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
         }
     }
 
@@ -149,6 +218,7 @@ struct JobRowView: View {
 struct ArtifactPreview: View {
     @EnvironmentObject private var session: AppSession
     let jobId: String
+    var onMoveDone: (Int) -> Void = { _ in }
 
     var body: some View {
         NavigationStack {
@@ -163,6 +233,14 @@ struct ArtifactPreview: View {
                     ProgressView("正在读取 Artifact…")
                 }
             }
+            .overlay {
+                JobListKeyCatcher(
+                    onMove: onMoveDone,
+                    onEnter: {}
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+            }
             .navigationTitle("译文")
             .toolbar {
                 if let data = session.artifacts[jobId] {
@@ -171,6 +249,49 @@ struct ArtifactPreview: View {
             }
         }
     }
+}
+
+struct JobListKeyCatcher: UIViewControllerRepresentable {
+    var onMove: (Int) -> Void
+    var onEnter: () -> Void
+
+    func makeUIViewController(context: Context) -> JobListKeyController {
+        let controller = JobListKeyController()
+        controller.onMove = onMove
+        controller.onEnter = onEnter
+        return controller
+    }
+
+    func updateUIViewController(_ controller: JobListKeyController, context: Context) {
+        controller.onMove = onMove
+        controller.onEnter = onEnter
+        controller.becomeFirstResponder()
+    }
+}
+
+final class JobListKeyController: UIViewController {
+    var onMove: ((Int) -> Void)?
+    var onEnter: (() -> Void)?
+
+    override var canBecomeFirstResponder: Bool { true }
+
+    override var keyCommands: [UIKeyCommand]? {
+        [
+            UIKeyCommand(input: UIKeyCommand.inputUpArrow, modifierFlags: [], action: #selector(up)),
+            UIKeyCommand(input: UIKeyCommand.inputDownArrow, modifierFlags: [], action: #selector(down)),
+            UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(enter)),
+            UIKeyCommand(input: "\n", modifierFlags: [], action: #selector(enter)),
+        ]
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        becomeFirstResponder()
+    }
+
+    @objc private func up() { onMove?(-1) }
+    @objc private func down() { onMove?(1) }
+    @objc private func enter() { onEnter?() }
 }
 
 struct ArtifactFile: Transferable {
