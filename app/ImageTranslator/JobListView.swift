@@ -11,9 +11,11 @@ struct JobListView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Text(ProcessInfo.processInfo.arguments.joined(separator: " "))
-                    .frame(width: 1, height: 1)
-                    .accessibilityIdentifier("launch-args")
+                if TestHooks.fromProcessInfo().isolatesSession {
+                    Text(ProcessInfo.processInfo.arguments.joined(separator: " "))
+                        .frame(width: 1, height: 1)
+                        .accessibilityIdentifier("launch-args")
+                }
                 if let banner = session.banner {
                     Text(banner)
                         .font(.footnote)
@@ -71,7 +73,14 @@ struct JobListView: View {
                 Task {
                     for item in items {
                         if let data = try? await item.loadTransferable(type: Data.self) {
-                            await session.submitImage(data, filename: "photo.jpg", mime: "image/jpeg")
+                            var label = imageUploadLabel(for: data)
+                            if label.mime == "application/octet-stream", let type = item.supportedContentTypes.first {
+                                label = ImageUploadLabel(
+                                    filename: "photo.\(type.preferredFilenameExtension ?? "bin")",
+                                    mime: type.preferredMIMEType ?? "application/octet-stream"
+                                )
+                            }
+                            await session.submitImage(data, filename: label.filename, mime: label.mime)
                         }
                     }
                     photoItems = []

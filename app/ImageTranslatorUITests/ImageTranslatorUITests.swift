@@ -42,7 +42,7 @@ final class ImageTranslatorUITests: XCTestCase {
         defer { attachShot(app, name: "job-submit-end") }
 
         let args = app.descendants(matching: .any)["launch-args"]
-        _ = args.waitForExistence(timeout: 10)
+        XCTAssertTrue(args.waitForExistence(timeout: 10), "launch-args only when hooks are set")
         let row = app.descendants(matching: .any)["job-row"]
         XCTAssertTrue(row.waitForExistence(timeout: 25), "job row after auto submit; args=\(args.label); banner=\(bannerLabel(app))")
         XCTAssertTrue(wait(for: { self.rowValues(app).contains { $0.contains("已完成") } }, timeout: 90), "done; \(rowValues(app))")
