@@ -8,6 +8,10 @@ final class BonjourBrowser: ObservableObject {
     private var browser: NWBrowser?
     private var resolvers: [ObjectIdentifier: NWConnection] = [:]
 
+    func seed(_ endpoint: DaemonEndpoint) {
+        upsert(endpoint)
+    }
+
     func start() {
         stop()
         let params = NWParameters()

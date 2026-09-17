@@ -7,6 +7,10 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
         true
     }
 
+    override class func canInit(with task: URLSessionTask) -> Bool {
+        true
+    }
+
     override class func canonicalRequest(for request: URLRequest) -> URLRequest {
         request
     }

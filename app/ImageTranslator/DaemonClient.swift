@@ -1,10 +1,23 @@
 import Foundation
 
-enum DaemonError: Error, Equatable {
+enum DaemonError: Error, Equatable, LocalizedError {
     case unauthorized
     case http(status: Int, message: String)
     case decode
     case transport(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unauthorized:
+            return "unauthorized"
+        case .http(let status, let message):
+            return "http \(status) \(message)"
+        case .decode:
+            return "decode"
+        case .transport(let message):
+            return message
+        }
+    }
 }
 
 struct DaemonClient: Sendable {
@@ -156,7 +169,6 @@ struct DaemonClient: Sendable {
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.httpBody = body
         if let contentType {
             request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         }
@@ -166,7 +178,11 @@ struct DaemonClient: Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            if let body {
+                (data, response) = try await session.upload(for: request, from: body)
+            } else {
+                (data, response) = try await session.data(for: request)
+            }
         } catch {
             throw DaemonError.transport(error.localizedDescription)
         }

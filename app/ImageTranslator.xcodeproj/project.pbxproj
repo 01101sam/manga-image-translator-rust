@@ -23,10 +23,24 @@
 		000000000000000000000119 /* PageMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000118 /* PageMachineTests.swift */; };
 		00000000000000000000011B /* PairingMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000011A /* PairingMachineTests.swift */; };
 		00000000000000000000011D /* JobMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000011C /* JobMachineTests.swift */; };
+		00000000000000000000011F /* TestHooks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000011E /* TestHooks.swift */; };
+		000000000000000000000128 /* TestHooksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000127 /* TestHooksTests.swift */; };
+		000000000000000000000121 /* ImageTranslatorUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000120 /* ImageTranslatorUITests.swift */; };
+		000000000000000000000123 /* three-pages.pdf in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000122 /* three-pages.pdf */; };
+		000000000000000000000124 /* three-pages.pdf in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000122 /* three-pages.pdf */; };
+		000000000000000000000126 /* sample.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000125 /* sample.jpg */; };
+		000000000000000000000129 /* sample.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000125 /* sample.jpg */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
 		010000000000000000000040 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 010000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 010000000000000000000020;
+			remoteInfo = ImageTranslator;
+		};
+		010000000000000000000042 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 010000000000000000000001 /* Project object */;
 			proxyType = 1;
@@ -55,6 +69,12 @@
 		00000000000000000000011C /* JobMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobMachineTests.swift; sourceTree = "<group>"; };
 		010000000000000000000010 /* ImageTranslator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ImageTranslator.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		010000000000000000000011 /* ImageTranslatorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ImageTranslatorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		00000000000000000000011E /* TestHooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestHooks.swift; sourceTree = "<group>"; };
+		000000000000000000000127 /* TestHooksTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestHooksTests.swift; sourceTree = "<group>"; };
+		000000000000000000000120 /* ImageTranslatorUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageTranslatorUITests.swift; sourceTree = "<group>"; };
+		000000000000000000000122 /* three-pages.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; name = "three-pages.pdf"; path = Resources/three-pages.pdf; sourceTree = "<group>"; };
+		000000000000000000000125 /* sample.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = "sample.jpg"; path = Resources/sample.jpg; sourceTree = "<group>"; };
+		010000000000000000000012 /* ImageTranslatorUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ImageTranslatorUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -66,6 +86,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		010000000000000000000034 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		010000000000000000000037 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -90,6 +117,7 @@
 				000000000000000000000112 /* PlatformImage.swift */,
 				000000000000000000000114 /* PDFReaderView.swift */,
 				000000000000000000000116 /* ConfigWebView.swift */,
+				00000000000000000000011E /* TestHooks.swift */,
 				010000000000000000000070 /* Info.plist */,
 				010000000000000000000071 /* Assets.xcassets */,
 			);
@@ -102,8 +130,19 @@
 				000000000000000000000118 /* PageMachineTests.swift */,
 				00000000000000000000011A /* PairingMachineTests.swift */,
 				00000000000000000000011C /* JobMachineTests.swift */,
+				000000000000000000000127 /* TestHooksTests.swift */,
 			);
 			path = ImageTranslatorTests;
+			sourceTree = "<group>";
+		};
+		010000000000000000000006 /* ImageTranslatorUITests */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000120 /* ImageTranslatorUITests.swift */,
+				000000000000000000000122 /* three-pages.pdf */,
+				000000000000000000000125 /* sample.jpg */,
+			);
+			path = ImageTranslatorUITests;
 			sourceTree = "<group>";
 		};
 		010000000000000000000003 /* Products */ = {
@@ -111,6 +150,7 @@
 			children = (
 				010000000000000000000010 /* ImageTranslator.app */,
 				010000000000000000000011 /* ImageTranslatorTests.xctest */,
+				010000000000000000000012 /* ImageTranslatorUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -120,6 +160,7 @@
 			children = (
 				010000000000000000000004 /* ImageTranslator */,
 				010000000000000000000005 /* ImageTranslatorTests */,
+				010000000000000000000006 /* ImageTranslatorUITests */,
 				010000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -162,6 +203,24 @@
 			productReference = 010000000000000000000011 /* ImageTranslatorTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		010000000000000000000022 /* ImageTranslatorUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 010000000000000000000063 /* Build configuration list for PBXNativeTarget "ImageTranslatorUITests" */;
+			buildPhases = (
+				010000000000000000000036 /* Sources */,
+				010000000000000000000037 /* Frameworks */,
+				010000000000000000000038 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				010000000000000000000043 /* PBXTargetDependency */,
+			);
+			name = ImageTranslatorUITests;
+			productName = ImageTranslatorUITests;
+			productReference = 010000000000000000000012 /* ImageTranslatorUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -176,6 +235,10 @@
 						CreatedOnToolsVersion = 27.0;
 					};
 					010000000000000000000021 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 010000000000000000000020;
+					};
+					010000000000000000000022 = {
 						CreatedOnToolsVersion = 27.0;
 						TestTargetID = 010000000000000000000020;
 					};
@@ -197,6 +260,7 @@
 			targets = (
 				010000000000000000000020 /* ImageTranslator */,
 				010000000000000000000021 /* ImageTranslatorTests */,
+				010000000000000000000022 /* ImageTranslatorUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -207,6 +271,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				010000000000000000000072 /* Assets.xcassets in Resources */,
+				000000000000000000000123 /* three-pages.pdf in Resources */,
+				000000000000000000000126 /* sample.jpg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -214,6 +280,15 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		010000000000000000000038 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000000124 /* three-pages.pdf in Resources */,
+				000000000000000000000129 /* sample.jpg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -236,6 +311,7 @@
 				000000000000000000000113 /* PlatformImage.swift in Sources */,
 				000000000000000000000115 /* PDFReaderView.swift in Sources */,
 				000000000000000000000117 /* ConfigWebView.swift in Sources */,
+				00000000000000000000011F /* TestHooks.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -246,6 +322,15 @@
 				000000000000000000000119 /* PageMachineTests.swift in Sources */,
 				00000000000000000000011B /* PairingMachineTests.swift in Sources */,
 				00000000000000000000011D /* JobMachineTests.swift in Sources */,
+				000000000000000000000128 /* TestHooksTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		010000000000000000000036 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000000121 /* ImageTranslatorUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -256,6 +341,11 @@
 			isa = PBXTargetDependency;
 			target = 010000000000000000000020 /* ImageTranslator */;
 			targetProxy = 010000000000000000000040 /* PBXContainerItemProxy */;
+		};
+		010000000000000000000043 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 010000000000000000000020 /* ImageTranslator */;
+			targetProxy = 010000000000000000000042 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -318,6 +408,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_STYLE = Automatic;
+				COMPRESS_PNG_FILES = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ImageTranslator/Info.plist;
@@ -354,6 +445,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_STYLE = Automatic;
+				COMPRESS_PNG_FILES = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ImageTranslator/Info.plist;
@@ -426,6 +518,48 @@
 			};
 			name = Release;
 		};
+		010000000000000000000056 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wisdomworldworkshop.imagetranslator.uitests;
+				PRODUCT_NAME = ImageTranslatorUITests;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_TARGET_NAME = ImageTranslator;
+				XROS_DEPLOYMENT_TARGET = 1.0;
+
+			};
+			name = Debug;
+		};
+		010000000000000000000057 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wisdomworldworkshop.imagetranslator.uitests;
+				PRODUCT_NAME = ImageTranslatorUITests;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_TARGET_NAME = ImageTranslator;
+				XROS_DEPLOYMENT_TARGET = 1.0;
+
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -452,6 +586,15 @@
 			buildConfigurations = (
 				010000000000000000000054 /* Debug */,
 				010000000000000000000055 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		010000000000000000000063 /* Build configuration list for PBXNativeTarget "ImageTranslatorUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				010000000000000000000056 /* Debug */,
+				010000000000000000000057 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

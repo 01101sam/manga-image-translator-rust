@@ -6,18 +6,22 @@ struct RootView: View {
     var body: some View {
         Group {
             if session.isPaired {
-                TabView {
+                TabView(selection: $session.selectedTab) {
                     JobListView()
                         .tabItem { Label("任务", systemImage: "list.bullet") }
+                        .tag(AppTab.jobs)
                     PDFReaderView()
                         .tabItem { Label("阅读", systemImage: "doc.richtext") }
+                        .tag(AppTab.reader)
                     ConfigWebView()
                         .tabItem { Label("配置", systemImage: "slider.horizontal.3") }
+                        .tag(AppTab.config)
                 }
             } else {
                 DiscoveryView()
             }
         }
+        .onAppear { session.consumePendingImageIfNeeded() }
     }
 }
 
@@ -75,6 +79,7 @@ struct DiscoveryView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    .accessibilityIdentifier("daemon-row")
                 }
             }
         }
@@ -94,6 +99,7 @@ struct PairingCodeForm: View {
                 .textContentType(.oneTimeCode)
                 .multilineTextAlignment(.center)
                 .font(.largeTitle.monospacedDigit())
+                .accessibilityIdentifier("pairing-code")
                 .onChange(of: session.pairingCode) { _, value in
                     let digits = value.filter(\.isNumber)
                     if digits != value || digits.count > 6 {
@@ -103,6 +109,7 @@ struct PairingCodeForm: View {
             Button("确认") {
                 session.submitPairingCode()
             }
+            .accessibilityIdentifier("pairing-confirm")
             .disabled(session.pairingCode.count != 6)
             Button("返回") { session.forgetPairing() }
                 .foregroundStyle(.secondary)
