@@ -70,8 +70,8 @@ anyhow.workspace = true
 tracing-subscriber= { workspace = true, features = ["env-filter"] }
 tracing.workspace = true
 actix-web.workspace = true
-actix-files.workspace = true
 actix-multipart.workspace = true
+if-addrs = "0.13"
 # ui
 egui = "0.32"
 eframe = { version = "0.32", default-features = false, features = [
