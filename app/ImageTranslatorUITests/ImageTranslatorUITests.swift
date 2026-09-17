@@ -10,24 +10,26 @@ final class ImageTranslatorUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-daemon-host", env.host, "-daemon-port", "\(env.port)"]
         app.launch()
-
-        let row = app.buttons["daemon-row"]
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "discovered daemon row")
-        attachShot(app, name: "discovery-row")
-        try? "".write(toFile: env.pairingCodeFile, atomically: true, encoding: .utf8)
-        row.tap()
-
-        let field = app.textFields["pairing-code"]
-        XCTAssertTrue(field.waitForExistence(timeout: 10), "code field after request")
-        let code = try waitForPairingCode(path: env.pairingCodeFile, timeout: 30)
-        field.tap()
-        field.typeText(code)
-        app.buttons["pairing-confirm"].tap()
-
-        XCTAssertTrue(app.tabBars.buttons["任务"].waitForExistence(timeout: 15), "tab bar after pairing")
-        XCTAssertTrue(app.tabBars.buttons["阅读"].exists)
-        XCTAssertTrue(app.tabBars.buttons["配置"].exists)
+        try pairViaRealDiscovery(app, env: env)
         attachShot(app, name: "paired-tabs")
+    }
+
+    func testPairingPersistsAcrossRelaunch() throws {
+        let env = try UITestEnv.load()
+        let app = XCUIApplication()
+        app.launchArguments = ["-daemon-host", env.host, "-daemon-port", "\(env.port)"]
+        app.launch()
+        try pairViaRealDiscovery(app, env: env)
+        attachShot(app, name: "persist-paired")
+        app.terminate()
+
+        let again = XCUIApplication()
+        again.launch()
+        XCTAssertTrue(again.tabBars.buttons["任务"].waitForExistence(timeout: 15), "tabs after relaunch from Keychain")
+        XCTAssertTrue(again.tabBars.buttons["阅读"].exists)
+        XCTAssertTrue(again.tabBars.buttons["配置"].exists)
+        XCTAssertFalse(again.textFields["pairing-code"].exists, "no pairing prompt after relaunch")
+        attachShot(again, name: "persist-relaunch")
     }
 
     func testJobSubmitAndDone() throws {
@@ -178,6 +180,67 @@ final class ImageTranslatorUITests: XCTestCase {
         _ = app.descendants(matching: .any)["config-webview"].waitForExistence(timeout: 10)
         XCTAssertFalse(app.descendants(matching: .any)["engine-banner"].exists)
         attachShot(app, name: "config-webview")
+    }
+
+    /// Real Keychain pairing. If a prior run already persisted a token, 更换 Daemon then type a fresh code.
+    private func pairViaRealDiscovery(_ app: XCUIApplication, env: UITestEnv) throws {
+        let jobsTab = app.tabBars.buttons["任务"]
+        if jobsTab.waitForExistence(timeout: 3) {
+            let swap = app.buttons["更换 Daemon"]
+            XCTAssertTrue(swap.waitForExistence(timeout: 5), "already-paired sim must expose 更换 Daemon")
+            swap.tap()
+        }
+        let row = waitForDaemonRow(app, port: env.port, timeout: 30)
+        XCTAssertTrue(row.exists, "bonjour row whose subtitle contains :\(env.port); rows=\(daemonRowBlobs(app))")
+        attachShot(app, name: "discovery-row")
+        try? "".write(toFile: env.pairingCodeFile, atomically: true, encoding: .utf8)
+        row.tap()
+
+        let field = app.textFields["pairing-code"]
+        XCTAssertTrue(field.waitForExistence(timeout: 15), "code field after request")
+        let code = try waitForPairingCode(path: env.pairingCodeFile, timeout: 30)
+        field.tap()
+        field.typeText(code)
+        app.buttons["pairing-confirm"].tap()
+
+        XCTAssertTrue(jobsTab.waitForExistence(timeout: 15), "tab bar after pairing")
+        XCTAssertTrue(app.tabBars.buttons["阅读"].exists)
+        XCTAssertTrue(app.tabBars.buttons["配置"].exists)
+    }
+
+    private func waitForDaemonRow(_ app: XCUIApplication, port: UInt16, timeout: TimeInterval) -> XCUIElement {
+        let needle = ":\(port)"
+        let rows = app.descendants(matching: .any).matching(identifier: "daemon-row")
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let match = firstDaemonRow(rows, containing: needle) {
+                return match
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        }
+        return firstDaemonRow(rows, containing: needle) ?? rows.firstMatch
+    }
+
+    private func firstDaemonRow(_ rows: XCUIElementQuery, containing needle: String) -> XCUIElement? {
+        for i in 0..<rows.count {
+            let row = rows.element(boundBy: i)
+            let blob = daemonRowBlob(row)
+            if blob.contains(needle) {
+                return row
+            }
+        }
+        return nil
+    }
+
+    private func daemonRowBlobs(_ app: XCUIApplication) -> [String] {
+        let rows = app.descendants(matching: .any).matching(identifier: "daemon-row")
+        return (0..<rows.count).map { daemonRowBlob(rows.element(boundBy: $0)) }
+    }
+
+    private func daemonRowBlob(_ row: XCUIElement) -> String {
+        let value = row.value as? String ?? ""
+        let children = row.staticTexts.allElementsBoundByIndex.map(\.label).joined(separator: " ")
+        return [row.label, value, children].joined(separator: " ")
     }
 
     private func flipForward(_ app: XCUIApplication, status: XCUIElement) {

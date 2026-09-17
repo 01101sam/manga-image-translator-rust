@@ -20,8 +20,9 @@ struct TestHooks: Equatable, Sendable {
         return DaemonEndpoint(name: "Daemon", host: daemonHost ?? "127.0.0.1", port: daemonPort)
     }
 
+    /// Only `-paired-test` swaps in MemoryTokenStore. Host/port and file hooks stay on Keychain.
     var isolatesSession: Bool {
-        paired != nil || browseDaemon != nil || openPDF != nil || autoSubmitImage != nil || autoImportFolder != nil
+        paired != nil
     }
 
     static func fromProcessInfo() -> TestHooks {

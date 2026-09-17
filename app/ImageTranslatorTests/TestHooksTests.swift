@@ -11,11 +11,13 @@ final class TestHooksTests: XCTestCase {
                 token: Token(raw: "tok")
             )
         )
+        XCTAssertTrue(hooks.isolatesSession)
     }
 
     func testParseBrowsePort() {
         let hooks = TestHooks.parse(["-daemon-host", "10.0.0.2", "-daemon-port", "18320"])
         XCTAssertEqual(hooks.browseDaemon, DaemonEndpoint(name: "Daemon", host: "10.0.0.2", port: 18320))
+        XCTAssertFalse(hooks.isolatesSession)
     }
 
     func testResolveSampleJpegFromAppBundle() {
@@ -32,7 +34,7 @@ final class TestHooksTests: XCTestCase {
     func testParseAutoImportFolder() {
         let hooks = TestHooks.parse(["-auto-import-folder", "batch"])
         XCTAssertEqual(hooks.autoImportFolder, "batch")
-        XCTAssertTrue(hooks.isolatesSession)
+        XCTAssertFalse(hooks.isolatesSession)
     }
 
     func testPngMagicLabeledAsPng() {
