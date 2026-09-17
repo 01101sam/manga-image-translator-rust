@@ -214,6 +214,50 @@ final class ImageTranslatorUITests: XCTestCase {
         attachShot(app, name: "tab-switch-stress")
     }
 
+    func testPreviewClose() throws {
+        let env = try UITestEnv.load()
+        let token = try env.tokenOrPair()
+        try env.prepareForNewJobs()
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-paired-test", env.host, "\(env.port)", token,
+            "-auto-submit-image", "sample.jpg",
+        ]
+        app.launch()
+        defer { attachShot(app, name: "preview-close") }
+
+        let row = app.descendants(matching: .any)["job-row"]
+        XCTAssertTrue(row.waitForExistence(timeout: 25), "job row after auto submit; banner=\(bannerLabel(app))")
+        let deadline = Date().addingTimeInterval(90)
+        while Date() < deadline {
+            let labels = rowValues(app)
+            XCTAssertFalse(labels.contains(where: { $0.contains("已取消") }), "submit job was cancelled; \(labels)")
+            if labels.contains(where: { $0.contains("已完成") }) { break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        }
+        XCTAssertTrue(rowValues(app).contains(where: { $0.contains("已完成") }), "done; \(rowValues(app))")
+
+        row.tap()
+        XCTAssertTrue(app.navigationBars["译文"].waitForExistence(timeout: 10), "preview title")
+        XCTAssertTrue(
+            app.descendants(matching: .any)["artifact-preview"].waitForExistence(timeout: 5),
+            "preview content"
+        )
+        let close = app.buttons["关闭"]
+        XCTAssertTrue(close.waitForExistence(timeout: 5), "close on preview")
+        attachShot(app, name: "preview-open")
+        close.tap()
+        XCTAssertTrue(
+            wait(for: { !app.navigationBars["译文"].exists }, timeout: 10),
+            "preview dismissed"
+        )
+        XCTAssertTrue(app.navigationBars["任务"].waitForExistence(timeout: 5), "job list after close")
+        XCTAssertTrue(
+            app.descendants(matching: .any)["job-list"].waitForExistence(timeout: 5),
+            "job list visible after close"
+        )
+    }
+
     private func tabButton(_ app: XCUIApplication, _ title: String) -> XCUIElement {
         let inBar = app.tabBars.buttons[title]
         if inBar.exists {
