@@ -127,17 +127,21 @@ struct PDFReaderView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if let image = reader.displayImage(artifacts: session.artifacts) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(ReaderKeyCatcher(
-                            onMove: { reader.move(by: $0) },
-                            onSpace: { handleSpace() }
-                        ))
-                } else {
-                    ContentUnavailableView("打开 PDF", systemImage: "doc", description: Text("原文在本地渲染，Daemon 不会收到这份 PDF。"))
+                ZStack {
+                    if let image = reader.displayImage(artifacts: session.artifacts) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        ContentUnavailableView("打开 PDF", systemImage: "doc", description: Text("原文在本地渲染，Daemon 不会收到这份 PDF。"))
+                    }
+                    ReaderKeyCatcher(
+                        onMove: { reader.move(by: $0) },
+                        onSpace: { handleSpace() }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(false)
                 }
                 if !reader.pages.isEmpty {
                     statusBar
@@ -149,8 +153,11 @@ struct PDFReaderView: View {
                     Button("打开") { importing = true }
                     if !reader.pages.isEmpty {
                         Button("翻译全部") { Task { await translateAll() } }
-                        if let url = reader.exportURL ?? reader.assembleExport(artifacts: session.artifacts) {
-                            ShareLink(item: url) { Text("导出") }
+                        Button("导出") {
+                            _ = reader.assembleExport(artifacts: session.artifacts)
+                        }
+                        if let url = reader.exportURL {
+                            ShareLink(item: url) { Text("分享 PDF") }
                         }
                         Button("存图") { saveCurrentToPhotos() }
                     }

@@ -59,7 +59,7 @@ final class PairingMachineTests: XCTestCase {
                 return (200, Data(#"{"ok":true}"#.utf8))
             }
             if path == "/pair/confirm" {
-                let body = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
+                let body = request.bodyData.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
                 XCTAssertEqual(body?["code"] as? String, "654321")
                 return (200, Data(#"{"token":"secret-token"}"#.utf8))
             }

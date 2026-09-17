@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import UniformTypeIdentifiers
 
@@ -14,16 +15,23 @@ final class AppSession: ObservableObject {
     let browser: BonjourBrowser
     private let session: URLSession
     private var pollTask: Task<Void, Never>?
+    private var browserBag = Set<AnyCancellable>()
 
-    init(tokens: TokenStoring = KeychainTokenStore(), session: URLSession = .shared, browser: BonjourBrowser = BonjourBrowser()) {
+    init(tokens: TokenStoring = KeychainTokenStore(), session: URLSession = .shared) {
         self.tokens = tokens
         self.session = session
+        let browser = BonjourBrowser()
         self.browser = browser
         if let paired = tokens.load() {
             pairing = .paired(paired.endpoint, paired.token)
         } else {
             pairing = .browsing
         }
+        browser.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &browserBag)
         browser.start()
         startPolling()
     }
@@ -114,18 +122,12 @@ final class AppSession: ObservableObject {
 
     private func importFolder(_ root: URL) async {
         let keys: [URLResourceKey] = [.isRegularFileKey, .contentTypeKey]
-        guard let enumerator = FileManager.default.enumerator(
-            at: root,
-            includingPropertiesForKeys: keys,
-            options: [.skipsHiddenFiles]
-        ) else { return }
-        for case let file as URL in enumerator {
-            let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .contentTypeKey])
-            guard values?.isRegularFile == true else { continue }
-            if let type = values?.contentType, type.conforms(to: .image),
-               let data = try? Data(contentsOf: file)
-            {
-                await submitImage(data, filename: file.lastPathComponent, mime: type.preferredMIMEType ?? "image/jpeg")
+        let files = imageFiles(in: root, keys: keys)
+        for file in files {
+            let type = (try? file.resourceValues(forKeys: [.contentTypeKey]))?.contentType
+            let mime = type?.preferredMIMEType ?? "image/jpeg"
+            if let data = try? Data(contentsOf: file) {
+                await submitImage(data, filename: file.lastPathComponent, mime: mime)
             }
         }
     }
@@ -246,5 +248,22 @@ final class AppSession: ObservableObject {
 
     private func mimeFor(_ url: URL) -> String {
         UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "image/jpeg"
+    }
+
+    private func imageFiles(in root: URL, keys: [URLResourceKey]) -> [URL] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        var files: [URL] = []
+        for case let file as URL in enumerator {
+            let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .contentTypeKey])
+            guard values?.isRegularFile == true, let type = values?.contentType, type.conforms(to: .image) else {
+                continue
+            }
+            files.append(file)
+        }
+        return files
     }
 }
