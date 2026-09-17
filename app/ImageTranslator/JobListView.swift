@@ -9,6 +9,7 @@ struct JobListView: View {
     @State private var importing = false
     @State private var previewJobId: String?
     @State private var selectedJobId: String?
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -30,6 +31,12 @@ struct JobListView: View {
                 List {
                     ForEach(session.jobs, id: \.snapshot.jobId) { row in
                         JobRowView(row: row) {
+                            selectedJobId = row.snapshot.jobId
+                            listFocused = true
+                            if canOpenJobPreview(row.snapshot.state) {
+                                previewJobId = row.snapshot.jobId
+                            }
+                        } onCancel: {
                             Task { await session.requestCancel(row.snapshot.jobId) }
                         }
                         .listRowBackground(
@@ -37,31 +44,41 @@ struct JobListView: View {
                                 ? Color.accentColor.opacity(0.16)
                                 : Color.clear
                         )
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            selectedJobId = row.snapshot.jobId
-                            if canOpenJobPreview(row.snapshot.state) {
-                                previewJobId = row.snapshot.jobId
-                            }
-                        }
                     }
                     .onDelete { session.removeJobs(at: $0) }
                     .onMove { session.moveJobs(from: $0, to: $1) }
                 }
+                .accessibilityIdentifier("job-list")
                 .overlay {
                     if session.jobs.isEmpty {
                         ContentUnavailableView("还没有 Job", systemImage: "photo", description: Text("从相册、文件或文件夹导入图片。"))
                     }
-                    JobListKeyCatcher(
-                        onMove: { moveSelection(by: $0) },
-                        onEnter: { openSelectedPreview() }
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .allowsHitTesting(false)
+                    Color.clear
+                        .focusable()
+                        .focused($listFocused)
+                        .focusEffectDisabled()
+                        .onKeyPress(.upArrow) { handleArrow(.up) }
+                        .onKeyPress(.downArrow) { handleArrow(.down) }
+                        .onKeyPress(.leftArrow) { handleArrow(.left) }
+                        .onKeyPress(.rightArrow) { handleArrow(.right) }
+                        .onKeyPress(.return) {
+                            openSelectedPreview()
+                            return .handled
+                        }
+                        .allowsHitTesting(false)
                 }
             }
             .navigationTitle("任务")
-            .onAppear { session.consumePendingHooks() }
+            .onAppear {
+                session.consumePendingHooks()
+                listFocused = true
+            }
+            .onChange(of: session.selectedTab) { _, tab in
+                if tab == .jobs, previewJobId == nil { listFocused = true }
+            }
+            .onChange(of: previewJobId) { _, id in
+                if id == nil { listFocused = true }
+            }
             .onChange(of: session.jobs.map(\.snapshot.jobId)) { _, ids in
                 if let selectedJobId, !ids.contains(selectedJobId) {
                     self.selectedJobId = nil
@@ -128,6 +145,14 @@ struct JobListView: View {
         }
     }
 
+    private func handleArrow(_ arrow: JobListArrow) -> KeyPress.Result {
+        guard let delta = jobListArrowDelta(arrow, previewOpen: previewJobId != nil) else {
+            return .ignored
+        }
+        moveSelection(by: delta)
+        return .handled
+    }
+
     private func moveSelection(by delta: Int) {
         if previewJobId != nil {
             if let next = adjacentDoneJobId(jobs: session.jobs, currentId: previewJobId, delta: delta) {
@@ -154,25 +179,31 @@ struct JobListView: View {
 
 struct JobRowView: View {
     let row: JobRow
+    var onSelect: () -> Void = {}
     let onCancel: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
-            thumbnail
-            VStack(alignment: .leading, spacing: 4) {
-                Text(shortJobId(row.snapshot.jobId))
-                    .font(.caption.monospaced())
-                    .lineLimit(1)
-                Text(label(for: row.snapshot))
-                    .font(.subheadline)
+            HStack(spacing: 12) {
+                thumbnail
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(shortJobId(row.snapshot.jobId))
+                        .font(.caption.monospaced())
+                        .lineLimit(1)
+                    Text(label(for: row.snapshot))
+                        .font(.subheadline)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("job-row")
+                .accessibilityValue(label(for: row.snapshot))
+                .accessibilityLabel(label(for: row.snapshot))
+                Spacer(minLength: 0)
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("job-row")
-            .accessibilityValue(label(for: row.snapshot))
-            .accessibilityLabel(label(for: row.snapshot))
-            Spacer()
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onSelect)
             if canCancelJob(row.snapshot.state) {
                 Button("取消", action: onCancel)
+                    .buttonStyle(.borderless)
                     .disabled(row.cancelPending)
                     .accessibilityIdentifier("job-cancel")
             }
@@ -219,6 +250,7 @@ struct ArtifactPreview: View {
     @EnvironmentObject private var session: AppSession
     let jobId: String
     var onMoveDone: (Int) -> Void = { _ in }
+    @FocusState private var previewFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -233,14 +265,18 @@ struct ArtifactPreview: View {
                     ProgressView("正在读取 Artifact…")
                 }
             }
-            .overlay {
-                JobListKeyCatcher(
-                    onMove: onMoveDone,
-                    onEnter: {}
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(false)
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .accessibilityIdentifier("artifact-preview")
+            .focusable()
+            .focused($previewFocused)
+            .focusEffectDisabled()
+            .onKeyPress(.upArrow) { handlePreviewArrow(.up) }
+            .onKeyPress(.downArrow) { handlePreviewArrow(.down) }
+            .onKeyPress(.leftArrow) { handlePreviewArrow(.left) }
+            .onKeyPress(.rightArrow) { handlePreviewArrow(.right) }
+            .onAppear { previewFocused = true }
+            .simultaneousGesture(TapGesture().onEnded { previewFocused = true })
             .navigationTitle("译文")
             .toolbar {
                 if let data = session.artifacts[jobId] {
@@ -249,49 +285,14 @@ struct ArtifactPreview: View {
             }
         }
     }
-}
 
-struct JobListKeyCatcher: UIViewControllerRepresentable {
-    var onMove: (Int) -> Void
-    var onEnter: () -> Void
-
-    func makeUIViewController(context: Context) -> JobListKeyController {
-        let controller = JobListKeyController()
-        controller.onMove = onMove
-        controller.onEnter = onEnter
-        return controller
+    private func handlePreviewArrow(_ arrow: JobListArrow) -> KeyPress.Result {
+        guard let delta = jobListArrowDelta(arrow, previewOpen: true) else {
+            return .ignored
+        }
+        onMoveDone(delta)
+        return .handled
     }
-
-    func updateUIViewController(_ controller: JobListKeyController, context: Context) {
-        controller.onMove = onMove
-        controller.onEnter = onEnter
-        controller.becomeFirstResponder()
-    }
-}
-
-final class JobListKeyController: UIViewController {
-    var onMove: ((Int) -> Void)?
-    var onEnter: (() -> Void)?
-
-    override var canBecomeFirstResponder: Bool { true }
-
-    override var keyCommands: [UIKeyCommand]? {
-        [
-            UIKeyCommand(input: UIKeyCommand.inputUpArrow, modifierFlags: [], action: #selector(up)),
-            UIKeyCommand(input: UIKeyCommand.inputDownArrow, modifierFlags: [], action: #selector(down)),
-            UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(enter)),
-            UIKeyCommand(input: "\n", modifierFlags: [], action: #selector(enter)),
-        ]
-    }
-
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        becomeFirstResponder()
-    }
-
-    @objc private func up() { onMove?(-1) }
-    @objc private func down() { onMove?(1) }
-    @objc private func enter() { onEnter?() }
 }
 
 struct ArtifactFile: Transferable {

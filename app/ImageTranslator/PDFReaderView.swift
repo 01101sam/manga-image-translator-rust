@@ -123,6 +123,7 @@ struct PDFReaderView: View {
     @EnvironmentObject private var session: AppSession
     @StateObject private var reader = PDFSession()
     @State private var importing = false
+    @FocusState private var readerFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -136,13 +137,35 @@ struct PDFReaderView: View {
                     } else {
                         ContentUnavailableView("打开 PDF", systemImage: "doc", description: Text("原文在本地渲染，Daemon 不会收到这份 PDF。"))
                     }
-                    ReaderKeyCatcher(
-                        onMove: { reader.move(by: $0) },
-                        onSpace: { handleSpace() }
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .allowsHitTesting(false)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("reader-canvas")
+                .focusable()
+                .focused($readerFocused)
+                .focusEffectDisabled()
+                .onKeyPress(.leftArrow) {
+                    Task { reader.move(by: -1) }
+                    return .handled
+                }
+                .onKeyPress(.rightArrow) {
+                    Task { reader.move(by: 1) }
+                    return .handled
+                }
+                .onKeyPress(.upArrow) {
+                    Task { reader.move(by: -1) }
+                    return .handled
+                }
+                .onKeyPress(.downArrow) {
+                    Task { reader.move(by: 1) }
+                    return .handled
+                }
+                .onKeyPress(.space, phases: .down) { _ in
+                    Task { handleSpace() }
+                    return .handled
+                }
+                .onTapGesture { readerFocused = true }
                 if !reader.pages.isEmpty {
                     statusBar
                 }
@@ -165,6 +188,10 @@ struct PDFReaderView: View {
             }
             .onAppear {
                 consumePendingPDF()
+                readerFocused = true
+            }
+            .onChange(of: session.selectedTab) { _, tab in
+                if tab == .reader { readerFocused = true }
             }
             .onChange(of: session.pendingPDF) { _, _ in
                 consumePendingPDF()
@@ -249,50 +276,4 @@ struct PDFReaderView: View {
             UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
         }
     }
-}
-
-struct ReaderKeyCatcher: UIViewControllerRepresentable {
-    var onMove: (Int) -> Void
-    var onSpace: () -> Void
-
-    func makeUIViewController(context: Context) -> ReaderKeyController {
-        let controller = ReaderKeyController()
-        controller.onMove = onMove
-        controller.onSpace = onSpace
-        return controller
-    }
-
-    func updateUIViewController(_ controller: ReaderKeyController, context: Context) {
-        controller.onMove = onMove
-        controller.onSpace = onSpace
-        controller.becomeFirstResponder()
-    }
-}
-
-final class ReaderKeyController: UIViewController {
-    var onMove: ((Int) -> Void)?
-    var onSpace: (() -> Void)?
-
-    override var canBecomeFirstResponder: Bool { true }
-
-    override var keyCommands: [UIKeyCommand]? {
-        [
-            UIKeyCommand(input: UIKeyCommand.inputUpArrow, modifierFlags: [], action: #selector(up)),
-            UIKeyCommand(input: UIKeyCommand.inputDownArrow, modifierFlags: [], action: #selector(down)),
-            UIKeyCommand(input: UIKeyCommand.inputLeftArrow, modifierFlags: [], action: #selector(left)),
-            UIKeyCommand(input: UIKeyCommand.inputRightArrow, modifierFlags: [], action: #selector(right)),
-            UIKeyCommand(input: " ", modifierFlags: [], action: #selector(space)),
-        ]
-    }
-
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        becomeFirstResponder()
-    }
-
-    @objc private func up() { onMove?(-1) }
-    @objc private func down() { onMove?(1) }
-    @objc private func left() { onMove?(-1) }
-    @objc private func right() { onMove?(1) }
-    @objc private func space() { onSpace?() }
 }

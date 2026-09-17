@@ -79,7 +79,7 @@ final class ImageTranslatorUITests: XCTestCase {
         XCTAssertTrue(status.label.contains("第 2/3 页"), status.label)
         attachShot(app, name: "reader-page-2")
 
-        pressSpace(app)
+        pressSpace(app, status: status)
         XCTAssertTrue(
             wait(for: status, matching: { $0.contains("排队中") || $0.contains("翻译中") || $0.contains("译文") || $0.contains("原文") && !$0.contains("未翻译") }, timeout: 15),
             status.label
@@ -87,7 +87,7 @@ final class ImageTranslatorUITests: XCTestCase {
 
         XCTAssertTrue(wait(for: status, matching: { $0.contains("译文") || $0.contains("原文") }, timeout: 90), status.label)
         let before = status.label
-        pressSpace(app)
+        pressSpace(app, status: status)
         XCTAssertTrue(wait(for: status, matching: { $0 != before && ($0.contains("译文") || $0.contains("原文")) }, timeout: 10), status.label)
         attachShot(app, name: "reader-toggle")
     }
@@ -243,7 +243,15 @@ final class ImageTranslatorUITests: XCTestCase {
         return [row.label, value, children].joined(separator: " ")
     }
 
+    private func focusReader(_ app: XCUIApplication) {
+        let canvas = app.descendants(matching: .any)["reader-canvas"]
+        if canvas.waitForExistence(timeout: 5) {
+            canvas.tap()
+        }
+    }
+
     private func flipForward(_ app: XCUIApplication, status: XCUIElement) {
+        focusReader(app)
         let before = status.label
         app.typeKey(XCUIKeyboardKey.rightArrow, modifierFlags: [])
         if status.label == before {
@@ -251,13 +259,20 @@ final class ImageTranslatorUITests: XCTestCase {
         }
     }
 
-    private func pressSpace(_ app: XCUIApplication) {
-        let space = app.buttons["reader-space"]
-        if space.waitForExistence(timeout: 2) {
-            space.tap()
-            return
-        }
+    private func pressSpace(_ app: XCUIApplication, status: XCUIElement) {
+        focusReader(app)
+        let before = status.label
         app.typeKey(XCUIKeyboardKey.space, modifierFlags: [])
+        let deadline = Date().addingTimeInterval(1.5)
+        while Date() < deadline, status.label == before {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+        if status.label == before {
+            let space = app.buttons["reader-space"]
+            if space.waitForExistence(timeout: 2) {
+                space.tap()
+            }
+        }
     }
 
     private func wait(for element: XCUIElement, containing needle: String, timeout: TimeInterval) -> Bool {

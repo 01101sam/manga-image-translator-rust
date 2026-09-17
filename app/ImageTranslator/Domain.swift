@@ -408,6 +408,26 @@ func canOpenJobPreview(_ state: JobLifecycle) -> Bool {
     state == .done
 }
 
+enum JobListArrow: Equatable, Sendable {
+    case up
+    case down
+    case left
+    case right
+}
+
+func jobListArrowDelta(_ arrow: JobListArrow, previewOpen: Bool) -> Int? {
+    switch arrow {
+    case .up:
+        return -1
+    case .down:
+        return 1
+    case .left:
+        return previewOpen ? -1 : nil
+    case .right:
+        return previewOpen ? 1 : nil
+    }
+}
+
 func removeLocalJobs(jobs: inout [JobRow], artifacts: inout [String: Data], at offsets: IndexSet) {
     let ids = offsets.compactMap { jobs.indices.contains($0) ? jobs[$0].snapshot.jobId : nil }
     jobs.remove(atOffsets: offsets)
