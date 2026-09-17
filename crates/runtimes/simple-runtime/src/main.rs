@@ -25,6 +25,7 @@ mod debug;
 mod dict;
 mod execute;
 pub mod settings;
+mod server;
 pub mod setup;
 mod ui;
 mod update;
@@ -52,16 +53,19 @@ async fn main() {
     }
     let _ = check_crate_version("frederik-uni/manga-image-translator-rust").await;
 
-    let startup = Instant::now();
-    let mut models = Models::new(
-        cli.max_batch_size_upscaler,
-        cli.max_batch_size_ocr,
-        true,
-        cuda,
-    )
-    .await;
-    eprintln!("PERF startup {}", startup.elapsed().as_millis());
     match cli.command {
+        cli::Commands::Daemon { host, port } => {
+            api::main(api::DaemonArgs {
+                host,
+                port,
+                max_batch_size_ocr: cli.max_batch_size_ocr,
+                max_batch_size_upscaler: cli.max_batch_size_upscaler,
+                cuda,
+            })
+            .await
+            .unwrap();
+            return;
+        }
         cli::Commands::Cli {
             input,
             output,
@@ -69,6 +73,15 @@ async fn main() {
             overwrite,
             save_mask,
         } => {
+            let startup = Instant::now();
+            let mut models = Models::new(
+                cli.max_batch_size_upscaler,
+                cli.max_batch_size_ocr,
+                true,
+                cuda,
+            )
+            .await;
+            eprintln!("PERF startup {}", startup.elapsed().as_millis());
             let mut input_list = WalkDir::new(&input)
                 .into_iter()
                 .filter_map(|v| v.ok())
@@ -197,7 +210,6 @@ async fn main() {
                 eprintln!("PERF render {}", render_t.elapsed().as_millis());
             }
         }
-        cli::Commands::Api { host, port } => api::main(models, &host, port).await.unwrap(),
         cli::Commands::Ui => {
             let native_options = eframe::NativeOptions {
                 viewport: egui::ViewportBuilder::default()

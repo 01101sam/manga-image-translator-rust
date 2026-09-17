@@ -54,7 +54,11 @@ image.workspace = true
 textline-merge.workspace = true
 imageproc.workspace = true
 ab_glyph.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
+dirs = "6"
+hostname = "0.4"
+mdns-sd = "0.13"
+rand = { workspace = true }
 env_logger.workspace = true
 mask-refinement.workspace = true
 serde_json.workspace = true
