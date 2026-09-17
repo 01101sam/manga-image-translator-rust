@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct RootView: View {
     @EnvironmentObject private var session: AppSession
@@ -16,6 +17,9 @@ struct RootView: View {
                     ConfigWebView()
                         .tabItem { Label("配置", systemImage: "slider.horizontal.3") }
                         .tag(AppTab.config)
+                }
+                .onDrop(of: [.image, .pdf, .fileURL], isTargeted: nil) { providers in
+                    session.ingestDrop(providers)
                 }
             } else {
                 DiscoveryView()
