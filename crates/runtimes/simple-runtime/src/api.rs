@@ -368,16 +368,13 @@ pub async fn main(args: DaemonArgs) -> std::io::Result<()> {
     let pairing = Pairing::open(config.path())
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     let tokens = pairing.tokens();
-    let engine_rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .thread_name("engine-worker")
-        .build()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    // Capture before HttpServer. actix handlers run on a current-thread runtime.
+    let engine_rt = tokio::runtime::Handle::current();
     let engine = Engine::new(
         queue.clone(),
         jobs.clone(),
         artifacts.clone(),
-        engine_rt.handle().clone(),
+        engine_rt,
     );
     let bonjour = Mutex::new(match Bonjour::register(args.port) {
         Ok(svc) => Some(svc),
@@ -435,7 +432,6 @@ pub async fn main(args: DaemonArgs) -> std::io::Result<()> {
     tokio::select! {
         r = server => {
             cleanup(&artifacts, &bonjour);
-            drop(engine_rt);
             r
         }
         _ = tokio::signal::ctrl_c() => {
@@ -443,7 +439,6 @@ pub async fn main(args: DaemonArgs) -> std::io::Result<()> {
             state.engine.lock().await.stop().await;
             cleanup(&artifacts, &bonjour);
             handle.stop(true).await;
-            drop(engine_rt);
             Ok(())
         }
     }
