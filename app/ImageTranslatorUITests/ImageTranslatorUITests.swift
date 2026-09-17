@@ -44,10 +44,8 @@ final class ImageTranslatorUITests: XCTestCase {
         let args = app.descendants(matching: .any)["launch-args"]
         _ = args.waitForExistence(timeout: 10)
         let row = app.descendants(matching: .any)["job-row"]
-        let state = app.staticTexts["job-state"]
-        let appeared = row.waitForExistence(timeout: 25) || state.waitForExistence(timeout: 5)
-        XCTAssertTrue(appeared, "job row after auto submit; args=\(args.label); banner=\(app.staticTexts["engine-banner"].label)")
-        XCTAssertTrue(wait(for: state, containing: "已完成", timeout: 90))
+        XCTAssertTrue(row.waitForExistence(timeout: 25), "job row after auto submit; args=\(args.label); banner=\(bannerLabel(app))")
+        XCTAssertTrue(wait(for: { self.rowValues(app).contains { $0.contains("已完成") } }, timeout: 90), "done; \(rowValues(app))")
         attachShot(app, name: "job-done")
     }
 
@@ -81,6 +79,71 @@ final class ImageTranslatorUITests: XCTestCase {
         pressSpace(app)
         XCTAssertTrue(wait(for: status, matching: { $0 != before && ($0.contains("译文") || $0.contains("原文")) }, timeout: 10), status.label)
         attachShot(app, name: "reader-toggle")
+    }
+
+    func testFolderBatchImport() throws {
+        let env = try UITestEnv.load()
+        let token = try env.tokenOrPair()
+        let folder = env.batchFolder ?? "batch"
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-paired-test", env.host, "\(env.port)", token,
+            "-auto-import-folder", folder,
+        ]
+        app.launch()
+        defer { attachShot(app, name: "folder-batch") }
+
+        let rows = app.descendants(matching: .any).matching(identifier: "job-row")
+        let deadline = Date().addingTimeInterval(30)
+        while Date() < deadline, rows.count < 5 {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        }
+        XCTAssertEqual(rows.count, 5, "folder import should submit 5 jobs; banner=\(bannerLabel(app))")
+    }
+
+    func testCancelQueuedJob() throws {
+        let env = try UITestEnv.load()
+        let token = try env.tokenOrPair()
+        let previous = try env.setWorkers(0)
+        defer { _ = try? env.setWorkers(previous == 0 ? 2 : previous) }
+
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-paired-test", env.host, "\(env.port)", token,
+            "-auto-submit-image", "sample.jpg,sample.jpg",
+        ]
+        app.launch()
+        defer { attachShot(app, name: "cancel-queued") }
+
+        let rows = app.descendants(matching: .any).matching(identifier: "job-row")
+        let deadline = Date().addingTimeInterval(25)
+        while Date() < deadline, rows.count < 2 {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        }
+        XCTAssertEqual(rows.count, 2, "two queued jobs; banner=\(bannerLabel(app))")
+
+        XCTAssertTrue(
+            wait(for: {
+                self.rowValues(app).filter { $0.contains("排队中") }.count >= 2
+            }, timeout: 10),
+            "both rows queued before cancel; \(rowValues(app))"
+        )
+
+        let cancel = app.buttons["job-cancel"].firstMatch.exists
+            ? app.buttons["job-cancel"].firstMatch
+            : app.buttons["取消"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5), "cancel on queued row")
+        cancel.tap()
+
+        XCTAssertTrue(
+            wait(for: {
+                let labels = self.rowValues(app)
+                return labels.contains(where: { $0.contains("已取消") })
+                    && labels.contains(where: { $0.contains("排队中") })
+            }, timeout: 15),
+            "one cancelled, one still queued; \(rowValues(app))"
+        )
+        attachShot(app, name: "cancel-queued-done")
     }
 
     func testConfigWebViewLoads() throws {
@@ -119,6 +182,17 @@ final class ImageTranslatorUITests: XCTestCase {
         wait(for: element, matching: { $0.contains(needle) }, timeout: timeout)
     }
 
+    private func wait(for predicate: @escaping () -> Bool, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if predicate() {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        }
+        return predicate()
+    }
+
     private func wait(for element: XCUIElement, matching predicate: @escaping (String) -> Bool, timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -128,6 +202,19 @@ final class ImageTranslatorUITests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.4))
         }
         return predicate(element.label)
+    }
+
+    private func bannerLabel(_ app: XCUIApplication) -> String {
+        let banner = app.staticTexts["engine-banner"]
+        return banner.exists ? banner.label : ""
+    }
+
+    private func rowValues(_ app: XCUIApplication) -> [String] {
+        let rows = app.descendants(matching: .any).matching(identifier: "job-row")
+        return (0..<rows.count).map { i in
+            let row = rows.element(boundBy: i)
+            return (row.value as? String) ?? row.label
+        }
     }
 
     private func attachShot(_ app: XCUIApplication, name: String) {
@@ -143,6 +230,7 @@ struct UITestEnv {
     var port: UInt16
     var pairingCodeFile: String
     var token: String?
+    var batchFolder: String?
 
     static func load() throws -> UITestEnv {
         let path = "/tmp/pr-client-uitest.env"
@@ -166,7 +254,46 @@ struct UITestEnv {
             throw XCTSkip("incomplete /tmp/pr-client-uitest.env")
         }
         let token = values["DAEMON_TOKEN"]
-        return UITestEnv(host: host, port: port, pairingCodeFile: codeFile, token: token)
+        let batch = values["BATCH_FOLDER"]
+        return UITestEnv(host: host, port: port, pairingCodeFile: codeFile, token: token, batchFolder: batch)
+    }
+
+    func setWorkers(_ workers: Int) throws -> Int {
+        let token = try tokenOrPair()
+        let get = URL(string: "http://\(host):\(port)/config")!
+        var request = URLRequest(url: get)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let data = try sync(request)
+        guard var obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw XCTSkip("config was not an object")
+        }
+        let previous = (obj["workers"] as? Int) ?? (obj["workers"] as? NSNumber)?.intValue ?? 2
+        obj["workers"] = workers
+        var put = URLRequest(url: get)
+        put.httpMethod = "PUT"
+        put.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        put.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        put.httpBody = try JSONSerialization.data(withJSONObject: obj)
+        _ = try sync(put)
+        var restart = URLRequest(url: URL(string: "http://\(host):\(port)/engine/restart")!)
+        restart.httpMethod = "POST"
+        restart.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        _ = try sync(restart)
+        return previous
+    }
+
+    private func sync(_ request: URLRequest) throws -> Data {
+        let sem = DispatchSemaphore(value: 0)
+        var data = Data()
+        var status = 0
+        URLSession.shared.dataTask(with: request) { body, response, _ in
+            data = body ?? Data()
+            status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            sem.signal()
+        }.resume()
+        XCTAssertEqual(sem.wait(timeout: .now() + 30), .success)
+        XCTAssertTrue((200...299).contains(status), "http \(status) \(request.url?.path ?? "")")
+        return data
     }
 
     func tokenOrPair() throws -> String {

@@ -4,8 +4,16 @@ struct TestHooks: Equatable, Sendable {
     var paired: PairedDaemon?
     var openPDF: String?
     var autoSubmitImage: String?
+    var autoImportFolder: String?
     var daemonHost: String?
     var daemonPort: UInt16?
+
+    var autoSubmitPaths: [String] {
+        (autoSubmitImage ?? "")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
 
     var browseDaemon: DaemonEndpoint? {
         guard let daemonPort else { return nil }
@@ -13,7 +21,7 @@ struct TestHooks: Equatable, Sendable {
     }
 
     var isolatesSession: Bool {
-        paired != nil || browseDaemon != nil || openPDF != nil || autoSubmitImage != nil
+        paired != nil || browseDaemon != nil || openPDF != nil || autoSubmitImage != nil || autoImportFolder != nil
     }
 
     static func fromProcessInfo() -> TestHooks {
@@ -43,6 +51,11 @@ struct TestHooks: Equatable, Sendable {
                 i += 2
                 continue
             }
+            if flag == "-auto-import-folder", i + 1 < args.count {
+                hooks.autoImportFolder = args[i + 1]
+                i += 2
+                continue
+            }
             if flag == "-daemon-host", i + 1 < args.count {
                 hooks.daemonHost = args[i + 1]
                 i += 2
@@ -66,6 +79,27 @@ struct TestHooks: Equatable, Sendable {
             return bundled
         }
         if path.hasPrefix("/"), FileManager.default.isReadableFile(atPath: url.path) {
+            return url
+        }
+        return nil
+    }
+
+    func resolveFolder(_ path: String) -> URL? {
+        let url = URL(fileURLWithPath: path)
+        if let bundled = Bundle.main.url(forResource: url.lastPathComponent, withExtension: nil) {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: bundled.path, isDirectory: &isDir), isDir.boolValue {
+                return bundled
+            }
+        }
+        if let resource = Bundle.main.resourceURL?.appendingPathComponent(url.lastPathComponent) {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: resource.path, isDirectory: &isDir), isDir.boolValue {
+                return resource
+            }
+        }
+        var isDir: ObjCBool = false
+        if path.hasPrefix("/"), FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
             return url
         }
         return nil
