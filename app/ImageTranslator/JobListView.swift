@@ -86,10 +86,6 @@ struct JobListView: View {
                     photoItems = []
                 }
             }
-            .dropDestination(for: URL.self) { urls, _ in
-                Task { await session.importURLs(urls) }
-                return true
-            }
             .sheet(item: Binding(
                 get: { previewJobId.map(PreviewItem.init(id:)) },
                 set: { previewJobId = $0?.id }

@@ -164,9 +164,10 @@ struct PDFReaderView: View {
                 }
             }
             .onAppear {
-                if let url = session.consumePendingPDF() {
-                    reader.load(url)
-                }
+                consumePendingPDF()
+            }
+            .onChange(of: session.pendingPDF) { _, _ in
+                consumePendingPDF()
             }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.pdf], allowsMultipleSelection: false) { result in
                 if case .success(let urls) = result, let url = urls.first {
@@ -176,6 +177,12 @@ struct PDFReaderView: View {
             .onChange(of: session.jobs) { _, jobs in
                 syncJobs(jobs)
             }
+        }
+    }
+
+    private func consumePendingPDF() {
+        if let url = session.consumePendingPDF() {
+            reader.load(url)
         }
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 struct DaemonEndpoint: Equatable, Hashable, Sendable {
     var name: String
@@ -277,4 +278,28 @@ struct JobOverrides: Equatable, Sendable {
         if let translator { obj["translator"] = translator }
         return obj
     }
+}
+
+enum DropAction: Equatable, Sendable {
+    case submitImage
+    case openPDF
+    case importURL
+    case ignore
+}
+
+func routeDrop(type: UTType, hasData: Bool) -> DropAction {
+    if type.conforms(to: .fileURL) {
+        return .importURL
+    }
+    if type.conforms(to: .pdf) {
+        return hasData ? .openPDF : .ignore
+    }
+    if type.conforms(to: .image) {
+        return hasData ? .submitImage : .ignore
+    }
+    return .ignore
+}
+
+func routeImportedURL(_ url: URL) -> DropAction {
+    url.pathExtension.lowercased() == "pdf" ? .openPDF : .importURL
 }

@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import UIKit
 import UniformTypeIdentifiers
 
 enum AppTab: Hashable {
@@ -17,13 +18,13 @@ final class AppSession: ObservableObject {
     @Published var banner: String?
     @Published var pairingCode: String = ""
     @Published var selectedTab: AppTab = .jobs
+    @Published var pendingPDF: URL?
 
     let tokens: TokenStoring
     let browser: BonjourBrowser
     private let session: URLSession
     private var pollTask: Task<Void, Never>?
     private var browserBag = Set<AnyCancellable>()
-    private var pendingPDF: URL?
     private var pendingImagePath: String?
     private var pendingFolderPath: String?
 
@@ -77,6 +78,21 @@ final class AppSession: ObservableObject {
         let url = pendingPDF
         pendingPDF = nil
         return url
+    }
+
+    func openPDF(_ url: URL) {
+        pendingPDF = url
+        selectedTab = .reader
+    }
+
+    func ingestDrop(_ providers: [NSItemProvider]) -> Bool {
+        var accepted = false
+        for provider in providers {
+            if startDropLoad(provider) {
+                accepted = true
+            }
+        }
+        return accepted
     }
 
     func consumePendingHooks() {
@@ -174,7 +190,8 @@ final class AppSession: ObservableObject {
                 await importFolder(url)
                 continue
             }
-            if url.pathExtension.lowercased() == "pdf" {
+            if routeImportedURL(url) == .openPDF {
+                openPDF(url)
                 continue
             }
             guard let data = try? Data(contentsOf: url) else { continue }
@@ -328,6 +345,122 @@ final class AppSession: ObservableObject {
         }
     }
 
+    private func startDropLoad(_ provider: NSItemProvider) -> Bool {
+        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            switch routeDrop(type: .fileURL, hasData: false) {
+            case .importURL:
+                loadDroppedFileURL(provider)
+                return true
+            default:
+                break
+            }
+        }
+        if provider.hasItemConformingToTypeIdentifier(UTType.pdf.identifier) {
+            switch routeDrop(type: .pdf, hasData: true) {
+            case .openPDF:
+                loadDroppedPDF(provider)
+                return true
+            default:
+                break
+            }
+        }
+        if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+            switch routeDrop(type: .image, hasData: true) {
+            case .submitImage:
+                loadDroppedImage(provider)
+                return true
+            default:
+                break
+            }
+        }
+        return false
+    }
+
+    private func loadDroppedFileURL(_ provider: NSItemProvider) {
+        let once = DropOnce()
+        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { [weak self] item, _ in
+            guard let url = dropFileURL(from: item), once.take() else { return }
+            let accessed = url.startAccessingSecurityScopedResource()
+            let persisted = copyDroppedFile(url)
+            if accessed { url.stopAccessingSecurityScopedResource() }
+            Task { @MainActor in
+                await self?.importURLs([persisted])
+            }
+        }
+        _ = provider.loadFileRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { [weak self] url, _ in
+            guard let url, once.take() else { return }
+            let persisted = copyDroppedFile(url)
+            Task { @MainActor in
+                await self?.importURLs([persisted])
+            }
+        }
+    }
+
+    private func loadDroppedPDF(_ provider: NSItemProvider) {
+        let once = DropOnce()
+        _ = provider.loadTransferable(type: Data.self) { [weak self] result in
+            guard case .success(let data) = result, !data.isEmpty, once.take() else { return }
+            Task { @MainActor in
+                self?.openPDF(data: data)
+            }
+        }
+        _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.pdf.identifier) { [weak self] data, _ in
+            guard let data, !data.isEmpty, once.take() else { return }
+            Task { @MainActor in
+                self?.openPDF(data: data)
+            }
+        }
+    }
+
+    private func loadDroppedImage(_ provider: NSItemProvider) {
+        let once = DropOnce()
+        _ = provider.loadTransferable(type: Data.self) { [weak self] result in
+            guard case .success(let data) = result, !data.isEmpty, once.take() else { return }
+            Task { @MainActor in
+                await self?.submitDroppedImage(data)
+            }
+        }
+        let typeId = provider.registeredTypeIdentifiers.first { id in
+            UTType(id)?.conforms(to: .image) == true
+        } ?? UTType.image.identifier
+        _ = provider.loadDataRepresentation(forTypeIdentifier: typeId) { [weak self] data, _ in
+            guard let data, !data.isEmpty, once.take() else { return }
+            Task { @MainActor in
+                await self?.submitDroppedImage(data)
+            }
+        }
+        _ = provider.loadFileRepresentation(forTypeIdentifier: typeId) { [weak self] url, _ in
+            guard let url, let data = try? Data(contentsOf: url), !data.isEmpty, once.take() else { return }
+            Task { @MainActor in
+                await self?.submitDroppedImage(data)
+            }
+        }
+    }
+
+    private func openPDF(data: Data) {
+        let dest = FileManager.default.temporaryDirectory
+            .appendingPathComponent("drop-\(UUID().uuidString).pdf")
+        do {
+            try data.write(to: dest, options: .atomic)
+            openPDF(dest)
+        } catch {
+            banner = "无法保存拖入的 PDF"
+        }
+    }
+
+    private func submitDroppedImage(_ data: Data) async {
+        var label = imageUploadLabel(for: data)
+        var payload = data
+        if label.mime == "application/octet-stream",
+           let image = UIImage(data: data),
+           let jpeg = image.jpegData(compressionQuality: 0.92)
+        {
+            payload = jpeg
+            label = ImageUploadLabel(filename: "photo.jpg", mime: "image/jpeg")
+        }
+        await submitImage(payload, filename: label.filename, mime: label.mime)
+    }
+
     private func mimeFor(_ url: URL) -> String {
         UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "image/jpeg"
     }
@@ -350,5 +483,39 @@ final class AppSession: ObservableObject {
             files.append(file)
         }
         return files
+    }
+}
+
+private final class DropOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var taken = false
+
+    func take() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if taken { return false }
+        taken = true
+        return true
+    }
+}
+
+private func dropFileURL(from item: NSSecureCoding?) -> URL? {
+    if let url = item as? URL {
+        return url
+    }
+    if let data = item as? Data {
+        return URL(dataRepresentation: data, relativeTo: nil)
+    }
+    return nil
+}
+
+private func copyDroppedFile(_ url: URL) -> URL {
+    let dest = FileManager.default.temporaryDirectory
+        .appendingPathComponent("drop-\(UUID().uuidString)-\(url.lastPathComponent)")
+    do {
+        try FileManager.default.copyItem(at: url, to: dest)
+        return dest
+    } catch {
+        return url
     }
 }
