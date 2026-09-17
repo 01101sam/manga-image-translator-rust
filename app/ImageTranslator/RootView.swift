@@ -21,7 +21,7 @@ struct RootView: View {
                 DiscoveryView()
             }
         }
-        .onAppear { session.consumePendingImageIfNeeded() }
+        .onAppear { session.consumePendingHooks() }
     }
 }
 

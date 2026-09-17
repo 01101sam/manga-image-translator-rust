@@ -25,6 +25,7 @@ final class AppSession: ObservableObject {
     private var browserBag = Set<AnyCancellable>()
     private var pendingPDF: URL?
     private var pendingImagePath: String?
+    private var pendingFolderPath: String?
 
     init(tokens: TokenStoring? = nil, session: URLSession = .shared, hooks: TestHooks = .fromProcessInfo()) {
         let resolvedTokens: TokenStoring
@@ -49,6 +50,7 @@ final class AppSession: ObservableObject {
         }
         pendingPDF = hooks.openPDF.flatMap { hooks.resolveFile($0) }
         pendingImagePath = hooks.autoSubmitImage
+        pendingFolderPath = hooks.autoImportFolder
         browser.objectWillChange
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
@@ -60,12 +62,12 @@ final class AppSession: ObservableObject {
             browser.start()
         }
         startPolling()
-        if pendingImagePath != nil {
+        if pendingImagePath != nil || pendingFolderPath != nil {
             Task {
                 for _ in 0..<8 {
                     try? await Task.sleep(nanoseconds: 250_000_000)
-                    if pendingImagePath == nil { break }
-                    consumePendingImageIfNeeded()
+                    if pendingImagePath == nil, pendingFolderPath == nil { break }
+                    consumePendingHooks()
                 }
             }
         }
@@ -77,17 +79,42 @@ final class AppSession: ObservableObject {
         return url
     }
 
+    func consumePendingHooks() {
+        consumePendingImageIfNeeded()
+        consumePendingFolderIfNeeded()
+    }
+
     func consumePendingImageIfNeeded() {
-        guard let path = pendingImagePath else { return }
-        let url = TestHooks.fromProcessInfo().resolveFile(path)
-            ?? Bundle.main.url(forResource: "sample", withExtension: "jpg")
-        guard let url, let data = try? Data(contentsOf: url), !data.isEmpty else {
-            banner = "测试图无法读取"
-            return
+        guard let raw = pendingImagePath else { return }
+        let hooks = TestHooks.fromProcessInfo()
+        let paths = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        var items: [(Data, String, String)] = []
+        for path in paths {
+            let url = hooks.resolveFile(path)
+                ?? Bundle.main.url(forResource: "sample", withExtension: "jpg")
+            guard let url, let data = try? Data(contentsOf: url), !data.isEmpty else {
+                banner = "测试图无法读取"
+                return
+            }
+            items.append((data, url.lastPathComponent, mimeFor(url)))
         }
         pendingImagePath = nil
         Task {
-            await submitImage(data, filename: url.lastPathComponent, mime: mimeFor(url))
+            for item in items {
+                await submitImage(item.0, filename: item.1, mime: item.2)
+            }
+        }
+    }
+
+    func consumePendingFolderIfNeeded() {
+        guard let path = pendingFolderPath else { return }
+        guard let url = TestHooks.fromProcessInfo().resolveFolder(path) else {
+            banner = "测试文件夹无法读取"
+            return
+        }
+        pendingFolderPath = nil
+        Task {
+            await importURLs([url])
         }
     }
 
@@ -314,9 +341,12 @@ final class AppSession: ObservableObject {
         var files: [URL] = []
         for case let file as URL in enumerator {
             let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .contentTypeKey])
-            guard values?.isRegularFile == true, let type = values?.contentType, type.conforms(to: .image) else {
-                continue
-            }
+            guard values?.isRegularFile == true else { continue }
+            let type = values?.contentType
+            let ext = file.pathExtension.lowercased()
+            let isImage = type?.conforms(to: .image) == true
+                || ["jpg", "jpeg", "png", "webp", "gif", "heic", "tif", "tiff"].contains(ext)
+            guard isImage else { continue }
             files.append(file)
         }
         return files
