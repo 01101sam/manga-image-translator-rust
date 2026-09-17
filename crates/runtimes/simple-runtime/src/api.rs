@@ -368,7 +368,17 @@ pub async fn main(args: DaemonArgs) -> std::io::Result<()> {
     let pairing = Pairing::open(config.path())
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     let tokens = pairing.tokens();
-    let engine = Engine::new(queue.clone(), jobs.clone(), artifacts.clone());
+    let engine_rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("engine-worker")
+        .build()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let engine = Engine::new(
+        queue.clone(),
+        jobs.clone(),
+        artifacts.clone(),
+        engine_rt.handle().clone(),
+    );
     let bonjour = Mutex::new(match Bonjour::register(args.port) {
         Ok(svc) => Some(svc),
         Err(e) => {
@@ -425,6 +435,7 @@ pub async fn main(args: DaemonArgs) -> std::io::Result<()> {
     tokio::select! {
         r = server => {
             cleanup(&artifacts, &bonjour);
+            drop(engine_rt);
             r
         }
         _ = tokio::signal::ctrl_c() => {
@@ -432,6 +443,7 @@ pub async fn main(args: DaemonArgs) -> std::io::Result<()> {
             state.engine.lock().await.stop().await;
             cleanup(&artifacts, &bonjour);
             handle.stop(true).await;
+            drop(engine_rt);
             Ok(())
         }
     }
