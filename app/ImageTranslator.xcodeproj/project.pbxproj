@@ -19,6 +19,7 @@
 		000000000000000000000113 /* PlatformImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000112 /* PlatformImage.swift */; };
 		000000000000000000000115 /* PDFReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000114 /* PDFReaderView.swift */; };
 		000000000000000000000117 /* ConfigWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000116 /* ConfigWebView.swift */; };
+		000000000000000000000138 /* WindowSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000137 /* WindowSettings.swift */; };
 		010000000000000000000072 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 010000000000000000000071 /* Assets.xcassets */; };
 		000000000000000000000119 /* PageMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000118 /* PageMachineTests.swift */; };
 		00000000000000000000011B /* PairingMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000011A /* PairingMachineTests.swift */; };
@@ -27,6 +28,7 @@
 		000000000000000000000128 /* TestHooksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000127 /* TestHooksTests.swift */; };
 		000000000000000000000134 /* EndpointTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000133 /* EndpointTests.swift */; };
 		000000000000000000000136 /* DropRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000135 /* DropRoutingTests.swift */; };
+		00000000000000000000013A /* WindowSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000139 /* WindowSettingsTests.swift */; };
 		000000000000000000000121 /* ImageTranslatorUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000120 /* ImageTranslatorUITests.swift */; };
 		000000000000000000000123 /* three-pages.pdf in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000122 /* three-pages.pdf */; };
 		000000000000000000000124 /* three-pages.pdf in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000122 /* three-pages.pdf */; };
@@ -66,6 +68,7 @@
 		000000000000000000000112 /* PlatformImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformImage.swift; sourceTree = "<group>"; };
 		000000000000000000000114 /* PDFReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFReaderView.swift; sourceTree = "<group>"; };
 		000000000000000000000116 /* ConfigWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigWebView.swift; sourceTree = "<group>"; };
+		000000000000000000000137 /* WindowSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowSettings.swift; sourceTree = "<group>"; };
 		010000000000000000000070 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		010000000000000000000071 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		000000000000000000000118 /* PageMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageMachineTests.swift; sourceTree = "<group>"; };
@@ -77,6 +80,7 @@
 		000000000000000000000127 /* TestHooksTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestHooksTests.swift; sourceTree = "<group>"; };
 		000000000000000000000133 /* EndpointTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointTests.swift; sourceTree = "<group>"; };
 		000000000000000000000135 /* DropRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropRoutingTests.swift; sourceTree = "<group>"; };
+		000000000000000000000139 /* WindowSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowSettingsTests.swift; sourceTree = "<group>"; };
 		000000000000000000000120 /* ImageTranslatorUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageTranslatorUITests.swift; sourceTree = "<group>"; };
 		000000000000000000000122 /* three-pages.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; name = "three-pages.pdf"; path = Resources/three-pages.pdf; sourceTree = "<group>"; };
 		000000000000000000000125 /* sample.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = "sample.jpg"; path = Resources/sample.jpg; sourceTree = "<group>"; };
@@ -124,6 +128,7 @@
 				000000000000000000000112 /* PlatformImage.swift */,
 				000000000000000000000114 /* PDFReaderView.swift */,
 				000000000000000000000116 /* ConfigWebView.swift */,
+				000000000000000000000137 /* WindowSettings.swift */,
 				00000000000000000000011E /* TestHooks.swift */,
 				010000000000000000000070 /* Info.plist */,
 				010000000000000000000071 /* Assets.xcassets */,
@@ -140,6 +145,7 @@
 				000000000000000000000127 /* TestHooksTests.swift */,
 				000000000000000000000133 /* EndpointTests.swift */,
 				000000000000000000000135 /* DropRoutingTests.swift */,
+				000000000000000000000139 /* WindowSettingsTests.swift */,
 			);
 			path = ImageTranslatorTests;
 			sourceTree = "<group>";
@@ -323,6 +329,7 @@
 				000000000000000000000113 /* PlatformImage.swift in Sources */,
 				000000000000000000000115 /* PDFReaderView.swift in Sources */,
 				000000000000000000000117 /* ConfigWebView.swift in Sources */,
+				000000000000000000000138 /* WindowSettings.swift in Sources */,
 				00000000000000000000011F /* TestHooks.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -337,6 +344,7 @@
 				000000000000000000000128 /* TestHooksTests.swift in Sources */,
 				000000000000000000000134 /* EndpointTests.swift in Sources */,
 				000000000000000000000136 /* DropRoutingTests.swift in Sources */,
+				00000000000000000000013A /* WindowSettingsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

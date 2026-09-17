@@ -3,14 +3,28 @@ import WebKit
 
 struct ConfigWebView: View {
     @EnvironmentObject private var session: AppSession
+    #if os(visionOS)
+    @EnvironmentObject private var windowSettings: WindowSettings
+    #endif
 
     var body: some View {
         NavigationStack {
-            Group {
-                if let endpoint = session.pairing.endpoint {
-                    DaemonWebView(url: endpoint.baseURL)
-                } else {
-                    ContentUnavailableView("尚未配对", systemImage: "slider.horizontal.3")
+            VStack(spacing: 0) {
+                #if os(visionOS)
+                Picker("窗口方向", selection: $windowSettings.windowLandscape) {
+                    Text("竖屏").tag(false)
+                    Text("横屏").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .padding()
+                .accessibilityIdentifier("window-orientation")
+                #endif
+                Group {
+                    if let endpoint = session.pairing.endpoint {
+                        DaemonWebView(url: endpoint.baseURL)
+                    } else {
+                        ContentUnavailableView("尚未配对", systemImage: "slider.horizontal.3")
+                    }
                 }
             }
             .navigationTitle("配置")
