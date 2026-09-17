@@ -18,6 +18,7 @@ impl ArtifactStore {
         Ok(store)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn root(&self) -> &Path {
         &self.root
     }

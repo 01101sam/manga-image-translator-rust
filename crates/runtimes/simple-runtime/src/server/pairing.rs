@@ -139,6 +139,8 @@ impl<C: Clock> Pairing<C> {
         // Print both streams so the operator sees the code on whichever one they watch.
         println!("PAIRING {code}");
         eprintln!("PAIRING {code}");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        let _ = std::io::Write::flush(&mut std::io::stderr());
         code
     }
 
