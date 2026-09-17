@@ -11,6 +11,9 @@ struct JobListView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                Text(ProcessInfo.processInfo.arguments.joined(separator: " "))
+                    .frame(width: 1, height: 1)
+                    .accessibilityIdentifier("launch-args")
                 if let banner = session.banner {
                     Text(banner)
                         .font(.footnote)
@@ -18,6 +21,7 @@ struct JobListView: View {
                         .frame(maxWidth: .infinity)
                         .padding(8)
                         .background(Color.orange)
+                        .accessibilityIdentifier("engine-banner")
                 }
                 List {
                     ForEach(session.jobs, id: \.snapshot.jobId) { row in
@@ -39,6 +43,7 @@ struct JobListView: View {
                 }
             }
             .navigationTitle("任务")
+            .onAppear { session.consumePendingImageIfNeeded() }
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
                     PhotosPicker(selection: $photoItems, maxSelectionCount: 32, matching: .images) {
@@ -102,6 +107,7 @@ struct JobRowView: View {
                     .lineLimit(1)
                 Text(label(for: row.snapshot))
                     .font(.subheadline)
+                    .accessibilityIdentifier("job-state")
             }
             Spacer()
             if canCancelJob(row.snapshot.state) {
@@ -109,6 +115,8 @@ struct JobRowView: View {
                     .disabled(row.cancelPending)
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("job-row")
     }
 
     private func label(for snap: JobSnapshot) -> String {

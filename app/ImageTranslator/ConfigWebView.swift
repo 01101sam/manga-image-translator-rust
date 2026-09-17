@@ -29,6 +29,8 @@ struct DaemonWebView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         let view = WKWebView()
+        view.accessibilityIdentifier = "config-webview"
+        view.isAccessibilityElement = true
         view.load(URLRequest(url: url))
         return view
     }
