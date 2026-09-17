@@ -3,6 +3,9 @@ import UniformTypeIdentifiers
 
 struct RootView: View {
     @EnvironmentObject private var session: AppSession
+    #if os(visionOS)
+    @EnvironmentObject private var windowSettings: WindowSettings
+    #endif
 
     var body: some View {
         Group {
@@ -18,6 +21,24 @@ struct RootView: View {
                         .tabItem { Label("配置", systemImage: "slider.horizontal.3") }
                         .tag(AppTab.config)
                 }
+                #if os(visionOS)
+                .ornament(visibility: .visible, attachmentAnchor: .scene(.bottom)) {
+                    Button {
+                        windowSettings.windowLandscape.toggle()
+                    } label: {
+                        Label(
+                            windowSettings.windowLandscape ? "横屏" : "竖屏",
+                            systemImage: windowSettings.windowLandscape
+                                ? "rectangle.landscape"
+                                : "rectangle.portrait"
+                        )
+                    }
+                    .accessibilityIdentifier("window-orientation")
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .glassBackgroundEffect()
+                }
+                #endif
                 .onDrop(of: [.item], isTargeted: nil) { providers in
                     session.ingestDrop(providers)
                 }
