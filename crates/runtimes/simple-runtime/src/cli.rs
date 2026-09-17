@@ -18,7 +18,7 @@ pub struct Cli {
     #[arg(long, global = true, default_value_t = 2)]
     pub max_batch_size_upscaler: usize,
 
-    /// Choose a subcommand (cli, api, or ui)
+    /// Choose a subcommand (cli, daemon, or ui)
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -46,13 +46,13 @@ pub enum Commands {
         save_mask: bool,
     },
 
-    /// Run in API server mode
-    Api {
-        /// Host to bind the API server
-        #[arg(long, default_value = "127.0.0.1")]
+    /// Run the Daemon
+    Daemon {
+        /// Host to bind the Daemon
+        #[arg(long, default_value = "0.0.0.0")]
         host: String,
 
-        /// Port to bind the API server
+        /// Port to bind the Daemon
         #[arg(long, default_value_t = 8080)]
         port: u16,
     },

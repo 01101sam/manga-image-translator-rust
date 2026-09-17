@@ -1,59 +1,85 @@
-use std::{
-    fs::{self, File},
-    io::Write,
-    path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-    time::Instant,
-};
+use std::fs;
+use std::future::{ready, Ready};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
-use actix_files::NamedFile;
 use actix_multipart::form::{
     bytes::Bytes as MpBytes, tempfile::TempFile, MultipartForm, MultipartFormConfig,
 };
+use actix_web::dev::Payload;
+use actix_web::http::StatusCode;
 use actix_web::{
-    get, http::StatusCode, post,
+    get, post, put,
     web::{self},
-    App, HttpRequest, HttpResponse, HttpServer, Responder,
+    App, Error, FromRequest, HttpRequest, HttpResponse, HttpServer, Responder,
 };
-use html::HtmlRenderer;
-use png::PngRenderer;
-use uuid::Uuid;
+use serde::Deserialize;
 
-use crate::{
-    render_config,
-    settings::{Renderer, Settings},
-    setup::Models,
-};
+use crate::server::artifacts::ArtifactStore;
+use crate::server::bonjour::Bonjour;
+use crate::server::config::{ConfigStore, DaemonConfig};
+use crate::server::engine::{mime_of, Engine, WorkerParams};
+use crate::server::jobs::{apply_overrides, CancelError, JobState, JobStore};
+use crate::server::pairing::{Pairing, SystemClock, TokenStore};
+use crate::server::queue::Queue;
+use crate::server::webui;
 
-struct TranslateJob {
-    img: image::DynamicImage,
-    settings: Arc<Settings>,
-    mask_out: Option<PathBuf>,
-    reply: tokio::sync::oneshot::Sender<anyhow::Result<Option<export::Export>>>,
+pub struct DaemonArgs {
+    pub host: String,
+    pub port: u16,
+    pub max_batch_size_ocr: usize,
+    pub max_batch_size_upscaler: usize,
+    pub cuda: bool,
 }
 
-struct AppState {
-    jobs: tokio::sync::mpsc::Sender<TranslateJob>,
+pub struct AppState {
+    engine: tokio::sync::Mutex<Engine>,
+    jobs: Arc<JobStore>,
+    queue: Arc<Queue>,
+    config: tokio::sync::Mutex<ConfigStore>,
+    pairing: tokio::sync::Mutex<Pairing<SystemClock>>,
+    tokens: Arc<TokenStore>,
     started: Instant,
-    inflight: AtomicUsize,
+    batch_ocr: usize,
+    batch_upscaler: usize,
+    cuda: bool,
 }
 
-struct Inflight<'a>(&'a AtomicUsize);
+struct Authed;
 
-impl Drop for Inflight<'_> {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::Relaxed);
+impl FromRequest for Authed {
+    type Error = Error;
+    type Future = Ready<Result<Self, Error>>;
+
+    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
+        let allowed = req
+            .app_data::<web::Data<AppState>>()
+            .and_then(|state| bearer_token(req).filter(|t| state.tokens.contains(t)))
+            .is_some();
+        if allowed {
+            ready(Ok(Authed))
+        } else {
+            ready(Err(actix_web::error::InternalError::from_response(
+                "unauthorized",
+                fail(StatusCode::UNAUTHORIZED, "unauthorized"),
+            )
+            .into()))
+        }
     }
 }
 
-struct TmpDir(PathBuf);
-
-impl Drop for TmpDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+fn bearer_token(req: &HttpRequest) -> Option<String> {
+    let raw = req
+        .headers()
+        .get(actix_web::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
+    let token = raw.strip_prefix("Bearer ").or_else(|| raw.strip_prefix("bearer "))?;
+    let token = token.trim();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_owned())
     }
 }
 
@@ -64,218 +90,150 @@ fn fail(status: StatusCode, error: impl Into<String>) -> HttpResponse {
     }))
 }
 
-fn b64_encode(data: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let a = chunk[0] as u32;
-        let b = chunk.get(1).copied().unwrap_or(0) as u32;
-        let c = chunk.get(2).copied().unwrap_or(0) as u32;
-        let n = (a << 16) | (b << 8) | c;
-        out.push(T[(n >> 18) as usize] as char);
-        out.push(T[((n >> 12) & 63) as usize] as char);
-        out.push(if chunk.len() > 1 {
-            T[((n >> 6) & 63) as usize] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            T[(n & 63) as usize] as char
-        } else {
-            '='
-        });
-    }
-    out
-}
-
 fn field_text(field: Option<&MpBytes>) -> String {
     field
         .map(|b| String::from_utf8_lossy(&b.data).into_owned())
         .unwrap_or_default()
 }
 
-fn parse_settings(raw: &str) -> Result<Settings, String> {
-    let value: serde_json::Value = if raw.trim().is_empty() {
-        serde_json::json!({})
-    } else {
-        serde_json::from_str(raw).map_err(|_| "参数 JSON 无效".to_string())?
-    };
-    if let Some(r) = value.pointer("/render/renderer") {
-        match r.as_str() {
-            Some("Png" | "Html" | "Raw") => {}
-            Some(s) => {
-                return Err(format!("不支持的渲染器: {s}，仅支持 Png、Html、Raw"));
-            }
-            None => {
-                return Err("不支持的渲染器: 渲染器必须是 Png、Html 或 Raw".into());
-            }
-        }
-    }
-    Ok(serde_json::from_value(value).unwrap_or_default())
-}
-
-fn mime_of(renderer: &Renderer) -> &'static str {
-    match renderer {
-        Renderer::Png => "image/png",
-        Renderer::Html => "text/html",
-        Renderer::Raw => "application/octet-stream",
-    }
-}
-
-fn write_render(
-    exp: export::Export,
-    settings: &Settings,
-    output: &Path,
-) -> Result<(), String> {
-    match settings.render.renderer {
-        Renderer::Html => {
-            let (data, _) = HtmlRenderer::render(vec![exp], None, false);
-            File::create(output)
-                .and_then(|mut f| f.write_all(&data))
-                .map_err(|e| format!("写入渲染结果失败: {e}"))?;
-        }
-        Renderer::Raw => {
-            File::create(output)
-                .and_then(|mut f| f.write_all(&exp.export()))
-                .map_err(|e| format!("写入渲染结果失败: {e}"))?;
-        }
-        Renderer::Png => {
-            let mut png = PngRenderer::default();
-            let img = png
-                .render(exp, render_config(&settings.render))
-                .map_err(|e| format!("渲染失败: {e}"))?;
-            img.to_image()
-                .map_err(|e| format!("编码 PNG 失败: {e}"))?
-                .save(output)
-                .map_err(|e| format!("保存 PNG 失败: {e}"))?;
-        }
-    }
-    Ok(())
-}
-
-#[get("/")]
-async fn hello() -> impl Responder {
-    HttpResponse::Ok().body("Hello world!")
+fn engine_status_json(state: crate::server::engine::EngineState) -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({ "state": state }))
 }
 
 #[get("/health")]
 async fn health(state: web::Data<AppState>) -> impl Responder {
+    let engine = state.engine.lock().await.state();
     HttpResponse::Ok().json(serde_json::json!({
+        "ok": true,
         "service": "simple-runtime-api",
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_s": state.started.elapsed().as_secs(),
-        "busy": state.inflight.load(Ordering::Relaxed) > 0,
+        "engine": engine,
     }))
 }
 
-#[get("/defaults/detector")]
-async fn defaults_detector() -> impl Responder {
-    let settings = crate::settings::DetectorSettings::default();
-    let str = serde_json::to_string(&settings).unwrap();
-    HttpResponse::Ok().body(str)
+#[post("/pair/request")]
+async fn pair_request(state: web::Data<AppState>) -> impl Responder {
+    let pairing = state.pairing.lock().await;
+    let _code = pairing.request();
+    HttpResponse::Ok().json(serde_json::json!({ "ok": true }))
 }
 
-#[get("/defaults/ocr")]
-async fn defaults_ocr() -> impl Responder {
-    let settings = crate::settings::OCRSettings::default();
-    let str = serde_json::to_string(&settings).unwrap();
-    HttpResponse::Ok().body(str)
+#[derive(Deserialize)]
+struct ConfirmBody {
+    code: String,
 }
 
-#[get("/defaults/inpainter")]
-async fn defaults_inpainter() -> impl Responder {
-    let settings = crate::settings::InpainterSettings::default();
-    let str = serde_json::to_string(&settings).unwrap();
-    HttpResponse::Ok().body(str)
-}
-
-#[get("/defaults/colorizer")]
-async fn defaults_colorizer() -> impl Responder {
-    let settings = crate::settings::ColorizerSettings::default();
-    let str = serde_json::to_string(&settings).unwrap();
-    HttpResponse::Ok().body(str)
-}
-
-#[get("/defaults/render")]
-async fn defaults_render() -> impl Responder {
-    let settings = crate::settings::RenderSettings::default();
-    let str = serde_json::to_string(&settings).unwrap();
-    HttpResponse::Ok().body(str)
-}
-
-#[get("/defaults/mask_refinement")]
-async fn defaults_mask_refinement() -> impl Responder {
-    let settings = crate::settings::MaskRefinementSettings::default();
-    let str = serde_json::to_string(&settings).unwrap();
-    HttpResponse::Ok().body(str)
-}
-
-#[get("/defaults/translator")]
-async fn defaults_translator() -> impl Responder {
-    let settings = crate::settings::TranslatorSettings::default();
-    let str = serde_json::to_string(&settings).unwrap();
-    HttpResponse::Ok().body(str)
-}
-
-const UPLOAD_DIR: &str = "./uploads";
-
-#[get("/image/{uuid}")]
-async fn get_image(uuid: web::Path<String>, req: HttpRequest) -> impl Responder {
-    let filename = uuid.into_inner();
-    if Uuid::parse_str(&filename).is_err() {
-        return HttpResponse::BadRequest().body("Invalid UUID");
-    }
-    let path = PathBuf::from(UPLOAD_DIR).join(&filename);
-
-    if !path.exists() {
-        return HttpResponse::NotFound().body("Image not found");
-    }
-
-    match NamedFile::open(path) {
-        Ok(file) => file.use_last_modified(true).into_response(&req),
-        Err(_) => HttpResponse::InternalServerError().body("Failed to read image"),
+#[post("/pair/confirm")]
+async fn pair_confirm(state: web::Data<AppState>, body: web::Json<ConfirmBody>) -> impl Responder {
+    let pairing = state.pairing.lock().await;
+    match pairing.confirm(body.code.trim()) {
+        Ok(token) => HttpResponse::Ok().json(serde_json::json!({ "token": token })),
+        Err(e) => fail(StatusCode::UNAUTHORIZED, e.message()),
     }
 }
 
-#[derive(Debug, MultipartForm)]
-struct UploadForm {
-    file: TempFile,
+#[get("/engine/status")]
+async fn engine_status(state: web::Data<AppState>, _auth: Authed) -> impl Responder {
+    engine_status_json(state.engine.lock().await.state())
 }
 
-#[post("/image/upload")]
-async fn upload_image(MultipartForm(form): MultipartForm<UploadForm>) -> impl Responder {
-    std::fs::create_dir_all(UPLOAD_DIR).ok();
-    let p = form.file.file.path();
-    let uuid = Uuid::new_v4().to_string();
-    let to = PathBuf::from(UPLOAD_DIR).join(&uuid);
-    if let Err(err) = std::fs::rename(p, to) {
-        return HttpResponse::InternalServerError().body(format!("Failed to rename file: {}", err));
-    }
-    HttpResponse::Ok().body(uuid)
+#[post("/engine/start")]
+async fn engine_start(state: web::Data<AppState>, _auth: Authed) -> impl Responder {
+    let n = {
+        let cfg = state.config.lock().await;
+        cfg.get().apply_secrets();
+        cfg.get().workers
+    };
+    let mut engine = state.engine.lock().await;
+    engine
+        .start(
+            n,
+            WorkerParams {
+                batch_ocr: state.batch_ocr,
+                batch_upscaler: state.batch_upscaler,
+                cuda: state.cuda,
+            },
+        )
+        .await;
+    engine_status_json(engine.state())
 }
 
-#[derive(Debug, MultipartForm)]
-struct TranslateForm {
-    image: TempFile,
-    settings: Option<MpBytes>,
-    save_mask: Option<MpBytes>,
+#[post("/engine/stop")]
+async fn engine_stop(state: web::Data<AppState>, _auth: Authed) -> impl Responder {
+    let mut engine = state.engine.lock().await;
+    engine.stop().await;
+    engine_status_json(engine.state())
 }
 
-#[post("/translate")]
-async fn translate(
+#[post("/engine/restart")]
+async fn engine_restart(state: web::Data<AppState>, _auth: Authed) -> impl Responder {
+    let n = {
+        let cfg = state.config.lock().await;
+        cfg.get().apply_secrets();
+        cfg.get().workers
+    };
+    let mut engine = state.engine.lock().await;
+    engine
+        .restart(
+            n,
+            WorkerParams {
+                batch_ocr: state.batch_ocr,
+                batch_upscaler: state.batch_upscaler,
+                cuda: state.cuda,
+            },
+        )
+        .await;
+    engine_status_json(engine.state())
+}
+
+#[get("/config")]
+async fn get_config(state: web::Data<AppState>, _auth: Authed) -> impl Responder {
+    let cfg = state.config.lock().await;
+    HttpResponse::Ok().json(cfg.get())
+}
+
+#[put("/config")]
+async fn put_config(
     state: web::Data<AppState>,
-    MultipartForm(form): MultipartForm<TranslateForm>,
+    _auth: Authed,
+    body: web::Json<serde_json::Value>,
 ) -> impl Responder {
+    let cfg: DaemonConfig = match serde_json::from_value(body.into_inner()) {
+        Ok(c) => c,
+        Err(e) => return fail(StatusCode::BAD_REQUEST, format!("invalid config: {e}")),
+    };
+    cfg.apply_secrets();
+    let mut store = state.config.lock().await;
+    if let Err(e) = store.replace(cfg) {
+        return fail(StatusCode::INTERNAL_SERVER_ERROR, e.message());
+    }
+    HttpResponse::Ok().json(store.get())
+}
+
+#[derive(Debug, MultipartForm)]
+struct JobForm {
+    image: TempFile,
+    overrides: Option<MpBytes>,
+}
+
+#[post("/jobs")]
+async fn submit_job(
+    state: web::Data<AppState>,
+    _auth: Authed,
+    MultipartForm(form): MultipartForm<JobForm>,
+) -> impl Responder {
+    if !state.engine.lock().await.state().accepts_jobs() {
+        return fail(StatusCode::SERVICE_UNAVAILABLE, "engine is stopped");
+    }
     if form.image.size == 0 {
         return fail(StatusCode::BAD_REQUEST, "没有选择图片");
     }
-
-    let settings = match parse_settings(&field_text(form.settings.as_ref())) {
-        Ok(s) => Arc::new(s),
-        Err(e) => return fail(StatusCode::BAD_REQUEST, e),
+    let base = state.config.lock().await.get().settings_clone();
+    let settings = match apply_overrides(&base, &field_text(form.overrides.as_ref())) {
+        Ok(s) => s,
+        Err(e) => return fail(StatusCode::BAD_REQUEST, e.message()),
     };
-    let save_mask = field_text(form.save_mask.as_ref()).trim() == "1";
-
     let bytes = match fs::read(form.image.file.path()) {
         Ok(b) => b,
         Err(e) => {
@@ -289,147 +247,192 @@ async fn translate(
         Ok(i) => i,
         Err(e) => return fail(StatusCode::BAD_REQUEST, format!("无法解码图片: {e}")),
     };
-
-    let tmp = PathBuf::from(std::env::temp_dir()).join(format!("mit-api-{}", Uuid::new_v4()));
-    if let Err(e) = fs::create_dir_all(&tmp) {
+    let job_id = state.jobs.create(img, settings);
+    if let Err(full) = state.queue.try_push(job_id.clone()) {
+        state.jobs.discard(&job_id);
         return fail(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("创建临时目录失败: {e}"),
+            StatusCode::TOO_MANY_REQUESTS,
+            format!("queue is full (capacity {})", full.capacity),
         );
     }
-    let _guard = TmpDir(tmp.clone());
-    let ext = settings.render.renderer.extension();
-    let out_path = tmp.join(format!("out.{ext}"));
-    let mask_path = save_mask.then(|| tmp.join("out.mask.png"));
+    HttpResponse::Ok().json(serde_json::json!({ "job_id": job_id }))
+}
 
-    let wall = Instant::now();
-    state.inflight.fetch_add(1, Ordering::Relaxed);
-    let _inflight = Inflight(&state.inflight);
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    if state
+#[get("/jobs")]
+async fn list_jobs(state: web::Data<AppState>, _auth: Authed) -> impl Responder {
+    let jobs: Vec<serde_json::Value> = state
         .jobs
-        .send(TranslateJob {
-            img,
-            settings: settings.clone(),
-            mask_out: mask_path.clone(),
-            reply: reply_tx,
-        })
-        .await
-        .is_err()
-    {
-        return fail(StatusCode::INTERNAL_SERVER_ERROR, "服务内部任务已退出");
-    }
-    let exp = match reply_rx.await {
-        Ok(Ok(Some(e))) => e,
-        Ok(Ok(None)) => {
-            return fail(StatusCode::UNPROCESSABLE_ENTITY, "未检测到可翻译内容");
-        }
-        Ok(Err(e)) => {
-            return fail(StatusCode::INTERNAL_SERVER_ERROR, format!("执行失败: {e}"));
-        }
-        Err(_) => return fail(StatusCode::INTERNAL_SERVER_ERROR, "服务内部任务已退出"),
-    };
-
-    let ocr: Vec<serde_json::Value> = exp
-        .blocks
-        .iter()
-        .map(|b| {
+        .list()
+        .into_iter()
+        .map(|j| {
             serde_json::json!({
-                "text": b.text,
-                "translation": b.translation(),
+                "job_id": j.job_id,
+                "state": j.state,
             })
         })
         .collect();
-    eprintln!(
-        "OCR_JSON {}",
-        serde_json::to_string(&ocr).unwrap_or_else(|_| "[]".into())
-    );
+    HttpResponse::Ok().json(serde_json::json!({ "jobs": jobs }))
+}
 
-    let render_t = Instant::now();
-    if let Err(e) = write_render(exp, &settings, &out_path) {
-        return fail(StatusCode::INTERNAL_SERVER_ERROR, e);
-    }
-    eprintln!("PERF render {}", render_t.elapsed().as_millis());
-    let wall_ms = wall.elapsed().as_millis() as u64;
-    let _ = std::io::stderr().flush();
-
-    let data = match fs::read(&out_path) {
-        Ok(d) => b64_encode(&d),
-        Err(e) => {
-            return fail(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("读取渲染结果失败: {e}"),
-            );
-        }
+#[get("/jobs/{id}")]
+async fn get_job(
+    state: web::Data<AppState>,
+    _auth: Authed,
+    id: web::Path<String>,
+) -> impl Responder {
+    let id = id.into_inner();
+    let Some(job) = state.jobs.get(&id) else {
+        return fail(StatusCode::NOT_FOUND, "job not found");
     };
-    let (mask, mask_mime) = match &mask_path {
-        Some(p) if p.exists() => match fs::read(p) {
-            Ok(d) => (
-                serde_json::Value::String(b64_encode(&d)),
-                serde_json::Value::String("image/png".into()),
-            ),
-            Err(e) => {
-                return fail(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("读取 mask 失败: {e}"),
-                );
-            }
-        },
-        _ => (serde_json::Value::Null, serde_json::Value::Null),
+    let position_in_queue = if job.state == JobState::Queued {
+        state.queue.position(&id).map(|i| i + 1)
+    } else {
+        None
     };
-
     HttpResponse::Ok().json(serde_json::json!({
-        "ok": true,
-        "mime": mime_of(&settings.render.renderer),
-        "filename": format!("out.{ext}"),
-        "data": data,
-        "mask": mask,
-        "mask_mime": mask_mime,
-        "ocr": ocr,
-        "wall_ms": wall_ms,
+        "state": job.state,
+        "position_in_queue": position_in_queue,
+        "error": job.error,
     }))
 }
 
-pub async fn main(models: Models, host: &str, port: u16) -> std::io::Result<()> {
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<TranslateJob>(1);
-    tokio::spawn(async move {
-        let mut models = models;
-        while let Some(job) = rx.recv().await {
-            let result = models
-                .execute(job.img, &job.settings, None, job.mask_out)
-                .await;
-            let _ = job.reply.send(result);
+#[post("/jobs/{id}/cancel")]
+async fn cancel_job(
+    state: web::Data<AppState>,
+    _auth: Authed,
+    id: web::Path<String>,
+) -> impl Responder {
+    let id = id.into_inner();
+    match state.jobs.cancel(&id) {
+        Ok(state_now) => {
+            state.queue.remove(&id);
+            HttpResponse::Ok().json(serde_json::json!({ "state": state_now }))
+        }
+        Err(CancelError::NotFound) => fail(StatusCode::NOT_FOUND, "job not found"),
+        Err(CancelError::NotQueued { state }) => fail(
+            StatusCode::CONFLICT,
+            format!("job is {state:?}"),
+        ),
+    }
+}
+
+#[get("/jobs/{id}/artifact")]
+async fn job_artifact(
+    state: web::Data<AppState>,
+    _auth: Authed,
+    id: web::Path<String>,
+) -> impl Responder {
+    let id = id.into_inner();
+    let Some(job) = state.jobs.get(&id) else {
+        return fail(StatusCode::NOT_FOUND, "job not found");
+    };
+    if job.state != JobState::Done {
+        return fail(StatusCode::CONFLICT, "artifact not ready");
+    }
+    let Some(path) = job.artifact else {
+        return fail(StatusCode::NOT_FOUND, "artifact missing");
+    };
+    let data = match fs::read(&path) {
+        Ok(d) => d,
+        Err(e) => {
+            return fail(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("读取 Artifact 失败: {e}"),
+            );
+        }
+    };
+    let mime = job
+        .mime
+        .unwrap_or_else(|| mime_of(&job.renderer).to_string());
+    HttpResponse::Ok().content_type(mime).body(data)
+}
+
+fn cleanup(artifacts: &ArtifactStore, bonjour: &Mutex<Option<Bonjour>>) {
+    let _ = artifacts.wipe();
+    if let Ok(mut g) = bonjour.lock() {
+        if let Some(svc) = g.take() {
+            svc.shutdown();
+        }
+    }
+}
+
+pub async fn main(args: DaemonArgs) -> std::io::Result<()> {
+    let artifacts = Arc::new(
+        ArtifactStore::platform()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
+    );
+    let queue = Arc::new(Queue::new());
+    let jobs = Arc::new(JobStore::new());
+    let config = ConfigStore::platform()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.message()))?;
+    let pairing = Pairing::open(config.path())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let tokens = pairing.tokens();
+    let engine = Engine::new(queue.clone(), jobs.clone(), artifacts.clone());
+    let bonjour = Mutex::new(match Bonjour::register(args.port) {
+        Ok(svc) => Some(svc),
+        Err(e) => {
+            eprintln!("bonjour unavailable: {e}");
+            None
         }
     });
+
     let state = web::Data::new(AppState {
-        jobs: tx,
+        engine: tokio::sync::Mutex::new(engine),
+        jobs,
+        queue,
+        config: tokio::sync::Mutex::new(config),
+        pairing: tokio::sync::Mutex::new(pairing),
+        tokens,
         started: Instant::now(),
-        inflight: AtomicUsize::new(0),
+        batch_ocr: args.max_batch_size_ocr,
+        batch_upscaler: args.max_batch_size_upscaler,
+        cuda: args.cuda,
     });
-    HttpServer::new(move || {
-        App::new()
-            .app_data(state.clone())
-            .app_data(web::PayloadConfig::new(64 * 1024 * 1024))
-            .app_data(
-                MultipartFormConfig::default()
-                    .total_limit(64 * 1024 * 1024)
-                    .memory_limit(4 * 1024 * 1024),
-            )
-            .service(health)
-            .service(translate)
-            .service(defaults_detector)
-            .service(defaults_ocr)
-            .service(defaults_mask_refinement)
-            .service(defaults_translator)
-            .service(defaults_inpainter)
-            .service(defaults_colorizer)
-            .service(defaults_render)
-            .service(upload_image)
-            .service(get_image)
-            .service(hello)
+
+    let server = HttpServer::new({
+        let state = state.clone();
+        move || {
+            App::new()
+                .app_data(state.clone())
+                .app_data(web::PayloadConfig::new(64 * 1024 * 1024))
+                .app_data(
+                    MultipartFormConfig::default()
+                        .total_limit(64 * 1024 * 1024)
+                        .memory_limit(4 * 1024 * 1024),
+                )
+                .service(webui::index)
+                .service(health)
+                .service(pair_request)
+                .service(pair_confirm)
+                .service(engine_status)
+                .service(engine_start)
+                .service(engine_stop)
+                .service(engine_restart)
+                .service(get_config)
+                .service(put_config)
+                .service(submit_job)
+                .service(list_jobs)
+                .service(get_job)
+                .service(cancel_job)
+                .service(job_artifact)
+        }
     })
-    .workers(1)
-    .bind((host, port))?
-    .run()
-    .await
+    .bind((args.host.as_str(), args.port))?
+    .run();
+    let handle = server.handle();
+
+    tokio::select! {
+        r = server => {
+            cleanup(&artifacts, &bonjour);
+            r
+        }
+        _ = tokio::signal::ctrl_c() => {
+            eprintln!("daemon received ctrl-c");
+            state.engine.lock().await.stop().await;
+            cleanup(&artifacts, &bonjour);
+            handle.stop(true).await;
+            Ok(())
+        }
+    }
 }

@@ -2,561 +2,371 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <title>图片翻译测试</title>
+    <title>图片翻译</title>
+    <style>
+      body { font-family: sans-serif; margin: 1.5rem; }
+      nav button { margin-right: 0.5rem; }
+      nav button.active { font-weight: bold; }
+      section { margin-top: 1rem; }
+      label { display: inline-block; margin-right: 1rem; margin-bottom: 0.5rem; }
+      textarea { width: 100%; min-height: 24rem; font-family: monospace; }
+      #error { color: #b00020; white-space: pre-wrap; }
+    </style>
   </head>
   <body>
-    <h1>图片翻译测试</h1>
+    <h1>图片翻译</h1>
+    <p id="pairbar">
+      <span id="pairmsg">未配对。先请求验证码，再输入 Daemon 控制台中的 6 位数字。</span>
+      <button type="button" id="pair_request">请求配对码</button>
+      <label>验证码 <input id="pair_code" maxlength="6" inputmode="numeric" /></label>
+      <button type="button" id="pair_confirm">确认</button>
+    </p>
     <p id="svcbar">
-      <span id="svcmsg">服务：已停止（按下生成时自动启动）</span>
+      <span id="svcmsg">引擎：已停止</span>
       <button type="button" id="svc_start">启动</button>
       <button type="button" id="svc_stop" disabled>关闭</button>
       <button type="button" id="svc_restart">重启</button>
     </p>
-    <form id="f">
+    <nav>
+      <button type="button" id="tab_play" class="active">翻译</button>
+      <button type="button" id="tab_cfg">配置</button>
+    </nav>
+
+    <section id="panel_play">
+      <form id="f">
+        <p>
+          <label>图片 <input name="image" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" required /></label>
+        </p>
+        <p>
+          <label>目标语言
+            <select name="target_lang">
+              <option value="chs" selected>简体中文</option>
+              <option value="cht">繁体中文</option>
+              <option value="en">英文</option>
+              <option value="ja">日文</option>
+            </select>
+          </label>
+          <label>检测器
+            <select name="detector">
+              <option>DBNet</option>
+              <option>Ctd</option>
+            </select>
+          </label>
+          <label>翻译器
+            <select name="translator">
+              <option value="Llm" selected>LLM</option>
+              <option value="Original">按原文输出</option>
+              <option value="None">不输出文字</option>
+            </select>
+          </label>
+        </p>
+        <p><button type="submit">提交</button></p>
+      </form>
+      <p id="status"></p>
+      <pre id="error"></pre>
       <p>
-        <label>图片 <input name="image" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" required /></label>
-        <label><input name="save_mask" type="checkbox" checked /> 显示 mask</label>
+        <img id="result" hidden />
       </p>
+      <iframe id="html" hidden></iframe>
+      <p><a id="dl" hidden>下载结果</a></p>
+    </section>
+
+    <section id="panel_cfg" hidden>
+      <p>配置保存在 Daemon 本机。保存后立即写入 config.json。</p>
       <p>
-        <label>日志等级 <input name="verbose" type="number" min="0" max="3" value="0" /></label>
-        <label>OCR 批大小 <input name="max_batch_size_ocr" type="number" value="16" /></label>
-        <label>超分批大小 <input name="max_batch_size_upscaler" type="number" value="2" /></label>
+        <button type="button" id="cfg_load">重新加载</button>
+        <button type="button" id="cfg_save">保存</button>
       </p>
-
-      <fieldset>
-        <legend>检测</legend>
-        <label>检测器
-          <select name="detector">
-            <option>DBNet</option>
-            <option>Ctd</option>
-          </select>
-        </label>
-        <label>检测分辨率 <input name="detect_size" type="number" value="2048" /></label>
-        <label>unclip_ratio <input name="unclip_ratio" type="number" step="0.01" value="2.3" /></label>
-        <label>框阈值 <input name="box_threshold" type="number" step="0.01" value="0.7" /></label>
-        <label>文本阈值 <input name="text_threshold" type="number" step="0.01" value="0.5" /></label>
-        <label><input name="invert" type="checkbox" /> 反色</label>
-        <label><input name="gamma_correct" type="checkbox" /> 伽马校正</label>
-        <label><input name="rotate" type="checkbox" /> 旋转</label>
-        <label><input name="auto_rotate" type="checkbox" /> 自动旋转</label>
-      </fieldset>
-
-      <fieldset>
-        <legend>OCR</legend>
-        <label>OCR
-          <select name="ocr">
-            <option>Ocr48px</option>
-            <option>Ctc48px</option>
-            <option>MangaOcr</option>
-            <option>Native</option>
-          </select>
-        </label>
-        <label>最短文本 <input name="min_text_length" type="number" value="1" /></label>
-        <label>概率阈值 <input name="prob" type="number" step="0.01" value="0.2" /></label>
-        <label>忽略非气泡 <input name="ocr_ignore_bubble" type="number" value="0" /></label>
-        <label>文本过滤 <input name="filter_text" type="text" placeholder="正则,正则" /></label>
-        <label><input name="use_mocr_merge" type="checkbox" /> use_mocr_merge</label>
-      </fieldset>
-
-      <fieldset>
-        <legend>标签</legend>
-        <label>标签器
-          <select name="tagger">
-            <option value="Pixai" selected>PixAI v0.9</option>
-            <option value="">（无）</option>
-          </select>
-        </label>
-        <label>通用阈值 <input name="general_threshold" type="number" step="0.01" value="0.3" /></label>
-        <label>角色阈值 <input name="character_threshold" type="number" step="0.01" value="0.85" /></label>
-      </fieldset>
-
-      <fieldset>
-        <legend>翻译</legend>
-        <label>模式
-          <select name="translator_mode">
-            <option value="Llm" selected>LLM</option>
-            <option value="Original">按原文输出</option>
-            <option value="None">不输出文字</option>
-          </select>
-        </label>
-        <label>协议
-          <select name="translator_backend">
-            <option value="openai" selected>OpenAI Responses</option>
-            <option value="anthropic">Anthropic</option>
-          </select>
-        </label>
-        <label>模型 <input name="translator_model" type="text" value="deepseek-v4-flash" /></label>
-        <label>Base URL <input name="translator_base_url" type="text" placeholder="默认 DeepSeek" /></label>
-        <label><input name="translator_thinking" type="checkbox" checked /> thinking_mode</label>
-        <label>thinking 强度
-          <select name="translator_thinking_strength">
-            <option value="low">low</option>
-            <option value="high" selected>high</option>
-            <option value="max">max</option>
-          </select>
-        </label>
-        <label><input name="translator_web_search" type="checkbox" /> web_search (Tavily)</label>
-        <label>目标语言
-          <select name="target">
-            <option value="chs" selected>简体中文</option>
-            <option value="cht">繁体中文</option>
-            <option value="en">英文</option>
-            <option value="ja">日文</option>
-          </select>
-        </label>
-        <label>语言过滤 <input name="filter_lang" type="text" placeholder="ja,en" /></label>
-        <label>译前词典 <input name="pre_dict" type="text" /></label>
-        <label>译后词典 <input name="post_dict" type="text" /></label>
-      </fieldset>
-
-      <fieldset>
-        <legend>Mask 细化</legend>
-        <label>方法
-          <select name="mask_method">
-            <option>FitText</option>
-            <option>FillMask</option>
-          </select>
-        </label>
-        <label>膨胀偏移 <input name="dilation_offset" type="number" step="0.1" value="20" /></label>
-        <label>核大小 <input name="kernel_size" type="number" value="3" /></label>
-        <label>忽略非气泡 <input name="mask_ignore_bubble" type="number" value="0" /></label>
-        <label><input name="furigana" type="checkbox" /> 假名</label>
-      </fieldset>
-
-      <fieldset>
-        <legend>修复</legend>
-        <label>修复器
-          <select name="inpainter">
-            <option>LamaLarge</option>
-            <option>LamaAot</option>
-            <option>LamaMpe</option>
-            <option>None</option>
-            <option>Original</option>
-          </select>
-        </label>
-        <label>修复分辨率 <input name="inpainting_size" type="number" value="2048" /></label>
-        <label>使用的 mask
-          <select name="inpaint_mask">
-            <option>RefinedMask</option>
-            <option>Mask</option>
-            <option>Both</option>
-          </select>
-        </label>
-        <label>填充色
-          <input name="inpaint_r" type="number" min="0" max="255" value="255" />
-          <input name="inpaint_g" type="number" min="0" max="255" value="255" />
-          <input name="inpaint_b" type="number" min="0" max="255" value="255" />
-        </label>
-      </fieldset>
-
-      <fieldset>
-        <legend>渲染</legend>
-        <label>渲染器
-          <select name="renderer">
-            <option>Png</option>
-            <option>Html</option>
-            <option>Raw</option>
-          </select>
-        </label>
-        <label>方向
-          <select name="direction">
-            <option>Auto</option>
-            <option>Horizontal</option>
-            <option>Vertical</option>
-          </select>
-        </label>
-        <label>对齐
-          <select name="alignment">
-            <option>Auto</option>
-            <option>Left</option>
-            <option>Center</option>
-            <option>Right</option>
-          </select>
-        </label>
-        <label>字号 <input name="font_size" type="number" step="0.1" /></label>
-        <label>字号偏移 <input name="font_size_offset" type="number" step="0.1" value="0" /></label>
-        <label>最小字号 <input name="font_size_minimum" type="number" step="0.1" value="-1" /></label>
-        <label>行距 <input name="line_spacing" type="number" step="0.1" /></label>
-        <label><input name="disable_font_border" type="checkbox" /> 无描边</label>
-        <label><input name="rtl" type="checkbox" checked /> 从右到左</label>
-        <label><input name="force_simple_sort" type="checkbox" /> 简单排序</label>
-      </fieldset>
-
-      <fieldset>
-        <legend>超分</legend>
-        <label>超分
-          <select name="upscaler">
-            <option value="" selected>（无）</option>
-            <option>Esrgan2x</option>
-            <option>Esrgan4x</option>
-            <option>EsrganAnime4x</option>
-            <option>Anime4k</option>
-          </select>
-        </label>
-        <label>块大小 <input name="patch_size" type="number" /></label>
-        <label>填充 <input name="padding" type="number" value="0" /></label>
-      </fieldset>
-
-      <fieldset>
-        <legend>上色</legend>
-        <label>上色
-          <select name="colorizer">
-            <option>None</option>
-          </select>
-        </label>
-        <label>上色尺寸 <input name="colorization_size" type="number" value="576" /></label>
-        <label>去噪 <input name="denoise_sigma" type="number" value="30" /></label>
-      </fieldset>
-
-      <p><button type="submit">运行</button></p>
-    </form>
-
-    <p id="status"></p>
-    <pre id="error"></pre>
-    <table id="perf"></table>
-    <table>
-      <tr>
-        <td><img id="result" hidden /></td>
-        <td><img id="mask" hidden /></td>
-      </tr>
-    </table>
-    <h2 id="ocr_title" hidden>文字识别</h2>
-    <table id="ocr"></table>
-    <details>
-      <summary>标签识别内容</summary>
-      <pre id="tags"></pre>
-    </details>
-    <details>
-      <summary>LLM 请求与响应</summary>
-      <div id="llm"></div>
-    </details>
-    <iframe id="html" hidden></iframe>
-    <p><a id="dl" hidden>下载结果</a> <a id="dl_mask" hidden>下载 mask</a></p>
-    <details>
-      <summary>日志</summary>
-      <pre id="log"></pre>
-    </details>
+      <textarea id="cfg_json" spellcheck="false"></textarea>
+    </section>
 
     <script>
       const $ = (id) => document.getElementById(id);
-      let svcState = "stopped";
+      const TOKEN_KEY = "imagetranslator_token";
+      let token = localStorage.getItem(TOKEN_KEY) || "";
+      let engineState = "stopped";
 
-      function fmtGiB(bytes) {
-        if (bytes == null) return "—";
-        return (bytes / 1024 ** 3).toFixed(2) + " GiB";
+      function authHeaders(extra) {
+        const h = extra ? { ...extra } : {};
+        if (token) h.Authorization = "Bearer " + token;
+        return h;
       }
-      function fmtCpu(pct) {
-        if (pct == null) return "—";
-        return pct.toFixed(1) + "%";
+
+      function setPairMsg() {
+        $("pairmsg").textContent = token
+          ? "已配对。后续请求携带本地保存的令牌。"
+          : "未配对。先请求验证码，再输入 Daemon 控制台中的 6 位数字。";
       }
-      function fmtGpu(gpu) {
-        if (!gpu) return "—";
-        if (gpu.available && gpu.percent != null) return gpu.percent + "%";
-        return gpu.note || "不可用";
+
+      function engineLabel(state) {
+        return (
+          {
+            stopped: "已停止",
+            starting: "启动中",
+            running: "运行中",
+            draining: "排空中",
+          }[state] || state
+        );
       }
-      function fmtUp(s) {
-        if (s == null) return "—";
-        const h = Math.floor(s / 3600);
-        const m = Math.floor((s % 3600) / 60);
-        const sec = s % 60;
-        if (h) return h + " 小时 " + m + " 分";
-        if (m) return m + " 分 " + sec + " 秒";
-        return sec + " 秒";
+
+      function renderEngine(d) {
+        engineState = d.state || "stopped";
+        $("svcmsg").textContent = "引擎：" + engineLabel(engineState);
+        $("svc_start").disabled = engineState === "running" || engineState === "starting";
+        $("svc_stop").disabled = engineState === "stopped";
       }
-      function setSvcButtons() {
-        $("svc_start").disabled = svcState === "ready";
-        $("svc_stop").disabled = svcState === "stopped";
+
+      async function readJson(res) {
+        const text = await res.text();
+        try {
+          return JSON.parse(text);
+        } catch {
+          throw new Error("非 JSON 响应 HTTP " + res.status);
+        }
       }
-      function renderSvc(d) {
-        svcState = d.state || "stopped";
-        const msg = $("svcmsg");
-        if (svcState === "stopped") {
-          msg.textContent = "服务：已停止（按下生成时自动启动）";
-          setSvcButtons();
+
+      async function pollEngine() {
+        if (!token) return;
+        try {
+          const res = await fetch("/engine/status", { headers: authHeaders() });
+          if (res.status === 401) return;
+          renderEngine(await readJson(res));
+        } catch {
+          $("svcmsg").textContent = "引擎：无法连接";
+        }
+      }
+
+      async function engineAction(path) {
+        if (!token) {
+          $("error").textContent = "请先完成配对";
           return;
         }
-        const label = svcState === "starting" ? "启动中" : "运行中";
-        msg.textContent =
-          "服务：" +
-          label +
-          " | CPU " +
-          fmtCpu(d.cpu_pct) +
-          " | 内存 " +
-          fmtGiB(d.rss_bytes) +
-          " | GPU " +
-          fmtGpu(d.gpu) +
-          " | 已运行 " +
-          fmtUp(d.uptime_s);
-        setSvcButtons();
-      }
-      async function pollSvc() {
         try {
-          const res = await fetch("/service/status");
-          renderSvc(await res.json());
-        } catch {
-          svcState = "stopped";
-          $("svcmsg").textContent = "服务：已停止（按下生成时自动启动）";
-          setSvcButtons();
+          const res = await fetch(path, { method: "POST", headers: authHeaders() });
+          const d = await readJson(res);
+          if (!res.ok) {
+            $("error").textContent = d.error || "引擎操作失败";
+            return;
+          }
+          renderEngine(d);
+        } catch (err) {
+          $("error").textContent = String(err);
         }
       }
-      async function svcAction(path) {
-        try {
-          const res = await fetch(path, { method: "POST" });
-          renderSvc(await res.json());
-        } catch {
-          svcState = "stopped";
-          $("svcmsg").textContent = "服务：已停止（按下生成时自动启动）";
-          setSvcButtons();
-        }
-      }
-      $("svc_start").onclick = () => svcAction("/service/start");
-      $("svc_stop").onclick = () => svcAction("/service/stop");
-      $("svc_restart").onclick = () => svcAction("/service/restart");
-      pollSvc();
-      setInterval(pollSvc, 3000);
 
-      const emptyNull = (v) => (v === "" ? null : v);
-      const csv = (v) =>
-        v
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-      const numOrNull = (v) => (v === "" ? null : Number(v));
-      const STEP = {
-        startup: "启动",
-        colorizer: "上色",
-        upscaler: "超分",
-        detector: "检测",
-        ocr: "OCR",
-        merge: "合并",
-        pre_dict: "译前词典",
-        tagger: "标签",
-        translate: "翻译",
-        post_dict: "译后词典",
-        mask: "Mask",
-        inpaint: "修复",
-        render: "渲染",
-        wall: "合计",
+      $("pair_request").onclick = async () => {
+        $("error").textContent = "";
+        try {
+          const res = await fetch("/pair/request", { method: "POST" });
+          const d = await readJson(res);
+          if (!res.ok) {
+            $("error").textContent = d.error || "请求配对失败";
+            return;
+          }
+          $("pairmsg").textContent = "已请求。请查看 Daemon 控制台中的 6 位数字，30 秒内确认。";
+        } catch (err) {
+          $("error").textContent = String(err);
+        }
       };
 
-      function settings(f) {
-        return {
-          upscaler: {
-            upscaler: emptyNull(f.upscaler.value),
-            patch_size: numOrNull(f.patch_size.value),
-            padding: Number(f.padding.value),
-          },
-          colorizer: {
-            colorizer: f.colorizer.value,
-            colorization_size: Number(f.colorization_size.value),
-            denoise_sigma: Number(f.denoise_sigma.value),
-          },
-          detector: {
-            detector: f.detector.value,
-            preprocessor: {
-              invert: f.invert.checked,
-              gamma_correct: f.gamma_correct.checked,
-              rotate: f.rotate.checked,
-              auto_rotate: f.auto_rotate.checked,
-            },
-            options: {
-              detect_size: Number(f.detect_size.value),
-              unclip_ratio: Number(f.unclip_ratio.value),
-              text_threshold: Number(f.text_threshold.value),
-              box_threshold: Number(f.box_threshold.value),
-            },
-          },
-          ocr: {
-            ocr: f.ocr.value,
-            use_mocr_merge: f.use_mocr_merge.checked,
-            min_text_length: Number(f.min_text_length.value),
-            filter_text: csv(f.filter_text.value),
-            prob: Number(f.prob.value),
-            ignore_bubble: Number(f.ocr_ignore_bubble.value),
-          },
-          mask_refinement: {
-            ignore_bubble: Number(f.mask_ignore_bubble.value),
-            dilation_offset: Number(f.dilation_offset.value),
-            kernel_size: Number(f.kernel_size.value),
-            furigana: f.furigana.checked,
-            method: f.mask_method.value,
-          },
-          inpainter: {
-            inpainter: f.inpainter.value,
-            inpainting_size: Number(f.inpainting_size.value),
-            inpaint_color: [
-              Number(f.inpaint_r.value),
-              Number(f.inpaint_g.value),
-              Number(f.inpaint_b.value),
-            ],
-            mask: f.inpaint_mask.value,
-          },
-          tagger: {
-            tagger: emptyNull(f.tagger.value),
-            general_threshold: Number(f.general_threshold.value),
-            character_threshold: Number(f.character_threshold.value),
-          },
-          translator: {
-            mode: f.translator_mode.value,
-            backend: f.translator_backend.value,
-            base_url: emptyNull(f.translator_base_url.value),
-            model: f.translator_model.value,
-            thinking: f.translator_thinking.checked,
-            thinking_strength: f.translator_thinking_strength.value,
-            web_search: f.translator_web_search.checked,
-            target: f.target.value,
-            filter_lang: csv(f.filter_lang.value),
-            pre_dict: emptyNull(f.pre_dict.value),
-            post_dict: emptyNull(f.post_dict.value),
-          },
-          render: {
-            renderer: f.renderer.value,
-            alignment: f.alignment.value,
-            direction: f.direction.value,
-            disable_font_border: f.disable_font_border.checked,
-            font_size: numOrNull(f.font_size.value),
-            font_size_offset: Number(f.font_size_offset.value),
-            font_size_minimum: Number(f.font_size_minimum.value),
-            line_spacing: numOrNull(f.line_spacing.value),
-            rtl: f.rtl.checked,
-            force_simple_sort: f.force_simple_sort.checked,
-          },
-        };
-      }
-
-      function showPerf(rows, wall) {
-        const t = $("perf");
-        t.replaceChildren();
-        const add = (step, ms) => {
-          const tr = t.insertRow();
-          tr.insertCell().textContent = STEP[step] || step;
-          tr.insertCell().textContent = ms + " ms";
-        };
-        for (const r of rows || []) add(r.step, r.ms);
-        if (wall != null) add("wall", wall);
-      }
-
-      function prettyJson(v) {
-        if (typeof v === "string") return v;
+      $("pair_confirm").onclick = async () => {
+        $("error").textContent = "";
         try {
-          return JSON.stringify(v, null, 2);
-        } catch {
-          return String(v);
+          const res = await fetch("/pair/confirm", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code: $("pair_code").value.trim() }),
+          });
+          const d = await readJson(res);
+          if (!res.ok) {
+            $("error").textContent = d.error || "确认失败";
+            return;
+          }
+          token = d.token;
+          localStorage.setItem(TOKEN_KEY, token);
+          setPairMsg();
+          pollEngine();
+          loadConfig();
+        } catch (err) {
+          $("error").textContent = String(err);
+        }
+      };
+
+      $("svc_start").onclick = () => engineAction("/engine/start");
+      $("svc_stop").onclick = () => engineAction("/engine/stop");
+      $("svc_restart").onclick = () => engineAction("/engine/restart");
+
+      function showTab(which) {
+        const play = which === "play";
+        $("panel_play").hidden = !play;
+        $("panel_cfg").hidden = play;
+        $("tab_play").className = play ? "active" : "";
+        $("tab_cfg").className = play ? "" : "active";
+      }
+      $("tab_play").onclick = () => showTab("play");
+      $("tab_cfg").onclick = () => {
+        showTab("cfg");
+        loadConfig();
+      };
+
+      async function loadConfig() {
+        if (!token) return;
+        try {
+          const res = await fetch("/config", { headers: authHeaders() });
+          const d = await readJson(res);
+          if (!res.ok) {
+            $("error").textContent = d.error || "读取配置失败";
+            return;
+          }
+          $("cfg_json").value = JSON.stringify(d, null, 2);
+        } catch (err) {
+          $("error").textContent = String(err);
         }
       }
-      function showTags(tags) {
-        $("tags").textContent =
-          tags == null ? "无（未启用 tagger 或非 LLM 模式）" : tags;
-      }
-      function showLlm(rounds) {
-        const box = $("llm");
-        box.replaceChildren();
-        if (!rounds?.length) {
-          box.textContent = "无";
+
+      $("cfg_load").onclick = loadConfig;
+      $("cfg_save").onclick = async () => {
+        if (!token) {
+          $("error").textContent = "请先完成配对";
           return;
         }
-        for (const r of rounds) {
-          const h = document.createElement("p");
-          h.textContent = "第 " + r.round + " 轮" + (r.error ? "（失败）" : "");
-          const req = document.createElement("pre");
-          req.textContent = prettyJson(r.request);
-          const resp = document.createElement("pre");
-          resp.textContent = prettyJson(r.response);
-          box.appendChild(h);
-          box.appendChild(req);
-          box.appendChild(resp);
+        let body;
+        try {
+          body = JSON.parse($("cfg_json").value);
+        } catch (err) {
+          $("error").textContent = "配置 JSON 无效";
+          return;
         }
-      }
-      function showOcr(rows) {
-        const t = $("ocr");
-        const title = $("ocr_title");
-        t.replaceChildren();
-        title.hidden = !rows?.length;
-        if (!rows?.length) return;
-        const head = t.insertRow();
-        for (const h of ["#", "识别", "翻译"]) head.insertCell().textContent = h;
-        rows.forEach((r, i) => {
-          const tr = t.insertRow();
-          tr.insertCell().textContent = String(i + 1);
-          tr.insertCell().textContent = r.text || "";
-          tr.insertCell().textContent = r.translation || "";
-        });
-      }
+        try {
+          const res = await fetch("/config", {
+            method: "PUT",
+            headers: authHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify(body),
+          });
+          const d = await readJson(res);
+          if (!res.ok) {
+            $("error").textContent = d.error || "保存配置失败";
+            return;
+          }
+          $("cfg_json").value = JSON.stringify(d, null, 2);
+          $("error").textContent = "";
+          $("status").textContent = "配置已保存";
+        } catch (err) {
+          $("error").textContent = String(err);
+        }
+      };
 
-      function showOut(d) {
+      function showOut(blob, mime, filename) {
         const img = $("result");
-        const mask = $("mask");
         const frame = $("html");
         const dl = $("dl");
-        const dlMask = $("dl_mask");
         img.hidden = true;
-        mask.hidden = true;
         frame.hidden = true;
         dl.hidden = true;
-        dlMask.hidden = true;
-        if (!d.data) return;
-        const url = "data:" + d.mime + ";base64," + d.data;
+        const url = URL.createObjectURL(blob);
         dl.href = url;
-        dl.download = d.filename || "out";
+        dl.download = filename || "out";
         dl.hidden = false;
-        if (d.mime.startsWith("image/")) {
+        if (mime.startsWith("image/")) {
           img.src = url;
           img.hidden = false;
-        } else if (d.mime === "text/html") {
+        } else if (mime === "text/html") {
           frame.src = url;
           frame.hidden = false;
         }
-        if (d.mask) {
-          const murl = "data:" + (d.mask_mime || "image/png") + ";base64," + d.mask;
-          mask.src = murl;
-          mask.hidden = false;
-          dlMask.href = murl;
-          dlMask.download = "mask.png";
-          dlMask.hidden = false;
-        }
+      }
+
+      async function pollJob(jobId) {
+        const res = await fetch("/jobs/" + jobId, { headers: authHeaders() });
+        const d = await readJson(res);
+        if (!res.ok) throw new Error(d.error || "查询 Job 失败");
+        return d;
       }
 
       $("f").onsubmit = async (e) => {
         e.preventDefault();
+        if (!token) {
+          $("error").textContent = "请先完成配对";
+          return;
+        }
         const f = e.target;
-        $("status").textContent =
-          svcState === "ready" ? "运行中" : "服务启动中（首次加载模型较慢）";
+        $("status").textContent = "已提交";
         $("error").textContent = "";
-        $("log").textContent = "";
-        showPerf([]);
-        showOcr([]);
-        showTags(null);
-        showLlm([]);
-        showOut({});
+        $("result").hidden = true;
+        $("html").hidden = true;
+        $("dl").hidden = true;
         const fd = new FormData();
         fd.append("image", f.image.files[0]);
-        fd.append("settings", JSON.stringify(settings(f)));
-        fd.append("verbose", f.verbose.value);
-        fd.append("max_batch_size_ocr", f.max_batch_size_ocr.value);
-        fd.append("max_batch_size_upscaler", f.max_batch_size_upscaler.value);
-        if (f.save_mask.checked) fd.append("save_mask", "1");
-        let d;
+        fd.append(
+          "overrides",
+          JSON.stringify({
+            target_lang: f.target_lang.value,
+            detector: f.detector.value,
+            translator: f.translator.value,
+          }),
+        );
+        let jobId;
         try {
-          const res = await fetch("/run", { method: "POST", body: fd });
-          d = await res.json();
+          const res = await fetch("/jobs", { method: "POST", headers: authHeaders(), body: fd });
+          const d = await readJson(res);
+          if (!res.ok) {
+            $("status").textContent = "失败";
+            $("error").textContent = d.error || "提交失败";
+            return;
+          }
+          jobId = d.job_id;
         } catch (err) {
           $("status").textContent = "失败";
           $("error").textContent = String(err);
           return;
         }
-        showPerf(d.perf, d.wall_ms);
-        showOcr(d.ocr);
-        showTags(d.tags);
-        showLlm(d.llm);
-        $("log").textContent = d.log || "";
-        if (!d.ok) {
-          $("status").textContent = "失败";
-          $("error").textContent = d.error || "失败";
-          return;
+        while (true) {
+          let d;
+          try {
+            d = await pollJob(jobId);
+          } catch (err) {
+            $("status").textContent = "失败";
+            $("error").textContent = String(err);
+            return;
+          }
+          if (d.state === "queued") {
+            $("status").textContent =
+              "排队中" + (d.position_in_queue ? "（第 " + d.position_in_queue + " 位）" : "");
+          } else if (d.state === "running") {
+            $("status").textContent = "运行中";
+          } else if (d.state === "done") {
+            try {
+              const art = await fetch("/jobs/" + jobId + "/artifact", { headers: authHeaders() });
+              if (!art.ok) {
+                $("status").textContent = "失败";
+                $("error").textContent = "读取 Artifact 失败";
+                return;
+              }
+              const mime = art.headers.get("content-type") || "application/octet-stream";
+              const blob = await art.blob();
+              $("status").textContent = "完成";
+              showOut(blob, mime, "out");
+            } catch (err) {
+              $("status").textContent = "失败";
+              $("error").textContent = String(err);
+            }
+            return;
+          } else if (d.state === "cancelled") {
+            $("status").textContent = "已取消";
+            return;
+          } else {
+            $("status").textContent = "失败";
+            $("error").textContent = d.error || "Job 失败";
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 1000));
         }
-        $("status").textContent = "完成";
-        showOut(d);
       };
+
+      setPairMsg();
+      pollEngine();
+      setInterval(pollEngine, 3000);
+      if (token) loadConfig();
     </script>
   </body>
 </html>
