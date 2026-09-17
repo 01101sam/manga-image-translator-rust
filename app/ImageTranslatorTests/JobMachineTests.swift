@@ -119,6 +119,20 @@ final class JobMachineTests: XCTestCase {
         XCTAssertEqual(adjacentDoneJobId(jobs: jobs, currentId: "c", delta: 1), "b")
     }
 
+    func testVerticalArrowsAlwaysMoveSelection() {
+        XCTAssertEqual(jobListArrowDelta(.up, previewOpen: false), -1)
+        XCTAssertEqual(jobListArrowDelta(.down, previewOpen: false), 1)
+        XCTAssertEqual(jobListArrowDelta(.up, previewOpen: true), -1)
+        XCTAssertEqual(jobListArrowDelta(.down, previewOpen: true), 1)
+    }
+
+    func testHorizontalArrowsAliasVerticalOnlyWhenPreviewOpen() {
+        XCTAssertNil(jobListArrowDelta(.left, previewOpen: false))
+        XCTAssertNil(jobListArrowDelta(.right, previewOpen: false))
+        XCTAssertEqual(jobListArrowDelta(.left, previewOpen: true), -1)
+        XCTAssertEqual(jobListArrowDelta(.right, previewOpen: true), 1)
+    }
+
     func testEnterOpensPreviewOnlyWhenDone() {
         XCTAssertTrue(canOpenJobPreview(.done))
         XCTAssertFalse(canOpenJobPreview(.queued))
