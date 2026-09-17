@@ -38,6 +38,16 @@
                ReferencedContainer = "container:ImageTranslator.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "010000000000000000000022"
+               BuildableName = "ImageTranslatorUITests.xctest"
+               BlueprintName = "ImageTranslatorUITests"
+               ReferencedContainer = "container:ImageTranslator.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

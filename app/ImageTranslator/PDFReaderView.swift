@@ -60,7 +60,7 @@ final class PDFSession: ObservableObject {
             page.draw(with: .mediaBox, to: ctx.cgContext)
             ctx.cgContext.restoreGState()
         }
-        return image.pngData()
+        return image.jpegData(compressionQuality: 0.85)
     }
 
     func displayImage(artifacts: [String: Data]) -> UIImage? {
@@ -163,6 +163,11 @@ struct PDFReaderView: View {
                     }
                 }
             }
+            .onAppear {
+                if let url = session.consumePendingPDF() {
+                    reader.load(url)
+                }
+            }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.pdf], allowsMultipleSelection: false) { result in
                 if case .success(let urls) = result, let url = urls.first {
                     reader.load(url)
@@ -178,11 +183,16 @@ struct PDFReaderView: View {
         let page = reader.pages[reader.currentIndex]
         return HStack {
             Button("上一页") { reader.move(by: -1) }
+                .accessibilityIdentifier("reader-prev")
             Spacer()
             Text("第 \(reader.currentIndex + 1)/\(reader.pages.count) 页 · \(pageLabel(page))")
                 .font(.footnote)
+                .accessibilityIdentifier("reader-status")
             Spacer()
+            Button("空格") { handleSpace() }
+                .accessibilityIdentifier("reader-space")
             Button("下一页") { reader.move(by: 1) }
+                .accessibilityIdentifier("reader-next")
         }
         .padding()
     }
@@ -212,7 +222,7 @@ struct PDFReaderView: View {
     private func enqueue(at index: Int) async {
         guard let data = reader.rasterize(at: index) else { return }
         let before = Set(session.jobs.map(\.snapshot.jobId))
-        await session.submitImage(data, filename: "page-\(index + 1).png", mime: "image/png")
+        await session.submitImage(data, filename: "page-\(index + 1).jpg", mime: "image/jpeg")
         if let jobId = session.jobs.map(\.snapshot.jobId).first(where: { !before.contains($0) }) {
             _ = reader.apply(.submitted(jobId: jobId), at: index)
         }

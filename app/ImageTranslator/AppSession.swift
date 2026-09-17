@@ -2,6 +2,12 @@ import Combine
 import Foundation
 import UniformTypeIdentifiers
 
+enum AppTab: Hashable {
+    case jobs
+    case reader
+    case config
+}
+
 @MainActor
 final class AppSession: ObservableObject {
     @Published private(set) var pairing: PairingPhase
@@ -10,30 +16,79 @@ final class AppSession: ObservableObject {
     @Published var engine: EngineState?
     @Published var banner: String?
     @Published var pairingCode: String = ""
+    @Published var selectedTab: AppTab = .jobs
 
     let tokens: TokenStoring
     let browser: BonjourBrowser
     private let session: URLSession
     private var pollTask: Task<Void, Never>?
     private var browserBag = Set<AnyCancellable>()
+    private var pendingPDF: URL?
+    private var pendingImagePath: String?
 
-    init(tokens: TokenStoring = KeychainTokenStore(), session: URLSession = .shared) {
-        self.tokens = tokens
+    init(tokens: TokenStoring? = nil, session: URLSession = .shared, hooks: TestHooks = .fromProcessInfo()) {
+        let resolvedTokens: TokenStoring
+        if let tokens {
+            resolvedTokens = tokens
+        } else if hooks.isolatesSession {
+            resolvedTokens = MemoryTokenStore(value: hooks.paired)
+        } else {
+            resolvedTokens = KeychainTokenStore()
+        }
+        self.tokens = resolvedTokens
         self.session = session
         let browser = BonjourBrowser()
         self.browser = browser
-        if let paired = tokens.load() {
+        if let paired = hooks.paired ?? resolvedTokens.load() {
             pairing = .paired(paired.endpoint, paired.token)
         } else {
             pairing = .browsing
         }
+        if hooks.openPDF != nil {
+            selectedTab = .reader
+        }
+        pendingPDF = hooks.openPDF.flatMap { hooks.resolveFile($0) }
+        pendingImagePath = hooks.autoSubmitImage
         browser.objectWillChange
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
             .store(in: &browserBag)
-        browser.start()
+        if let seeded = hooks.browseDaemon {
+            browser.seed(seeded)
+        } else if hooks.paired == nil {
+            browser.start()
+        }
         startPolling()
+        if pendingImagePath != nil {
+            Task {
+                for _ in 0..<8 {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    if pendingImagePath == nil { break }
+                    consumePendingImageIfNeeded()
+                }
+            }
+        }
+    }
+
+    func consumePendingPDF() -> URL? {
+        let url = pendingPDF
+        pendingPDF = nil
+        return url
+    }
+
+    func consumePendingImageIfNeeded() {
+        guard let path = pendingImagePath else { return }
+        let url = TestHooks.fromProcessInfo().resolveFile(path)
+            ?? Bundle.main.url(forResource: "sample", withExtension: "jpg")
+        guard let url, let data = try? Data(contentsOf: url), !data.isEmpty else {
+            banner = "测试图无法读取"
+            return
+        }
+        pendingImagePath = nil
+        Task {
+            await submitImage(data, filename: url.lastPathComponent, mime: mimeFor(url))
+        }
     }
 
     var client: DaemonClient? {

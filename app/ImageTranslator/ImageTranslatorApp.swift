@@ -8,6 +8,7 @@ struct ImageTranslatorApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(session)
+                .task { session.consumePendingImageIfNeeded() }
         }
     }
 }
