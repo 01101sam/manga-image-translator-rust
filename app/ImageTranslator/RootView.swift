@@ -79,7 +79,10 @@ struct DiscoveryView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("daemon-row")
+                    .accessibilityLabel("\(endpoint.name) \(endpoint.host):\(endpoint.port)")
+                    .accessibilityValue("\(endpoint.host):\(endpoint.port)")
                 }
             }
         }
