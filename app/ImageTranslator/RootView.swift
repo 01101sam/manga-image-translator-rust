@@ -18,7 +18,7 @@ struct RootView: View {
                         .tabItem { Label("配置", systemImage: "slider.horizontal.3") }
                         .tag(AppTab.config)
                 }
-                .onDrop(of: [.image, .pdf, .fileURL], isTargeted: nil) { providers in
+                .onDrop(of: [.item], isTargeted: nil) { providers in
                     session.ingestDrop(providers)
                 }
             } else {

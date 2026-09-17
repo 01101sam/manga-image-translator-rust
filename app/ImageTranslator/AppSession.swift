@@ -86,13 +86,12 @@ final class AppSession: ObservableObject {
     }
 
     func ingestDrop(_ providers: [NSItemProvider]) -> Bool {
-        var accepted = false
+        guard !providers.isEmpty else { return false }
+        let batch = DropBatch(session: self, remaining: providers.count)
         for provider in providers {
-            if startDropLoad(provider) {
-                accepted = true
-            }
+            startDropLoad(provider, batch: batch)
         }
-        return accepted
+        return true
     }
 
     func consumePendingHooks() {
@@ -162,21 +161,34 @@ final class AppSession: ObservableObject {
         applyPairing(.forget)
     }
 
-    func submitImage(_ data: Data, filename: String, mime: String = "image/jpeg") async {
+    @discardableResult
+    func submitImage(_ data: Data, filename: String, mime: String = "image/jpeg") async -> Bool {
         banner = nil
-        guard var api = client, api.token != nil else { return }
+        guard var api = client, api.token != nil else { return false }
         do {
             let jobId = try await api.submitJob(image: data, filename: filename, mime: mime, overrides: nil)
             let row = JobRow(
                 snapshot: JobSnapshot(jobId: jobId, state: .queued, positionInQueue: nil, error: nil),
-                cancelPending: false
+                cancelPending: false,
+                thumbnail: makeJobThumbnail(data)
             )
             jobs.insert(row, at: 0)
+            return true
         } catch DaemonError.unauthorized {
             applyPairing(.unauthorized)
+            return false
         } catch {
             await refreshEngineHint(fallback: error.localizedDescription)
+            return false
         }
+    }
+
+    func removeJobs(at offsets: IndexSet) {
+        removeLocalJobs(jobs: &jobs, artifacts: &artifacts, at: offsets)
+    }
+
+    func moveJobs(from source: IndexSet, to destination: Int) {
+        moveLocalJobs(jobs: &jobs, from: source, to: destination)
     }
 
     func importURLs(_ urls: [URL]) async {
@@ -345,110 +357,231 @@ final class AppSession: ObservableObject {
         }
     }
 
-    private func startDropLoad(_ provider: NSItemProvider) -> Bool {
-        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-            switch routeDrop(type: .fileURL, hasData: false) {
-            case .importURL:
-                loadDroppedFileURL(provider)
-                return true
-            default:
-                break
+    private func startDropLoad(_ provider: NSItemProvider, batch: DropBatch) {
+        let box = ProviderDropBox(types: provider.registeredTypeIdentifiers, session: self, batch: batch)
+        let imageIds = dropImageTypeIdentifiers(for: provider)
+        let tryImage = !imageIds.isEmpty || provider.canLoadObject(ofClass: UIImage.self)
+        let tryPDF = provider.hasItemConformingToTypeIdentifier(UTType.pdf.identifier)
+        let tryFile = provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        let tryURL = provider.hasItemConformingToTypeIdentifier(UTType.url.identifier)
+            || provider.canLoadObject(ofClass: NSURL.self)
+        let hail = !tryImage && !tryPDF && !tryFile && !tryURL
+
+        // All loads start inside the drop closure (Apple requirement), then resolve by priority.
+        if tryImage || tryPDF || hail {
+            box.addPending()
+            _ = provider.loadTransferable(type: Data.self) { result in
+                if case .success(let data) = result, !data.isEmpty {
+                    box.setBytes(data)
+                }
+                box.done()
             }
         }
-        if provider.hasItemConformingToTypeIdentifier(UTType.pdf.identifier) {
-            switch routeDrop(type: .pdf, hasData: true) {
-            case .openPDF:
-                loadDroppedPDF(provider)
-                return true
-            default:
-                break
+        if tryImage || hail {
+            for id in imageIds {
+                box.addPending()
+                _ = provider.loadDataRepresentation(forTypeIdentifier: id) { data, _ in
+                    if let data, !data.isEmpty {
+                        box.setBytes(data)
+                    }
+                    box.done()
+                }
+                box.addPending()
+                _ = provider.loadFileRepresentation(forTypeIdentifier: id) { url, _ in
+                    if let url, let data = try? Data(contentsOf: url), !data.isEmpty {
+                        box.setBytes(data)
+                    }
+                    box.done()
+                }
+            }
+            if provider.canLoadObject(ofClass: UIImage.self) {
+                box.addPending()
+                _ = provider.loadObject(ofClass: UIImage.self) { object, _ in
+                    if let image = object as? UIImage, let data = image.jpegData(compressionQuality: 0.92) {
+                        box.setBytes(data)
+                    }
+                    box.done()
+                }
             }
         }
-        if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
-            switch routeDrop(type: .image, hasData: true) {
+        if tryPDF {
+            box.addPending()
+            _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.pdf.identifier) { data, _ in
+                if let data, !data.isEmpty {
+                    box.setPDF(data)
+                }
+                box.done()
+            }
+        }
+        if tryFile || hail {
+            box.addPending()
+            _ = provider.loadFileRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { url, _ in
+                if let url {
+                    box.setFile(copyDroppedFile(url))
+                }
+                box.done()
+            }
+            box.addPending()
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                if let url = dropAnyURL(from: item), url.isFileURL {
+                    let accessed = url.startAccessingSecurityScopedResource()
+                    box.setFile(copyDroppedFile(url))
+                    if accessed { url.stopAccessingSecurityScopedResource() }
+                }
+                box.done()
+            }
+        }
+        if tryURL || hail {
+            box.addPending()
+            provider.loadItem(forTypeIdentifier: UTType.url.identifier, options: nil) { item, _ in
+                if let url = dropAnyURL(from: item) {
+                    if url.isFileURL {
+                        let accessed = url.startAccessingSecurityScopedResource()
+                        box.setFile(copyDroppedFile(url))
+                        if accessed { url.stopAccessingSecurityScopedResource() }
+                    } else if isHTTPURL(url) {
+                        box.setWeb(url)
+                    }
+                }
+                box.done()
+            }
+            if provider.canLoadObject(ofClass: NSURL.self) {
+                box.addPending()
+                _ = provider.loadObject(ofClass: NSURL.self) { object, _ in
+                    if let url = object as? URL {
+                        if url.isFileURL {
+                            box.setFile(copyDroppedFile(url))
+                        } else if isHTTPURL(url) {
+                            box.setWeb(url)
+                        }
+                    }
+                    box.done()
+                }
+            }
+        }
+
+        if box.pendingCount == 0 {
+            batch.finish(images: 0, openedPDF: false, failTypes: provider.registeredTypeIdentifiers)
+        }
+    }
+
+    fileprivate func resolveDrop(
+        bytes: Data?,
+        pdf: Data?,
+        file: URL?,
+        web: URL?,
+        types: [String],
+        batch: DropBatch
+    ) async {
+        if let bytes {
+            switch sniffDropBytes(bytes, contentType: nil) {
             case .submitImage:
-                loadDroppedImage(provider)
-                return true
+                if await submitDroppedImage(bytes) {
+                    batch.finish(images: 1, openedPDF: false, failTypes: [])
+                    return
+                }
+            case .openPDF:
+                if persistPDF(bytes) {
+                    batch.finish(images: 0, openedPDF: true, failTypes: [])
+                    return
+                }
             default:
                 break
             }
+        }
+        if let pdf, persistPDF(pdf) {
+            batch.finish(images: 0, openedPDF: true, failTypes: [])
+            return
+        }
+        if let file {
+            if await importDroppedFile(file, batch: batch, types: types) {
+                return
+            }
+        }
+        if let web {
+            await downloadAndRoute(web, batch: batch, types: types)
+            return
+        }
+        batch.finish(images: 0, openedPDF: false, failTypes: types)
+    }
+
+    private func importDroppedFile(_ url: URL, batch: DropBatch, types: [String]) async -> Bool {
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+            let before = jobs.count
+            await importURLs([url])
+            let added = max(jobs.count - before, 0)
+            if added > 0 {
+                batch.finish(images: added, openedPDF: false, failTypes: [])
+                return true
+            }
+            return false
+        }
+        if routeImportedURL(url) == .openPDF {
+            openPDF(url)
+            batch.finish(images: 0, openedPDF: true, failTypes: [])
+            return true
+        }
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+            return false
+        }
+        switch sniffDropBytes(data, contentType: nil) {
+        case .submitImage:
+            if await submitDroppedImage(data) {
+                batch.finish(images: 1, openedPDF: false, failTypes: [])
+                return true
+            }
+        case .openPDF:
+            if persistPDF(data) {
+                batch.finish(images: 0, openedPDF: true, failTypes: [])
+                return true
+            }
+        default:
+            break
         }
         return false
     }
 
-    private func loadDroppedFileURL(_ provider: NSItemProvider) {
-        let once = DropOnce()
-        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { [weak self] item, _ in
-            guard let url = dropFileURL(from: item), once.take() else { return }
-            let accessed = url.startAccessingSecurityScopedResource()
-            let persisted = copyDroppedFile(url)
-            if accessed { url.stopAccessingSecurityScopedResource() }
-            Task { @MainActor in
-                await self?.importURLs([persisted])
+    private func downloadAndRoute(_ url: URL, batch: DropBatch, types: [String]) async {
+        do {
+            let (data, response) = try await session.data(from: url)
+            let contentType = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")
+            switch sniffDropBytes(data, contentType: contentType) {
+            case .submitImage:
+                if await submitDroppedImage(data) {
+                    batch.finish(images: 1, openedPDF: false, failTypes: [])
+                    return
+                }
+            case .openPDF:
+                if persistPDF(data) {
+                    batch.finish(images: 0, openedPDF: true, failTypes: [])
+                    return
+                }
+            default:
+                break
             }
-        }
-        _ = provider.loadFileRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { [weak self] url, _ in
-            guard let url, once.take() else { return }
-            let persisted = copyDroppedFile(url)
-            Task { @MainActor in
-                await self?.importURLs([persisted])
-            }
-        }
-    }
-
-    private func loadDroppedPDF(_ provider: NSItemProvider) {
-        let once = DropOnce()
-        _ = provider.loadTransferable(type: Data.self) { [weak self] result in
-            guard case .success(let data) = result, !data.isEmpty, once.take() else { return }
-            Task { @MainActor in
-                self?.openPDF(data: data)
-            }
-        }
-        _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.pdf.identifier) { [weak self] data, _ in
-            guard let data, !data.isEmpty, once.take() else { return }
-            Task { @MainActor in
-                self?.openPDF(data: data)
-            }
+            batch.finish(images: 0, openedPDF: false, failTypes: types)
+        } catch {
+            batch.finish(images: 0, openedPDF: false, failTypes: types)
         }
     }
 
-    private func loadDroppedImage(_ provider: NSItemProvider) {
-        let once = DropOnce()
-        _ = provider.loadTransferable(type: Data.self) { [weak self] result in
-            guard case .success(let data) = result, !data.isEmpty, once.take() else { return }
-            Task { @MainActor in
-                await self?.submitDroppedImage(data)
-            }
-        }
-        let typeId = provider.registeredTypeIdentifiers.first { id in
-            UTType(id)?.conforms(to: .image) == true
-        } ?? UTType.image.identifier
-        _ = provider.loadDataRepresentation(forTypeIdentifier: typeId) { [weak self] data, _ in
-            guard let data, !data.isEmpty, once.take() else { return }
-            Task { @MainActor in
-                await self?.submitDroppedImage(data)
-            }
-        }
-        _ = provider.loadFileRepresentation(forTypeIdentifier: typeId) { [weak self] url, _ in
-            guard let url, let data = try? Data(contentsOf: url), !data.isEmpty, once.take() else { return }
-            Task { @MainActor in
-                await self?.submitDroppedImage(data)
-            }
-        }
-    }
-
-    private func openPDF(data: Data) {
+    @discardableResult
+    private func persistPDF(_ data: Data) -> Bool {
         let dest = FileManager.default.temporaryDirectory
             .appendingPathComponent("drop-\(UUID().uuidString).pdf")
         do {
             try data.write(to: dest, options: .atomic)
             openPDF(dest)
+            return true
         } catch {
             banner = "无法保存拖入的 PDF"
+            return false
         }
     }
 
-    private func submitDroppedImage(_ data: Data) async {
+    @discardableResult
+    private func submitDroppedImage(_ data: Data) async -> Bool {
         var label = imageUploadLabel(for: data)
         var payload = data
         if label.mime == "application/octet-stream",
@@ -458,7 +591,24 @@ final class AppSession: ObservableObject {
             payload = jpeg
             label = ImageUploadLabel(filename: "photo.jpg", mime: "image/jpeg")
         }
-        await submitImage(payload, filename: label.filename, mime: label.mime)
+        return await submitImage(payload, filename: label.filename, mime: label.mime)
+    }
+
+    private func makeJobThumbnail(_ data: Data, pointSize: CGFloat = 88) -> Data? {
+        guard let image = UIImage(data: data) else { return nil }
+        let maxPx = pointSize * 2
+        let size = image.size
+        let longest = max(size.width, size.height)
+        guard longest > 0 else { return nil }
+        let ratio = min(1, maxPx / longest)
+        let target = CGSize(width: max(size.width * ratio, 1), height: max(size.height * ratio, 1))
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: target, format: format)
+        let thumb = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
+        return thumb.jpegData(compressionQuality: 0.72)
     }
 
     private func mimeFor(_ url: URL) -> String {
@@ -486,27 +636,167 @@ final class AppSession: ObservableObject {
     }
 }
 
-private final class DropOnce: @unchecked Sendable {
-    private let lock = NSLock()
-    private var taken = false
+@MainActor
+final class DropBatch {
+    private weak var session: AppSession?
+    private var remaining: Int
+    private var images = 0
+    private var openedPDF = false
+    private var failTypes: [String] = []
 
-    func take() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        if taken { return false }
-        taken = true
-        return true
+    init(session: AppSession, remaining: Int) {
+        self.session = session
+        self.remaining = remaining
+    }
+
+    func finish(images: Int, openedPDF: Bool, failTypes: [String]) {
+        self.images += images
+        if openedPDF { self.openedPDF = true }
+        if images == 0 && !openedPDF {
+            self.failTypes.append(contentsOf: failTypes)
+        }
+        remaining -= 1
+        guard remaining == 0, let session else { return }
+        if self.images > 0 || self.openedPDF {
+            session.banner = dropResultBanner(
+                images: self.images,
+                openedPDF: self.openedPDF,
+                typeIdentifiers: []
+            )
+        } else if session.banner == nil {
+            let types = Array(Set(self.failTypes)).sorted()
+            session.banner = dropResultBanner(
+                images: 0,
+                openedPDF: false,
+                typeIdentifiers: types.isEmpty ? ["unknown"] : types
+            )
+        }
     }
 }
 
-private func dropFileURL(from item: NSSecureCoding?) -> URL? {
+final class ProviderDropBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending = 0
+    private var bytes: Data?
+    private var pdf: Data?
+    private var file: URL?
+    private var web: URL?
+    private var finished = false
+    private let types: [String]
+    private let session: AppSession
+    private let batch: DropBatch
+
+    var pendingCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return pending
+    }
+
+    init(types: [String], session: AppSession, batch: DropBatch) {
+        self.types = types
+        self.session = session
+        self.batch = batch
+    }
+
+    func addPending() {
+        lock.lock()
+        pending += 1
+        lock.unlock()
+    }
+
+    func setBytes(_ data: Data) {
+        lock.lock()
+        if let existing = bytes {
+            let existingGood = looksLikeImage(existing) || looksLikePDF(existing)
+            let incomingGood = looksLikeImage(data) || looksLikePDF(data)
+            if !existingGood && incomingGood {
+                bytes = data
+            }
+        } else {
+            bytes = data
+        }
+        lock.unlock()
+    }
+
+    func setPDF(_ data: Data) {
+        lock.lock()
+        if pdf == nil || (!looksLikePDF(pdf ?? Data()) && looksLikePDF(data)) {
+            pdf = data
+        }
+        lock.unlock()
+    }
+
+    func setFile(_ url: URL) {
+        lock.lock()
+        if file == nil { file = url }
+        lock.unlock()
+    }
+
+    func setWeb(_ url: URL) {
+        lock.lock()
+        if web == nil { web = url }
+        lock.unlock()
+    }
+
+    func done() {
+        lock.lock()
+        pending -= 1
+        let ready = pending == 0 && !finished
+        if ready { finished = true }
+        let bytes = bytes
+        let pdf = pdf
+        let file = file
+        let web = web
+        let types = types
+        lock.unlock()
+        guard ready else { return }
+        Task { @MainActor in
+            await session.resolveDrop(bytes: bytes, pdf: pdf, file: file, web: web, types: types, batch: batch)
+        }
+    }
+}
+
+private func dropImageTypeIdentifiers(for provider: NSItemProvider) -> [String] {
+    var ids: [String] = []
+    for id in provider.registeredTypeIdentifiers {
+        let lower = id.lowercased()
+        if let type = UTType(id), type.conforms(to: .image) {
+            ids.append(id)
+        } else if lower.contains("photos") || lower.contains("heic") || lower.contains("live-photo") {
+            ids.append(id)
+        }
+    }
+    let extras = [UTType.image, .jpeg, .png, .gif, .tiff, .webP, .heic].map(\.identifier)
+    for extra in extras where provider.hasItemConformingToTypeIdentifier(extra) {
+        ids.append(extra)
+    }
+    return Array(Set(ids))
+}
+
+private func dropAnyURL(from item: NSSecureCoding?) -> URL? {
     if let url = item as? URL {
         return url
     }
+    if let url = item as? NSURL {
+        return url as URL
+    }
     if let data = item as? Data {
-        return URL(dataRepresentation: data, relativeTo: nil)
+        if let url = URL(dataRepresentation: data, relativeTo: nil) {
+            return url
+        }
+        if let string = String(data: data, encoding: .utf8) {
+            return URL(string: string.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
+    if let string = item as? String {
+        return URL(string: string.trimmingCharacters(in: .whitespacesAndNewlines))
     }
     return nil
+}
+
+private func isHTTPURL(_ url: URL) -> Bool {
+    let scheme = url.scheme?.lowercased()
+    return scheme == "http" || scheme == "https"
 }
 
 private func copyDroppedFile(_ url: URL) -> URL {
