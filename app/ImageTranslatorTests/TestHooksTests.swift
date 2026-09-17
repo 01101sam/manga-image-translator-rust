@@ -24,10 +24,22 @@ final class TestHooksTests: XCTestCase {
         XCTAssertGreaterThan((try? Data(contentsOf: url!))?.count ?? 0, 0)
     }
 
+    func testParseAutoSubmitCommaPaths() {
+        let hooks = TestHooks.parse(["-auto-submit-image", "a.jpg,b.jpg"])
+        XCTAssertEqual(hooks.autoSubmitPaths, ["a.jpg", "b.jpg"])
+    }
+
+    func testParseAutoImportFolder() {
+        let hooks = TestHooks.parse(["-auto-import-folder", "batch"])
+        XCTAssertEqual(hooks.autoImportFolder, "batch")
+        XCTAssertTrue(hooks.isolatesSession)
+    }
+
     func testEmptyArgsStayInert() {
         let hooks = TestHooks.parse(["ImageTranslator"])
         XCTAssertNil(hooks.paired)
         XCTAssertNil(hooks.browseDaemon)
+        XCTAssertNil(hooks.autoImportFolder)
         XCTAssertFalse(hooks.isolatesSession)
     }
 }

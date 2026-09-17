@@ -25,14 +25,15 @@ struct JobListView: View {
                 }
                 List {
                     ForEach(session.jobs, id: \.snapshot.jobId) { row in
-                        JobRowView(row: row) {
+                        let rowView = JobRowView(row: row) {
                             Task { await session.requestCancel(row.snapshot.jobId) }
                         }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if row.snapshot.state == .done {
-                                previewJobId = row.snapshot.jobId
-                            }
+                        if row.snapshot.state == .done {
+                            rowView
+                                .contentShape(Rectangle())
+                                .onTapGesture { previewJobId = row.snapshot.jobId }
+                        } else {
+                            rowView
                         }
                     }
                 }
@@ -43,7 +44,7 @@ struct JobListView: View {
                 }
             }
             .navigationTitle("任务")
-            .onAppear { session.consumePendingImageIfNeeded() }
+            .onAppear { session.consumePendingHooks() }
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
                     PhotosPicker(selection: $photoItems, maxSelectionCount: 32, matching: .images) {
@@ -107,16 +108,18 @@ struct JobRowView: View {
                     .lineLimit(1)
                 Text(label(for: row.snapshot))
                     .font(.subheadline)
-                    .accessibilityIdentifier("job-state")
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("job-row")
+            .accessibilityValue(label(for: row.snapshot))
+            .accessibilityLabel(label(for: row.snapshot))
             Spacer()
             if canCancelJob(row.snapshot.state) {
                 Button("取消", action: onCancel)
                     .disabled(row.cancelPending)
+                    .accessibilityIdentifier("job-cancel")
             }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("job-row")
     }
 
     private func label(for snap: JobSnapshot) -> String {
