@@ -240,6 +240,22 @@ enum EngineState: String, Equatable, Sendable {
     case draining
 }
 
+struct ImageUploadLabel: Equatable, Sendable {
+    var filename: String
+    var mime: String
+}
+
+func imageUploadLabel(for data: Data) -> ImageUploadLabel {
+    let png: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+    if data.count >= png.count, data.prefix(png.count).elementsEqual(png) {
+        return ImageUploadLabel(filename: "photo.png", mime: "image/png")
+    }
+    if data.count >= 3, data[data.startIndex] == 0xFF, data[data.startIndex + 1] == 0xD8, data[data.startIndex + 2] == 0xFF {
+        return ImageUploadLabel(filename: "photo.jpg", mime: "image/jpeg")
+    }
+    return ImageUploadLabel(filename: "photo.bin", mime: "application/octet-stream")
+}
+
 struct JobOverrides: Equatable, Sendable {
     var targetLang: String?
     var detector: String?
