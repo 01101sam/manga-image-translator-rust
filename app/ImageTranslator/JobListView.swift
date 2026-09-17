@@ -248,6 +248,7 @@ struct JobRowView: View {
 
 struct ArtifactPreview: View {
     @EnvironmentObject private var session: AppSession
+    @Environment(\.dismiss) private var dismiss
     let jobId: String
     var onMoveDone: (Int) -> Void = { _ in }
     @FocusState private var previewFocused: Bool
@@ -279,8 +280,13 @@ struct ArtifactPreview: View {
             .simultaneousGesture(TapGesture().onEnded { previewFocused = true })
             .navigationTitle("译文")
             .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") { dismiss() }
+                }
                 if let data = session.artifacts[jobId] {
-                    ShareLink(item: ArtifactFile(data: data, name: "\(jobId).png"), preview: SharePreview("译文"))
+                    ToolbarItem(placement: .topBarTrailing) {
+                        ShareLink(item: ArtifactFile(data: data, name: "\(jobId).png"), preview: SharePreview("译文"))
+                    }
                 }
             }
         }
