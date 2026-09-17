@@ -33,6 +33,7 @@ final class ImageTranslatorUITests: XCTestCase {
     func testJobSubmitAndDone() throws {
         let env = try UITestEnv.load()
         let token = try env.tokenOrPair()
+        try env.prepareForNewJobs()
         let app = XCUIApplication()
         app.launchArguments = [
             "-paired-test", env.host, "\(env.port)", token,
@@ -45,13 +46,21 @@ final class ImageTranslatorUITests: XCTestCase {
         XCTAssertTrue(args.waitForExistence(timeout: 10), "launch-args only when hooks are set")
         let row = app.descendants(matching: .any)["job-row"]
         XCTAssertTrue(row.waitForExistence(timeout: 25), "job row after auto submit; args=\(args.label); banner=\(bannerLabel(app))")
-        XCTAssertTrue(wait(for: { self.rowValues(app).contains { $0.contains("已完成") } }, timeout: 90), "done; \(rowValues(app))")
+        let deadline = Date().addingTimeInterval(90)
+        while Date() < deadline {
+            let labels = rowValues(app)
+            XCTAssertFalse(labels.contains(where: { $0.contains("已取消") }), "submit job was cancelled; \(labels)")
+            if labels.contains(where: { $0.contains("已完成") }) { break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        }
+        XCTAssertTrue(rowValues(app).contains(where: { $0.contains("已完成") }), "done; \(rowValues(app))")
         attachShot(app, name: "job-done")
     }
 
     func testPDFReaderKeysAndSpace() throws {
         let env = try UITestEnv.load()
         let token = try env.tokenOrPair()
+        try env.prepareForNewJobs()
         let app = XCUIApplication()
         app.launchArguments = [
             "-paired-test", env.host, "\(env.port)", token,
@@ -143,6 +152,16 @@ final class ImageTranslatorUITests: XCTestCase {
             }, timeout: 15),
             "one cancelled, one still queued; \(rowValues(app))"
         )
+        let leftover = app.buttons["job-cancel"].firstMatch.exists
+            ? app.buttons["job-cancel"].firstMatch
+            : app.buttons["取消"].firstMatch
+        if leftover.exists {
+            leftover.tap()
+            XCTAssertTrue(
+                wait(for: { self.rowValues(app).allSatisfy { $0.contains("已取消") } }, timeout: 10),
+                "drain leftover queued job before engine restart; \(rowValues(app))"
+            )
+        }
         attachShot(app, name: "cancel-queued-done")
     }
 
@@ -280,6 +299,52 @@ struct UITestEnv {
         restart.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         _ = try sync(restart)
         return previous
+    }
+
+    func prepareForNewJobs() throws {
+        try cancelQueuedJobs()
+        let workers = try currentWorkers()
+        if workers != 2 {
+            _ = try setWorkers(2)
+        } else {
+            try ensureEngineRunning()
+        }
+        try cancelQueuedJobs()
+    }
+
+    func cancelQueuedJobs() throws {
+        let token = try tokenOrPair()
+        let list = try authedJSON(path: "/jobs", method: "GET", token: token)
+        let jobs = list["jobs"] as? [[String: Any]] ?? []
+        for job in jobs {
+            guard job["state"] as? String == "queued", let id = job["job_id"] as? String else { continue }
+            _ = try authedJSON(path: "/jobs/\(id)/cancel", method: "POST", token: token)
+        }
+    }
+
+    func ensureEngineRunning() throws {
+        let token = try tokenOrPair()
+        let status = try authedJSON(path: "/engine/status", method: "GET", token: token)
+        if status["state"] as? String == "running" { return }
+        _ = try authedJSON(path: "/engine/start", method: "POST", token: token)
+    }
+
+    private func currentWorkers() throws -> Int {
+        let token = try tokenOrPair()
+        let cfg = try authedJSON(path: "/config", method: "GET", token: token)
+        return (cfg["workers"] as? Int) ?? (cfg["workers"] as? NSNumber)?.intValue ?? 2
+    }
+
+    private func authedJSON(path: String, method: String, token: String, body: Data? = nil) throws -> [String: Any] {
+        var request = URLRequest(url: URL(string: "http://\(host):\(port)\(path)")!)
+        request.httpMethod = method
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = body
+        }
+        let data = try sync(request)
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
     }
 
     private func sync(_ request: URLRequest) throws -> Data {
