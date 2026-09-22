@@ -1,6 +1,6 @@
 # OCR48px E5RT 诊断
 
-生产问题仍未解决。本页只说明如何复跑诊断，以及不能把哪些数字当成修复。
+生产编码器使用 `new_session_mlprogram_static_shapes`。本页说明如何复跑，以及哪些数字不能当成修复。
 
 ## 入口
 
@@ -21,8 +21,8 @@ python3 scripts/ocr48px_e5rt.py formats --output-dir /tmp/e5rt-formats-new
 ## 本轮已核实事实
 
 - 原生 ORT `GetVersionString=1.22.0`。crate `ort` / `ort-sys` 是 `2.0.0-rc.10`。
-- 生产编码器是动态 MLProgram。冷暖 stdout 都有 33 条 E5RT。
-- `new_session` 是 NeuralNetwork。`new_session_mlprogram` 是 MLProgram。
+- 生产编码器是 MLProgram，并打开 `RequireStaticInputShapes`。2026-09-22 同机 `detect` 基线，改前 `/tmp/e5rt-baseline-20260922` 冷暖 stdout 各 33 条 E5RT，页 A 第二次 631ms。改后 `/tmp/e5rt-baseline-static-20260922` 冷暖 stdout 与 stderr 都是 0，页 A 第二次 246ms。页 A 金标准与页 B 文本与改前一致。脚本标签是 `not_proven`，因为全 0 不会写成 `fixed`。
+- `new_session` 是 NeuralNetwork。`new_session_mlprogram` 是不限制静态输入的 MLProgram。`e5rt_canvas` 的 `coreml-mlp` 仍走后者。`new_session_mlprogram_static_shapes` 才是生产编码器。
 - memory 运行时是 `[N,seq,320]`，mask 是 `[N,seq]`。所测偶数 W 上 `seq = floor(W/4)`（例如 W=138 时 seq=34，不要写成 138/4 的整数除法歧义）。
 - 私有二次垫到 `N=2 W=283`、填 `-1.0` 后，页 A 金标准 `そうだなあ‥` 变成 `そうだなあ…`。该画布禁止接线。
 - NeuralNetwork 有 CoreML 分区，E5RT=0，但页延迟与 CPU 同级。格式对照峰值 2.45–2.80GB 来自 `/usr/bin/time -l` 的 `peak memory footprint` 字段，不要混称 max RSS。不能因为零日志换生产。
@@ -31,7 +31,7 @@ python3 scripts/ocr48px_e5rt.py formats --output-dir /tmp/e5rt-formats-new
 
 `padding` 在 CPU `both` 上应报告 `text=rejected`（已知反例）。这是成功复现，不是脚本崩溃。`pad_broke_text` 是预期否定；mask / memory shape / 原图 gold 错误不能被它遮住。
 
-`formats` 里 MLProgram 仍会看到 E5RT=33。报告必须是 `e5rt_repair=not_fixed`。E5RT 同时数 stdout 与 stderr；真正诊断从 stderr 出现时，不能因 stdout=0 写成消失。禁止把 CPU 的 E5RT=0 或 provider 请求字符串写成已修复。全 0 且无收益证明时标 `not_proven` / `undetermined`，不要写成 `zero => not_fixed`。本轮 MLP>0 仍是 `not_fixed`。
+`formats` 的动态 MLProgram（`coreml-mlp`）仍会看到 E5RT=33。报告必须是 `e5rt_repair=not_fixed`。E5RT 同时数 stdout 与 stderr。真正诊断从 stderr 出现时，不能因 stdout=0 写成消失。禁止把 CPU 的 E5RT=0 或 provider 请求字符串写成已修复。全 0 且无收益证明时标 `not_proven` / `undetermined`，不要写成 `zero => not_fixed`。生产 `detect` 基线全 0 时，标签保持 `not_proven`。不要改脚本把 0 写成 `fixed`。动态 `coreml-mlp` 的 MLP>0 仍是 `not_fixed`。
 
 页 B 只对 CPU 同夹具做逐区域 idx/文本差分，不是金标准，不报 B 准确率。
 

@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use base_util::onnx::{new_session, new_session_mlprogram, Providers};
+use base_util::onnx::{new_session, new_session_mlprogram_static_shapes, Providers};
 use interface_detector::textlines::Quadrilateral;
 use interface_image::{ImageOp, RawImage};
 use interface_model::{
@@ -58,9 +58,8 @@ impl ModelLoad for Ocr48px {
             .lines()
             .map(|v| v.trim_end().to_string())
             .collect::<Vec<String>>();
-        // 动态 MLProgram 编码器复用于不同批次大小和裁片宽度。
+        // 动态 MLProgram 把无界序列维交给 E5RT，整图 infer 更慢；静态输入仍共用一个会话覆盖各 batch/width。
         // 解码器的初始空缓存不适用于 CoreML；解码器和颜色预测器保留其它提供者。
-        // CoreML 特化动态形状时仍可能向 stdout 输出 E5RT，不经过 ORT 日志回调。
         let no_coreml: Vec<_> = self
             .providers
             .iter()
@@ -68,7 +67,9 @@ impl ModelLoad for Ocr48px {
             .cloned()
             .collect();
         let sessions = (
-            Mutex::new(new_session_mlprogram(&self.providers)?.commit_from_file(&encoder)?),
+            Mutex::new(
+                new_session_mlprogram_static_shapes(&self.providers)?.commit_from_file(&encoder)?,
+            ),
             Mutex::new(new_session(&no_coreml)?.commit_from_file(&decoder)?),
             Mutex::new(new_session(&no_coreml)?.commit_from_file(&color_pred)?),
         );

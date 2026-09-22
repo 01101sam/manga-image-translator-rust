@@ -85,6 +85,7 @@ pub fn new_session(providers: &[Providers]) -> anyhow::Result<SessionBuilder> {
         Session::builder()?,
         providers,
         CoreMLModelFormat::NeuralNetwork,
+        false,
     )?)
 }
 
@@ -96,6 +97,18 @@ pub fn new_session_mlprogram(providers: &[Providers]) -> anyhow::Result<SessionB
         Session::builder()?,
         providers,
         CoreMLModelFormat::MLProgram,
+        false,
+    )?)
+}
+
+pub fn new_session_mlprogram_static_shapes(
+    providers: &[Providers],
+) -> anyhow::Result<SessionBuilder> {
+    Ok(new_session_(
+        Session::builder()?,
+        providers,
+        CoreMLModelFormat::MLProgram,
+        true,
     )?)
 }
 
@@ -164,6 +177,7 @@ pub fn new_session_(
     session_builder: SessionBuilder,
     providers: &[Providers],
     coreml_format: CoreMLModelFormat,
+    static_input_shapes: bool,
 ) -> Result<SessionBuilder, ort::Error> {
     let mut session_builder = session_builder
         .with_optimization_level(GraphOptimizationLevel::Level3)?
@@ -183,11 +197,18 @@ pub fn new_session_(
                 .build(),
             // GPU only: `All` lets CoreML run fp16 on the Neural Engine, which dropped a text box
             // on ctd and was no faster than the GPU for either detector.
-            Providers::CoreML => CoreMLExecutionProvider::default()
-                .with_model_cache_dir("models/cache")
-                .with_model_format(coreml_format)
-                .with_compute_units(CoreMLComputeUnits::CPUAndGPU)
-                .build(),
+            Providers::CoreML => {
+                let ep = CoreMLExecutionProvider::default()
+                    .with_model_cache_dir("models/cache")
+                    .with_model_format(coreml_format)
+                    .with_compute_units(CoreMLComputeUnits::CPUAndGPU);
+                let ep = if static_input_shapes {
+                    ep.with_static_input_shapes(true)
+                } else {
+                    ep
+                };
+                ep.build()
+            }
             Providers::RocM => ROCmExecutionProvider::default().with_device_id(0).build(),
         }
         .error_on_failure();

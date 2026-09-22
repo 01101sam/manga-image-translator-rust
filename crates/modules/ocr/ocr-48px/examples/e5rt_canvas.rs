@@ -1,6 +1,7 @@
-//! P0 padding 对照 + 格式/EP 对照。不改 prepare / infer / reload。
-//! `e5rt_canvas <cpu|coreml|coreml-nn|coreml-mlp> <raw|pad|both> <page_a.png> <page_b.png>`
+//! P0 padding 对照 + 格式/EP 对照。不改 prepare / infer。
+//! `e5rt_canvas <cpu|coreml|coreml-nn|coreml-mlp|coreml-mlp-static> <raw|pad|both> <page_a.png> <page_b.png>`
 //! `coreml` 与 `coreml-mlp` 都走 `new_session_mlprogram`。`coreml-nn` 走 `new_session`（NeuralNetwork）。
+//! `coreml-mlp-static` 走生产辅助函数 `new_session_mlprogram_static_shapes`。
 //! example 用同源 infer.rs。假行会进 infer 的 n，只把 real_n 配给区域。
 
 #[path = "../src/hypo.rs"]
@@ -14,7 +15,10 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use base_util::onnx::{all_providers, new_session, new_session_mlprogram, Providers};
+use base_util::onnx::{
+    all_providers, new_session, new_session_mlprogram, new_session_mlprogram_static_shapes,
+    Providers,
+};
 use base_util::project::root_path;
 use infer::Pred;
 use interface_detector::textlines::Quadrilateral;
@@ -32,6 +36,7 @@ enum EncKind {
     Cpu,
     NeuralNetwork,
     MlProgram,
+    MlProgramStatic,
 }
 
 const MAX_SEQ_LEN: i32 = 255;
@@ -322,6 +327,7 @@ fn parse_kind(name: &str) -> Result<EncKind, String> {
     match name {
         "cpu" => Ok(EncKind::Cpu),
         "coreml" | "coreml-mlp" | "mlprogram" => Ok(EncKind::MlProgram),
+        "coreml-mlp-static" => Ok(EncKind::MlProgramStatic),
         "coreml-nn" | "nn" => Ok(EncKind::NeuralNetwork),
         other => Err(format!("unknown provider {other}")),
     }
@@ -335,28 +341,30 @@ fn load_sessions(kind: EncKind) -> (Mutex<Session>, Mutex<Session>, Mutex<Sessio
     let abc_p = root.join("models/ocr/48px/alphabet-all-v7.txt");
     let enc_prov = match kind {
         EncKind::Cpu => Vec::new(),
-        EncKind::NeuralNetwork | EncKind::MlProgram => all_providers(),
+        EncKind::NeuralNetwork | EncKind::MlProgram | EncKind::MlProgramStatic => all_providers(),
     };
     let no_coreml: Vec<Providers> = enc_prov
         .iter()
         .filter(|p| !matches!(p, Providers::CoreML))
         .cloned()
         .collect();
-    let (ctor, format) = match kind {
-        EncKind::Cpu => ("new_session", "none_cpu"),
-        EncKind::NeuralNetwork => ("new_session", "NeuralNetwork"),
-        EncKind::MlProgram => ("new_session_mlprogram", "MLProgram"),
+    let (ctor, format, require_static) = match kind {
+        EncKind::Cpu => ("new_session", "none_cpu", 0),
+        EncKind::NeuralNetwork => ("new_session", "NeuralNetwork", 0),
+        EncKind::MlProgram => ("new_session_mlprogram", "MLProgram", 0),
+        EncKind::MlProgramStatic => ("new_session_mlprogram_static_shapes", "MLProgramStatic", 1),
     };
     emit(
         "session",
         format!(
-            "ctor={ctor} requested_format={format} encoder_providers={:?} decoder_providers={:?} cache_dir=models/cache compute_units=CPUAndGPU context7=no_namespace ort_src=ort-2.0.0-rc.10",
+            "ctor={ctor} requested_format={format} require_static_input_shapes={require_static} encoder_providers={:?} decoder_providers={:?} cache_dir=models/cache compute_units=CPUAndGPU context7=no_namespace ort_src=ort-2.0.0-rc.10",
             enc_prov, no_coreml
         ),
     );
     let t0 = Instant::now();
     let enc_builder = match kind {
         EncKind::MlProgram => new_session_mlprogram(&enc_prov).unwrap(),
+        EncKind::MlProgramStatic => new_session_mlprogram_static_shapes(&enc_prov).unwrap(),
         EncKind::Cpu | EncKind::NeuralNetwork => new_session(&enc_prov).unwrap(),
     };
     let enc = attach_ort_logger(enc_builder)
