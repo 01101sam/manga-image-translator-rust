@@ -163,6 +163,39 @@ final class HostFilesTests: XCTestCase {
         XCTAssertThrowsError(try PdfRenderer.render(document: pdf, page: 2, longEdge: 1000, to: output))
     }
 
+    /// 页面比画布小时 getDrawingTransform 只会居中不会放大: 渲染出的内容必须铺满画布, 否则送去翻译的图里页面只占中间一小块。
+    func testRenderPageFillsTheCanvasInsteadOfStayingAtPointSize() throws {
+        let bounds = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let pdf = directory.appendingPathComponent("full-bleed.pdf")
+        try UIGraphicsPDFRenderer(bounds: bounds).writePDF(to: pdf) { context in
+            context.beginPage()
+            UIColor.black.setFill()
+            context.fill(bounds)
+        }
+        let output = directory.appendingPathComponent("full-bleed.png")
+        try PdfRenderer.render(document: pdf, page: 0, longEdge: 2000, to: output)
+        let image = try XCTUnwrap(CGImageSourceCreateWithURL(output as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) })
+        let corners = [(2, 2), (image.width - 3, 2), (2, image.height - 3), (image.width - 3, image.height - 3)]
+        for (x, y) in corners {
+            XCTAssertLessThan(try Self.brightness(of: image, x: x, y: y), 16, "pixel (\(x), \(y)) of \(image.width)x\(image.height) should be page content, not margin")
+        }
+    }
+
+    /// 取一个像素的亮度 (0 到 255): 把整张图画进一个已知格式的位图再读, 不依赖 PNG 自己的像素布局。
+    private static func brightness(of image: CGImage, x: Int, y: Int) throws -> Int {
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let drawn = pixel.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return false }
+            context.draw(image, in: CGRect(x: -x, y: -(image.height - 1 - y), width: image.width, height: image.height))
+            return true
+        }
+        guard drawn else { throw XCTSkip("no bitmap context") }
+        return (Int(pixel[0]) + Int(pixel[1]) + Int(pixel[2])) / 3
+    }
+
     func testDisplayNamePrefersTheSuggestedNameAndKeepsOneExtension() {
         let temp = URL(fileURLWithPath: "/tmp/PNG图像.png")
         XCTAssertEqual(FileIngestor.name(for: temp, suggested: "page01", type: .png), "page01.png")

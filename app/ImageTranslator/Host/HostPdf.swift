@@ -34,6 +34,8 @@ final class PdfComponent: NshComponent {
         pdfView.autoScales = true
         pdfView.usePageViewController(true)
         pdfView.pageShadowsEnabled = false
+        // 默认的页间距会让页面四周多出一圈边, 比译文层 (contain 铺满整个区域) 小一点, 原文和译文切换时会跳一下。
+        pdfView.displaysPageBreaks = false
         pdfView.accessibilityIdentifier = "pdf-native-view"
         NotificationCenter.default.addObserver(self, selector: #selector(pageChanged), name: .PDFViewPageChanged, object: pdfView)
     }
@@ -129,7 +131,8 @@ enum PdfRenderer {
             guard index >= 0, index < document.numberOfPages, let page = document.page(at: index + 1) else {
                 throw HostCallError("页码超出范围: 第 \(index + 1) 页, 共 \(document.numberOfPages) 页")
             }
-            let size = pixelSize(for: displaySize(of: page), longEdge: longEdge)
+            let pageSize = displaySize(of: page)
+            let size = pixelSize(for: pageSize, longEdge: longEdge)
             guard let context = CGContext(
                 data: nil, width: size.width, height: size.height, bitsPerComponent: 8, bytesPerRow: 0,
                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
@@ -138,7 +141,10 @@ enum PdfRenderer {
             context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
             context.fill(canvas)
             context.interpolationQuality = .high
-            context.concatenate(page.getDrawingTransform(.cropBox, rect: canvas, rotate: 0, preserveAspectRatio: true))
+            // getDrawingTransform 只缩小不放大: 直接对画布求变换, 页面会按 72dpi 的点尺寸缩在画布中间。
+            // 先把点放大到像素, 再对「页面自己大小的矩形」求变换, 它只负责 cropBox 偏移和 /Rotate。
+            context.scaleBy(x: CGFloat(size.width) / pageSize.width, y: CGFloat(size.height) / pageSize.height)
+            context.concatenate(page.getDrawingTransform(.cropBox, rect: CGRect(origin: .zero, size: pageSize), rotate: 0, preserveAspectRatio: true))
             context.drawPDFPage(page)
             guard let image = context.makeImage(),
                   let destination = CGImageDestinationCreateWithURL(output as CFURL, UTType.png.identifier as CFString, 1, nil)
