@@ -26,7 +26,7 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | `Host/NshHostViewController.swift` | 持有 `NshAppView`, 注册 HOST_PROTOCOL 的全部调用, 接 `UIDropInteraction`; bundle 加载失败或 JS 虚拟机报错时显示错误和「重新载入」 |
 | `Host/HostSession.swift` | `session.*`: Bonjour 发现的 Daemon 加 Keychain 里的 Token, Token 永久保存 |
 | `Host/HostFiles.swift` | `ManagedFiles`: 文件 id 到沙盒文件。图片在 tmp, 启动时整个清掉; PDF 在 Application Support, id 是文件名里的 uuid, 超过 30 天没打开才在启动时清掉 |
-| `Host/HostIngest.swift` | 拖放和选择的文件进沙盒。每个 `NSItemProvider` 只读一种表示, 同时在途不超过 4 个, 目录递归并按自然序排 |
+| `Host/HostIngest.swift` | 拖放和选择的文件进沙盒。每个 `NSItemProvider` 只读一种表示, 一次只读一个, 目录递归并按自然序排 |
 | `Host/HostPickers.swift` | 照片 (PHPicker)、文件、文件夹三种选择器, iPad 与 visionOS 用居中的 popover |
 | `Host/HostUpload.swift` | `upload.start`: multipart 先分块写进临时文件, 再 `URLSession.upload(fromFile:)`, 字节不进 JS 也不在内存里拼 `Data` |
 | `Host/HostArtifact.swift` | `artifact.save`: 下载到临时文件, 弹系统分享面板 |
@@ -39,7 +39,7 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 - 图片字节不进 JS (嵌入式 NSH 的 JS 堆上限 256 MB); 列表和查看器显示 Daemon 降采样后的 JPEG (`?w=`)。
 - 上传、拖放、选择都走文件, 宿主不把图片读进内存。`NSItemProvider` 的文件表示由系统在回调里给一个临时文件, 宿主在回调里把它搬进沙盒。
 - NSH 的图片缓存在磁盘上限 256 MB。
-- 已知: 进程内用 `NSItemProvider(contentsOf:)` 造的 provider, 读文件表示时 RSS 会按文件大小累加 (30 张 37 MB 的 PNG 涨到 1.3 GB, 读完回落); 走文件选择器的 URL 路径没有这个现象。真实跨应用拖放是否也这样没有测过。
+- 拖放摄入一次只读一个 provider。iPad 模拟器里用进程内 `NSItemProvider(contentsOf:)` 读 30 张 8000x12000 的 PNG (每张 37 MB): 并发 2 或 4 时 RSS 峰值 1.37 GB (4 次实测 1364 到 1374 MB), 并发 1 时 332、366、357 MB (3 次); 文件选择器的 URL 路径 (`FileManager.copyItem`, APFS 克隆) 是 295 MB。三种情况的 phys_footprint 都是 23 到 24 MB, 所以涨的是读过的文件页, 不是 jetsam 看的内存。`loadInPlaceFileRepresentation` 在并发 4 和 1 时的峰值与 `loadFileRepresentation` 一样, 没有采用。200 张 1.7 MB 的 JPEG 并发 1 和 4 的耗时都是 0.9 秒。真实跨应用拖放走系统的进程间拷贝, 没有测过, 并发 1 只是让进程内路径不虚高, 在跨进程路径上会不会慢是推测。
 
 ## 测试钩子
 
