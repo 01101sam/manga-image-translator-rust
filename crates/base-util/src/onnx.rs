@@ -181,6 +181,8 @@ pub fn new_session_(
 ) -> Result<SessionBuilder, ort::Error> {
     let mut session_builder = session_builder
         .with_optimization_level(GraphOptimizationLevel::Level3)?
+        // 输入尺寸每页都不同, 内存模式按形状缓存分配计划, 缓存只增不减; 关闭后大图 Job 峰值 RSS 明显下降且不再逐 Job 增长。
+        .with_memory_pattern(false)?
         .with_intra_threads(intra_threads())?;
     let mut selected_provider = None;
     for provider_ in providers {
