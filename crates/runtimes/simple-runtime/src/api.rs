@@ -26,6 +26,7 @@ use crate::server::config::{ConfigError, ConfigStore, DaemonConfig};
 use crate::server::engine::{mime_of, Engine, WorkerParams};
 use crate::server::jobs::{apply_overrides, CancelError, JobSpec, JobState, JobStore};
 use crate::server::pairing::{key_matches, TokenStore};
+use crate::server::preview::{self, Previews};
 use crate::server::queue::Queue;
 use crate::server::source::{self, ProbeError};
 use crate::server::webui;
@@ -49,6 +50,7 @@ pub struct AppState {
     config: tokio::sync::Mutex<ConfigStore>,
     tokens: Arc<TokenStore>,
     artifacts: Arc<ArtifactStore>,
+    previews: Previews,
     max_upload_bytes: usize,
     started: Instant,
     batch_ocr: usize,
@@ -74,6 +76,7 @@ impl AppState {
             config: tokio::sync::Mutex::new(config),
             tokens,
             artifacts,
+            previews: Previews::new(preview::MAX_CONCURRENT),
             max_upload_bytes: MAX_UPLOAD_BYTES,
             started: Instant::now(),
             batch_ocr: args.max_batch_size_ocr,
@@ -441,11 +444,60 @@ async fn stream_file(path: &Path, mime: &str) -> HttpResponse {
         .streaming(ReaderStream::with_capacity(file, 256 * 1024))
 }
 
+#[derive(Deserialize)]
+struct MediaQuery {
+    w: Option<u32>,
+}
+
+/// 没有 `w` 时流式返回原文件；有 `w` 时返回缓存在实例目录里的降采样 JPEG。
+/// NSH 的 Image 会把整个编码文件下载进内存再降采样，列表缩略图必须让 Daemon 先缩小。
+async fn serve_media(
+    state: &AppState,
+    key: (&str, &str),
+    path: &Path,
+    mime: &str,
+    width: Option<u32>,
+) -> HttpResponse {
+    let Some(width) = width else {
+        return stream_file(path, mime).await;
+    };
+    if !preview::is_allowed(width) {
+        return fail(
+            StatusCode::BAD_REQUEST,
+            format!("w 只能是 {:?} 之一", preview::WIDTHS),
+        );
+    }
+    if !mime.starts_with("image/") {
+        return fail(StatusCode::BAD_REQUEST, "这个文件不是图片，不能生成预览");
+    }
+    // 源文件被清理后，缓存里残留的预览也不再提供。
+    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
+        return fail(StatusCode::NOT_FOUND, "文件已被清理");
+    }
+    let (id, kind) = key;
+    let cache = state
+        .artifacts
+        .preview_path_for(&format!("{id}-{kind}-{width}"));
+    let (from, to) = (path.to_owned(), cache.clone());
+    match state
+        .previews
+        .ensure(&cache, move || preview::render(&from, &to, width))
+        .await
+    {
+        Ok(()) => stream_file(&cache, "image/jpeg").await,
+        Err(e) => fail(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("生成预览失败: {e}"),
+        ),
+    }
+}
+
 #[get("/jobs/{id}/artifact")]
 async fn job_artifact(
     state: web::Data<AppState>,
     _auth: AuthedMedia,
     id: web::Path<String>,
+    query: web::Query<MediaQuery>,
 ) -> impl Responder {
     let id = id.into_inner();
     let Some(job) = state.jobs.get(&id) else {
@@ -460,7 +512,7 @@ async fn job_artifact(
     let mime = job
         .mime
         .unwrap_or_else(|| mime_of(&job.renderer).to_string());
-    stream_file(&path, &mime).await
+    serve_media(&state, (&id, "artifact"), &path, &mime, query.w).await
 }
 
 #[get("/jobs/{id}/source")]
@@ -468,11 +520,20 @@ async fn job_source(
     state: web::Data<AppState>,
     _auth: AuthedMedia,
     id: web::Path<String>,
+    query: web::Query<MediaQuery>,
 ) -> impl Responder {
-    let Some(job) = state.jobs.get(&id.into_inner()) else {
+    let id = id.into_inner();
+    let Some(job) = state.jobs.get(&id) else {
         return fail(StatusCode::NOT_FOUND, "job not found");
     };
-    stream_file(&job.source, job.source_mime).await
+    serve_media(
+        &state,
+        (&id, "source"),
+        &job.source,
+        job.source_mime,
+        query.w,
+    )
+    .await
 }
 
 fn cleanup(artifacts: &ArtifactStore, bonjour: &Mutex<Option<Bonjour>>) {
@@ -495,6 +556,11 @@ fn json_error(err: JsonPayloadError) -> Error {
     InternalError::from_response(err, fail(status, message)).into()
 }
 
+fn query_error(err: actix_web::error::QueryPayloadError) -> Error {
+    let message = format!("查询参数无效: {err}");
+    InternalError::from_response(err, fail(StatusCode::BAD_REQUEST, message)).into()
+}
+
 fn upload_error(err: MultipartError, max_bytes: usize) -> Error {
     let (status, message) = match &err {
         MultipartError::Payload(PayloadError::Overflow) => (
@@ -511,6 +577,7 @@ fn configure(cfg: &mut web::ServiceConfig, state: web::Data<AppState>) {
     let upload_dir = state.artifacts.upload_dir();
     cfg.app_data(state)
         .app_data(web::JsonConfig::default().error_handler(|err, _| json_error(err)))
+        .app_data(web::QueryConfig::default().error_handler(|err, _| query_error(err)))
         .app_data(
             MultipartFormConfig::default()
                 .total_limit(max_upload)

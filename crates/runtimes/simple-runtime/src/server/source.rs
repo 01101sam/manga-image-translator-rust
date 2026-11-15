@@ -47,13 +47,18 @@ fn mime_of_format(format: ImageFormat) -> &'static str {
     format.to_mime_type()
 }
 
-/// 在阻塞线程里调用。长边超过 `long_edge` 时等比缩小，之后整条 pipeline 只处理缩小后的图。
-pub fn decode_for_pipeline(path: &Path, long_edge: Option<u32>) -> anyhow::Result<DynamicImage> {
+/// 整张解码，放宽 image 默认的内存上限。要在阻塞线程里调用。
+pub fn decode(path: &Path) -> anyhow::Result<DynamicImage> {
     let mut reader = ImageReader::open(path)?.with_guessed_format()?;
     let mut limits = Limits::default();
     limits.max_alloc = Some(DECODE_ALLOC_LIMIT);
     reader.limits(limits);
-    let img = reader.decode()?;
+    Ok(reader.decode()?)
+}
+
+/// 在阻塞线程里调用。长边超过 `long_edge` 时等比缩小，之后整条 pipeline 只处理缩小后的图。
+pub fn decode_for_pipeline(path: &Path, long_edge: Option<u32>) -> anyhow::Result<DynamicImage> {
+    let img = decode(path)?;
     Ok(match long_edge {
         Some(edge) if img.width().max(img.height()) > edge => {
             img.resize(edge, edge, FilterType::Triangle)

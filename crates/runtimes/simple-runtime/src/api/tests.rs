@@ -611,3 +611,176 @@ async fn config_exposes_and_persists_the_downscale_setting() {
     );
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+fn jpeg_dims(bytes: &[u8]) -> (u32, u32) {
+    assert_eq!(
+        image::guess_format(bytes).unwrap(),
+        image::ImageFormat::Jpeg
+    );
+    let img = image::load_from_memory(bytes).unwrap();
+    (img.width(), img.height())
+}
+
+fn preview_files(fx: &Fixture) -> usize {
+    let instance = fs::read_dir(fx.dir.join("artifacts"))
+        .unwrap()
+        .flatten()
+        .next()
+        .unwrap()
+        .path();
+    fs::read_dir(instance.join("preview")).unwrap().count()
+}
+
+#[actix_web::test]
+async fn source_preview_is_a_cached_jpeg_within_the_requested_long_edge() {
+    let fx = Fixture::new();
+    let state = fx.state();
+    let token = running_state(&state).await;
+    let app = app!(state);
+    let image = png_bytes(1200, 800);
+    let (_, body) = submit!(app, &token, &image);
+    let id = body["job_id"].as_str().unwrap().to_owned();
+
+    let uri = format!("/jobs/{id}/source?w=256&token={token}");
+    let (status, content_type, length, first) = fetch!(app, &uri, None::<&String>);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type.as_deref(), Some("image/jpeg"));
+    assert_eq!(length, Some(first.len().to_string()));
+    assert_eq!(jpeg_dims(&first), (256, 171));
+    assert_eq!(preview_files(&fx), 1);
+
+    let (_, _, _, second) = fetch!(app, &uri, None::<&String>);
+    assert_eq!(second, first, "the second request is served from the cache");
+    assert_eq!(preview_files(&fx), 1);
+
+    let wide = format!("/jobs/{id}/source?w=2048&token={token}");
+    let (_, _, _, bytes) = fetch!(app, &wide, None::<&String>);
+    assert_eq!(jpeg_dims(&bytes), (1200, 800), "previews never upscale");
+    assert_eq!(preview_files(&fx), 2);
+
+    let (_, content_type, _, original) = fetch!(app, &format!("/jobs/{id}/source"), Some(&token));
+    assert_eq!(content_type.as_deref(), Some("image/png"));
+    assert_eq!(
+        original.as_ref(),
+        image.as_slice(),
+        "no w still streams the original"
+    );
+}
+
+#[actix_web::test]
+async fn artifact_preview_works_for_image_artifacts_only() {
+    let fx = Fixture::new();
+    let state = fx.state();
+    let token = running_state(&state).await;
+    let app = app!(state.clone());
+    let finish = |id: &str, ext: &str, mime: &str, bytes: &[u8]| {
+        let path = state.artifacts.path_for(id, ext);
+        fs::write(&path, bytes).unwrap();
+        state.jobs.take_for_run(id).unwrap();
+        state.jobs.finish_ok(id, path, mime.into()).unwrap();
+    };
+    let (_, body) = submit!(app, &token, &png_bytes(8, 8));
+    let png_job = body["job_id"].as_str().unwrap().to_owned();
+    let (_, body) = submit!(app, &token, &png_bytes(8, 8));
+    let html_job = body["job_id"].as_str().unwrap().to_owned();
+    finish(&png_job, "png", "image/png", &png_bytes(900, 600));
+    finish(&html_job, "html", "text/html", b"<html></html>");
+
+    let (status, _, _, bytes) = fetch!(
+        app,
+        &format!("/jobs/{png_job}/artifact?w=512"),
+        Some(&token)
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(jpeg_dims(&bytes), (512, 341));
+    let (status, ..) = fetch!(
+        app,
+        &format!("/jobs/{html_job}/artifact?w=512"),
+        Some(&token)
+    );
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[actix_web::test]
+async fn preview_width_is_a_closed_set_and_still_needs_a_token() {
+    let fx = Fixture::new();
+    let state = fx.state();
+    let token = running_state(&state).await;
+    let app = app!(state);
+    let (_, body) = submit!(app, &token, &png_bytes(64, 64));
+    let id = body["job_id"].as_str().unwrap().to_owned();
+
+    for w in ["300", "0", "-1", "abc", "99999"] {
+        let (status, _, _, body) = fetch!(
+            app,
+            &format!("/jobs/{id}/source?w={w}&token={token}"),
+            None::<&String>
+        );
+        assert_eq!(status, StatusCode::BAD_REQUEST, "w={w}");
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["ok"], false, "w={w}");
+    }
+    assert_eq!(
+        preview_files(&fx),
+        0,
+        "rejected widths must not decode anything"
+    );
+    for w in [256, 512, 1024, 2048] {
+        let uri = format!("/jobs/{id}/source?w={w}&token={token}");
+        assert_eq!(
+            fetch!(app, &uri, None::<&String>).0,
+            StatusCode::OK,
+            "w={w}"
+        );
+    }
+    let (status, ..) = fetch!(app, &format!("/jobs/{id}/source?w=256"), None::<&String>);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, ..) = fetch!(app, &format!("/jobs/{id}/source?w=300"), None::<&String>);
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "auth is checked before the query"
+    );
+}
+
+#[actix_web::test]
+async fn a_cancelled_jobs_cached_preview_is_gone_too() {
+    let fx = Fixture::new();
+    let state = fx.state();
+    let token = running_state(&state).await;
+    let app = app!(state);
+    let (_, body) = submit!(app, &token, &png_bytes(64, 64));
+    let id = body["job_id"].as_str().unwrap().to_owned();
+    let uri = format!("/jobs/{id}/source?w=256&token={token}");
+    assert_eq!(fetch!(app, &uri, None::<&String>).0, StatusCode::OK);
+    let (status, _) = send!(
+        app,
+        test::TestRequest::post()
+            .uri(&format!("/jobs/{id}/cancel"))
+            .insert_header(bearer(&token))
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(fetch!(app, &uri, None::<&String>).0, StatusCode::NOT_FOUND);
+}
+
+#[actix_web::test]
+async fn many_concurrent_preview_requests_all_succeed() {
+    let fx = Fixture::new();
+    let state = fx.state();
+    let token = running_state(&state).await;
+    let app = app!(state);
+    let mut ids = Vec::new();
+    for _ in 0..12 {
+        let (_, body) = submit!(app, &token, &png_bytes(600, 400));
+        ids.push(body["job_id"].as_str().unwrap().to_owned());
+    }
+    let app_ref = &app;
+    let requests = ids.iter().map(|id| {
+        let uri = format!("/jobs/{id}/source?w=256&token={token}");
+        async move { fetch!(*app_ref, &uri, None::<&String>) }
+    });
+    for (status, _, _, bytes) in futures_util::future::join_all(requests).await {
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(jpeg_dims(&bytes), (256, 171));
+    }
+    assert_eq!(preview_files(&fx), 12);
+}

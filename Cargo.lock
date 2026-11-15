@@ -6148,6 +6148,7 @@ dependencies = [
  "env_logger 0.11.8",
  "esrgan",
  "export",
+ "futures-util",
  "hostname",
  "html",
  "if-addrs",
