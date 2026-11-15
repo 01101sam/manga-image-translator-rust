@@ -114,7 +114,7 @@
 { "url": "http://…/jobs/{id}/artifact?token=…", "filename": "page01-translated" }   // 返回 null
 ```
 
-让用户保存译图 (或原图)。`url` 是不带 `w` 的原始文件地址 (带 `?token=`), `filename` 不含扩展名。宿主自己下载, 按应答的 `Content-Type` 补扩展名 (`image/png` 为 `.png`, `text/html` 为 `.html`, 其他 `.bin`): App 下载到临时文件后弹分享面板 (ShareLink), Web 用 `fetch` 取回再交给 `<a download>`。失败 reject, TSX 用 toast 显示原因。
+让用户保存译图 (或原图)。`url` 是不带 `w` 的原始文件地址 (带 `?token=`), `filename` 不含扩展名。宿主自己下载, 按应答的 `Content-Type` 补扩展名 (`image/png` 为 `.png`, `image/jpeg` 为 `.jpg`, `image/webp` 为 `.webp`, `text/html` 为 `.html`, 其他 `.bin`; 原图常是 jpeg 或 webp, 不能落成 `.bin`): App 下载到临时文件后弹分享面板 (ShareLink), Web 用 `fetch` 取回再交给 `<a download>`。失败 reject, TSX 用 toast 显示原因。
 
 ## 宿主发给 TSX 的事件
 
@@ -185,7 +185,7 @@ nativeComponent<
 把某一页送去翻译前, 先让宿主渲染成 PNG 文件, 再走和图片一样的 `upload.start`。
 
 ```jsonc
-// 参数 (page 从 0 开始; longEdge 缺省 3072, 宿主限制在 256 到 8192)
+// 参数 (page 从 0 开始; longEdge 缺省 3072, 宿主限制在 256 到 6144)
 { "fileId": "…", "page": 0, "longEdge": 3072 }
 // 返回
 { "fileRef": { "id": "…", "name": "book-p001.png", "size": 2345678, "type": "image/png" } }
@@ -193,7 +193,7 @@ nativeComponent<
 
 - `fileRef` 和 `files.pick` 返回的文件引用同形, `id` 直接当 `upload.start` 的 `fileId`, 上传和释放规则完全一样 (成功后宿主自己释放; 被拒绝或放弃时 TSX 发 `files.release`)。渲染出的 PNG 在宿主沙盒里, 不进 JS。
 - 页码越界、`fileId` 已不存在、文件不是 PDF 时 reject。
-- `longEdge` 一般取 Config 的 `downscale_long_edge` (没有就 3072), 宿主按长边缩放, 不放大。
+- `longEdge` 一般取 Config 的 `downscale_long_edge` (没有就 3072)。宿主把页面画到长边等于 `longEdge` (矢量页会放大, 扫描页受原图分辨率限制); 上限 6144 是因为渲染要整页位图, 再大 iPad 会吃不消。
 - 页 → Job 的映射、译文叠加和空格切换是 TSX 的事 (`PageMachine`); 宿主只管上面这几个调用和组件。
 
 ## 测试
