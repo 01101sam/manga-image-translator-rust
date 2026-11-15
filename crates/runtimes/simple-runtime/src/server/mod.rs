@@ -4,6 +4,7 @@ pub mod config;
 pub mod engine;
 pub mod jobs;
 pub mod pairing;
+pub mod preview;
 pub mod queue;
 pub mod source;
 pub mod webui;

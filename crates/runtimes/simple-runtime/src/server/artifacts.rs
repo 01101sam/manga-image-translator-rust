@@ -4,6 +4,7 @@ use std::process::Command;
 
 pub const ARTIFACT_DIR_NAME: &str = "imagetranslator-artifacts";
 const SOURCE_DIR: &str = "src";
+const PREVIEW_DIR: &str = "preview";
 
 /// 每个 Daemon 实例独占 `<base>/<instance-id>/`，id 以 PID 开头。
 /// 启动时只回收 PID 已不存在的实例，所以同机的多个 Daemon 不会清空彼此的文件。
@@ -23,6 +24,7 @@ impl ArtifactStore {
         let suffix = &uuid::Uuid::new_v4().simple().to_string()[..8];
         let root = base.join(format!("{}-{suffix}", std::process::id()));
         fs::create_dir_all(root.join(SOURCE_DIR))?;
+        fs::create_dir_all(root.join(PREVIEW_DIR))?;
         Ok(Self { root })
     }
 
@@ -43,6 +45,11 @@ impl ArtifactStore {
     /// Job 的源图。它要活过 done，因为 `GET /jobs/{id}/source` 还要读它。
     pub fn source_path_for(&self, job_id: &str) -> PathBuf {
         self.upload_dir().join(job_id)
+    }
+
+    /// 降采样预览的磁盘缓存，键由调用方按 Job id、来源和长边拼出。
+    pub fn preview_path_for(&self, key: &str) -> PathBuf {
+        self.root.join(PREVIEW_DIR).join(format!("{key}.jpg"))
     }
 
     /// 退出时只删自己的实例目录。
