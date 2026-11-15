@@ -111,7 +111,7 @@
 ### `artifact.save`
 
 ```jsonc
-{ "url": "http://…/jobs/{id}/artifact?w=2048&token=…", "filename": "page01" }   // 返回 null
+{ "url": "http://…/jobs/{id}/artifact?token=…", "filename": "page01-translated" }   // 返回 null
 ```
 
 让用户保存译图 (或原图)。`url` 是不带 `w` 的原始文件地址 (带 `?token=`), `filename` 不含扩展名。宿主自己下载, 按应答的 `Content-Type` 补扩展名 (`image/png` 为 `.png`, `text/html` 为 `.html`, 其他 `.bin`): App 下载到临时文件后弹分享面板 (ShareLink), Web 用 `fetch` 取回再交给 `<a download>`。失败 reject, TSX 用 toast 显示原因。

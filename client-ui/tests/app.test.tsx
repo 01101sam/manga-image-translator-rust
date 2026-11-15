@@ -218,6 +218,23 @@ describe("viewer and keyboard", () => {
     expect(app.shows("p0.png")).toBe(false);
   });
 
+  test("saving asks the host for the full-size file, not the w=2048 preview", async () => {
+    const { app } = await withDoneJobs(2);
+    await app.keyboard.press("down");
+    await app.keyboard.press("enter");
+    await app.waitFor("id:viewer");
+    await app.press("label:保存");
+    await app.keyboard.press("space");
+    await app.press("label:保存");
+    const saves = calls(app, "artifact.save").map((c) => c.data as { url: string; filename: string });
+    expect(saves.length).toBe(2);
+    expect(saves[0]!.url).toMatch(/\/jobs\/[^/]+\/artifact\?token=tok/);
+    expect(saves[0]!.filename).toBe("p0-translated");
+    expect(saves[1]!.url).toMatch(/\/jobs\/[^/]+\/source\?token=tok/);
+    expect(saves[1]!.filename).toBe("p0");
+    for (const save of saves) expect(save.url).not.toContain("w=");
+  });
+
   test("Backspace leaves a queued job alone: it is still on the Daemon", async () => {
     const daemon = createFakeDaemon({ finishPerPoll: 0 });
     const app = await launch({ daemon, saved: true, picks: [files(2)] });
