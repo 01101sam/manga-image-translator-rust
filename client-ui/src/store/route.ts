@@ -1,6 +1,6 @@
 import { host, signal } from "nsh";
 
-/** 顶层分区。PDF 阅读器 (reader) 的页面在后续步骤接入, 这里只占位。 */
+/** 顶层分区: 任务列表、PDF 阅读器、配置。 */
 export type Section = "jobs" | "reader" | "config";
 
 const SECTIONS: readonly Section[] = ["jobs", "reader", "config"];

@@ -49,6 +49,26 @@ export const notice = signal<string | null>(null);
 export const itemOf = (key: string): Item | undefined => itemSignals.get(key)?.();
 export const currentBoard = (): Board => board;
 
+/**
+ * 本地文件的结局。上传成功时 Item 的 key 从 local:<fileId> 换成 jobId, 从列表外面看不出对应关系;
+ * PDF 阅读器靠这个把自己渲染出来的页图和后来的 Job 对上号。
+ */
+export type FileOutcome =
+  | { readonly type: "uploaded"; readonly fileId: string; readonly jobId: string }
+  | { readonly type: "rejected"; readonly fileId: string; readonly message: string }
+  | { readonly type: "removed"; readonly fileId: string };
+
+const outcomeListeners = new Set<(outcome: FileOutcome) => void>();
+
+export function onFileOutcome(listener: (outcome: FileOutcome) => void): () => void {
+  outcomeListeners.add(listener);
+  return () => outcomeListeners.delete(listener);
+}
+
+function emitOutcome(outcome: FileOutcome) {
+  for (const listener of outcomeListeners) listener(outcome);
+}
+
 const sameCounts = (a: Counts, b: Counts) => (Object.keys(a) as (keyof Counts)[]).every((k) => a[k] === b[k]);
 
 function commit(change: Change) {
@@ -113,6 +133,7 @@ export function removeItems(keys: readonly string[]) {
   });
   hostPort.release(releasable);
   commit(removeKeys(board, removable));
+  for (const fileId of releasable) emitOutcome({ type: "removed", fileId });
 }
 
 export function clearFinished() {
@@ -185,11 +206,13 @@ async function upload(key: string): Promise<void> {
   const outcome = await hostPort.upload({ file: item.file, baseUrl: s.daemon.url, token: s.token, overrides: overrides() });
   if (outcome.ok) {
     commit(uploadSucceeded(board, key, outcome.jobId));
+    emitOutcome({ type: "uploaded", fileId: item.file.id, jobId: outcome.jobId });
   } else {
     switch (outcome.kind) {
       case "rejected":
         commit(uploadRejected(board, key, outcome.message));
         hostPort.release([item.file.id]);
+        emitOutcome({ type: "rejected", fileId: item.file.id, message: outcome.message });
         break;
       case "queue-full":
         commit(uploadRequeued(board, key));
@@ -287,13 +310,13 @@ async function restore(client: NonNullable<ReturnType<typeof api>>): Promise<voi
 
 /** 更换 Daemon: 列表属于旧 Daemon, 清空, 并让宿主释放还没上传的文件。 */
 export function resetBoard() {
-  hostPort.release(
-    board.order.flatMap((key) => {
-      const item = board.items[key];
-      return item?.kind === "pending" || item?.kind === "uploading" ? [item.file.id] : [];
-    }),
-  );
+  const abandoned = board.order.flatMap((key) => {
+    const item = board.items[key];
+    return item?.kind === "pending" || item?.kind === "uploading" ? [item.file.id] : [];
+  });
+  hostPort.release(abandoned);
   board = emptyBoard;
+  for (const fileId of abandoned) emitOutcome({ type: "removed", fileId });
   itemSignals.clear();
   batch(() => {
     order.set([]);

@@ -2,6 +2,7 @@ import { batch, signal } from "nsh";
 import { addLocalFiles, resetBoard } from "./jobs";
 import { engineState } from "./engine";
 import { loadOverrides } from "./overrides";
+import { resetReader, startReader } from "./reader";
 import { closeViewer, section } from "./route";
 import { forgetDaemon, hostPort, startSession } from "./session";
 import { showToast } from "./toast";
@@ -26,6 +27,7 @@ export function startApp(): void {
   hostPort.onNotice((text) => showToast(text, "error"));
   void loadOverrides();
   void startSession();
+  startReader();
 }
 
 /** 更换 Daemon / 取消配对: 清掉属于旧 Daemon 的一切。 */
@@ -36,5 +38,6 @@ export function changeDaemon(): void {
     engineState.set("unknown");
   });
   resetBoard();
+  resetReader();
   forgetDaemon();
 }
