@@ -252,6 +252,12 @@ export function planUploads(board: Board, limits: UploadLimits): string[] {
 export const QUEUE_CAPACITY = 64;
 export const UPLOAD_CONCURRENCY = 3;
 
+/** 能从列表里移除的项: 上传中的宿主还在读, 排队和翻译中的 Job 还在 Daemon 上 (要先取消), 其余都可以。 */
+export function isRemovable(item: Item | undefined): boolean {
+  if (item === undefined || item.kind === "uploading") return false;
+  return item.kind === "pending" || !isActive(item.row.state);
+}
+
 /** 「清除已完成」要移除的 key: 已结束的 Job 和被拒绝的 Pending。 */
 export function clearableKeys(board: Board): string[] {
   return board.order.filter((key) => {

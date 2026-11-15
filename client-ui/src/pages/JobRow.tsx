@@ -1,7 +1,7 @@
 import { Image, platform, Text, View } from "nsh";
 import { jobStatusLabel, shortJobId } from "../domain/job";
 import { mediaUrl, THUMB_WIDTH } from "../domain/media";
-import type { Item } from "../domain/board";
+import { isRemovable, type Item } from "../domain/board";
 import { formatBytes } from "../format";
 import { cancelItem, highlight, itemOf, removeItems, retryItem } from "../store/jobs";
 import { openViewer } from "../store/route";
@@ -97,7 +97,8 @@ export function JobRow(props: { itemKey: () => string }) {
 
 function RowActions(props: { item: Item; itemKey: string }) {
   const cancellable = () => props.item.kind === "pending" ? props.item.rejected === undefined : props.item.kind === "job" && props.item.row.state === "queued";
-  const removable = () => props.item.kind === "pending" ? props.item.rejected !== undefined : props.item.kind === "job" && props.item.row.state !== "queued" && props.item.row.state !== "running";
+  // 还在排队的项显示「取消」, 已结束的才显示移除。
+  const removable = () => isRemovable(props.item) && !cancellable();
   return (
     <View class="flex-row items-center">
       <If when={props.item.kind === "pending" && props.item.rejected !== undefined}>

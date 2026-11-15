@@ -97,13 +97,21 @@ async function upload({ fileId, url, token, overrides }) {
   return { ok: false, kind, message };
 }
 
-function saveArtifact({ url, filename }) {
+const EXTENSIONS = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "text/html": "html" };
+
+/** 下载整份文件再让浏览器保存: 要从应答的 Content-Type 取扩展名, <a download> 自己不会加。字节只在页面里, 不进 NSH 的 VM。 */
+async function saveArtifact({ url, filename }) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("HTTP " + response.status);
+  const blob = await response.blob();
+  const extension = EXTENSIONS[blob.type.split(";")[0]] ?? "bin";
   const link = document.createElement("a");
-  link.href = url;
-  link.download = filename || "translated";
+  link.href = URL.createObjectURL(blob);
+  link.download = (filename || "translated") + "." + extension;
   document.body.appendChild(link);
   link.click();
   link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
   return null;
 }
 
