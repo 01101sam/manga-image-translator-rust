@@ -141,9 +141,60 @@ NativeShell.xcframework 的默认运行时只注册 `nsh/base` 的 **core** 部�
 
 实测 (iPad 模拟器与 visionOS 模拟器上, 探针 bundle 用 `import * as base from "nsh/base"` 看 `typeof`): 有 `Button`、`Input`、`Switch`、`Tabs`、`Radio`、`Progress`、`Dialog`、`NavStack`、`NavPage`、`createNavStack`、`AlertDialog`; 没有 `Select`、`Menu`、`Popover`、`Sheet`、`ToastStack`、`Combobox`、`Tooltip`。`Dialog` 与 `NavStack` 的导出存在, 但没有在这两个平台上渲染过, 步骤 6 要用时先实测。`client-ui` 目前只用 `Button`、`Input`、`Switch`、`Tab`、`Tabs`、`Progress`、`Radio`、`RadioGroup`, `scripts/build-ui.sh check` 会拦住 core 以外的导入。
 
-## 为 PDF 阅读器预留
+## PDF 阅读器
 
-`pdf.*` 前缀已在 `capabilities.host` 里授权, 调用和事件由步骤 6 定义 (App 用 PDFKit 的 Native Component, Web 用 pdf.js 覆盖层)。分区路由 `reader` 已有占位页。
+Server 不接触 PDF, 来源只有用户本地文件。App 宿主把 PDF 存进沙盒, Web 的 `web/host.js` 把浏览器的 `File` 管成 object URL。分区路由 `reader` 承载阅读器; `pdf.*` 前缀已在 `capabilities.host` 里授权。
+
+### `pdf.pick`
+
+```jsonc
+// 参数: 无 (TSX 以 timeout: 0 调用)
+// 返回; 用户取消则 file 为 null
+{ "file": { "id": "…", "name": "book.pdf", "size": 1234567, "type": "application/pdf", "pageCount": 120 } }
+```
+
+- App: 复制到 `Application Support/…/pdfs/<uuid>.pdf` (不放 tmp), `id` 就是这个 uuid, 重启后仍能解析; 只有 `pdf.release` 或超过 30 天没有被打开才会删。`pageCount` 由宿主读出; Web 同形返回, 读不到时省略。TSX 以组件的 `loaded` 事件为准。
+- 拖放进来的 PDF 不走 `files.added` (那里只有图片), 而是事件 `pdf.added`, 载荷是上面 `file` 的数组。一次拖放里既有图片又有 PDF 时, 两个事件各发一次。
+
+### `pdf.release` (post, 无返回)
+
+```jsonc
+{ "fileId": "…" }
+```
+
+用户关闭这个 PDF 后调用, 宿主删掉沙盒副本。
+
+### 原生组件 `it.pdf`
+
+```ts
+nativeComponent<
+  { fileId: string; page: number; hidden?: boolean },
+  { loaded: { pageCount: number }; pageChanged: { page: number } }
+>("it.pdf", { props: ["fileId", "page", "hidden"], events: ["loaded", "pageChanged"] });
+```
+
+- `fileId`: `pdf.pick` / `pdf.added` 给的 id。变化时重新加载文档。
+- `page`: 从 0 开始。收到和当前页不同的值就跳过去。用户在 PDFView 里翻页时宿主发 `pageChanged`, TSX 把值写回 `page`。
+- `hidden`: 为真时隐藏 PDFView (译文叠加显示时用), 文档和当前页保留。
+- ref 命令: `goto` (参数 `{ "page": n }`, 裸数字也收), `next`, `prev`; 越界忽略。
+- 事件: 文档打开后发一次 `loaded` 再发一次 `pageChanged { page: 0 }`; 之后每次当前页变化发 `pageChanged`。
+- PDFView 用 `singlePage` + `autoScales`, 只渲染当前页, 宿主不把整页光栅化成图, 也不预渲染相邻页。
+
+### `pdf.renderPage`
+
+把某一页送去翻译前, 先让宿主渲染成 PNG 文件, 再走和图片一样的 `upload.start`。
+
+```jsonc
+// 参数 (page 从 0 开始; longEdge 缺省 3072, 宿主限制在 256 到 8192)
+{ "fileId": "…", "page": 0, "longEdge": 3072 }
+// 返回
+{ "fileRef": { "id": "…", "name": "book-p001.png", "size": 2345678, "type": "image/png" } }
+```
+
+- `fileRef` 和 `files.pick` 返回的文件引用同形, `id` 直接当 `upload.start` 的 `fileId`, 上传和释放规则完全一样 (成功后宿主自己释放; 被拒绝或放弃时 TSX 发 `files.release`)。渲染出的 PNG 在宿主沙盒里, 不进 JS。
+- 页码越界、`fileId` 已不存在、文件不是 PDF 时 reject。
+- `longEdge` 一般取 Config 的 `downscale_long_edge` (没有就 3072), 宿主按长边缩放, 不放大。
+- 页 → Job 的映射、译文叠加和空格切换是 TSX 的事 (`PageMachine`); 宿主只管上面这几个调用和组件。
 
 ## 测试
 
