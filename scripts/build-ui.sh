@@ -1,7 +1,7 @@
 #!/bin/zsh
 # 构建 client-ui: 同一套 TSX 界面, Web 站点 (gui/dist, 由 Daemon 托管) 与 App 用的原生 bundle。
 # 用法: scripts/build-ui.sh [web|native|check|test|all]    默认 web
-#   web     NSH web runtime (固定 commit 的源码编成 wasm) + nsh package --target web -> gui/dist
+#   web     NSH web runtime (固定 commit 的源码编成 wasm) + nsh package --target web -> gui/dist, 再把 web/pdfjs 拷成 gui/dist/pdfjs
 #   native  nsh build --release -> client-ui/dist/native (bundle.nshc、app.json、capabilities.json), 供 Swift 宿主加载
 #   check   nsh check (TypeScript 类型检查)
 #   test    nsh test (领域逻辑与整个界面的无头测试)
@@ -71,6 +71,8 @@ build_web() {
   (( ${#site} == 1 )) || die "nsh package 没有产出站点目录"
   rm -rf $REPO/gui/dist && mkdir -p $REPO/gui/dist
   cp -R ${site[1]}/. $REPO/gui/dist/
+  # pdf.js 与它的 worker、wasm、字体: PDF 阅读器的 Web 宿主 (web/host.js) 按相对路径 pdfjs/ 加载, 版本见 web/pdfjs/VERSION。
+  cp -R $UI/web/pdfjs $REPO/gui/dist/pdfjs
   # 页面自带内联脚本, 在严格的 script-src 策略下要加这个 hash; 每次构建都会变。
   sed -n 's/.*it needs \(script-src .*\)$/\1/p' $log > $REPO/gui/dist/csp-script-src.txt
   say "gui/dist: $(du -sh $REPO/gui/dist | cut -f1), CSP: $(<$REPO/gui/dist/csp-script-src.txt)"
