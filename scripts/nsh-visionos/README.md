@@ -29,4 +29,4 @@ scripts/nsh-visionos/verify.sh                 # 检查每个切片的平台、m
 | `NativeShell.xcframework` (ios-arm64、ios-arm64-simulator、xros-arm64、xros-arm64-simulator) | `app/Frameworks/` (已 gitignore) |
 | `nsh` CLI | `scripts/nsh-visionos/bin/nsh` (已 gitignore) |
 
-静态 framework, Swift 模块自带 autolink, 链接时不用额外的 `-framework` 或 `-l` 参数。升级 NSH 时改 `build.sh` 里的 `NSH_COMMIT` (完整哈希) 并重新生成补丁。
+静态 framework, Swift 模块自带 autolink, 链接时不用额外的 `-framework` 或 `-l` 参数。升级 NSH 时改 `common.sh` 里的 `NSH_COMMIT` (完整哈希) 并重新生成补丁。
