@@ -62,6 +62,10 @@ final class TestHooksTests: XCTestCase {
         XCTAssertEqual(hooks.section, "reader")
         XCTAssertTrue(hooks.forgetPairing)
         XCTAssertFalse(TestHooks.parse([]).forgetPairing)
+        let more = TestHooks.parse(["-bundle", "/tmp/a.js", "-debug-drag-source", "/tmp/imgs", "-auto-import-folder", "/tmp/imgs", "-auto-import-urls"])
+        XCTAssertEqual(more.bundlePath, "/tmp/a.js")
+        XCTAssertEqual(more.debugDragSource, "/tmp/imgs")
+        XCTAssertTrue(more.autoImportViaURLs)
     }
 
     func testEmptyArgsStayInert() {

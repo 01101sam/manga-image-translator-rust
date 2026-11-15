@@ -47,6 +47,8 @@
 		020000000000000000000016 /* NativeShell.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 020000000000000000000015 /* NativeShell.xcframework */; };
 		020000000000000000000012 /* HostFilesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000011 /* HostFilesTests.swift */; };
 		020000000000000000000014 /* HostUploadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000013 /* HostUploadTests.swift */; };
+		02000000000000000000001B /* NshHostUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000001A /* NshHostUITests.swift */; };
+		02000000000000000000001D /* HostDebugDrag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000001C /* HostDebugDrag.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -108,6 +110,8 @@
 		020000000000000000000011 /* HostFilesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostFilesTests.swift; sourceTree = "<group>"; };
 		020000000000000000000013 /* HostUploadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostUploadTests.swift; sourceTree = "<group>"; };
 		020000000000000000000015 /* NativeShell.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = NativeShell.xcframework; sourceTree = "<group>"; };
+		02000000000000000000001A /* NshHostUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NshHostUITests.swift; sourceTree = "<group>"; };
+		02000000000000000000001C /* HostDebugDrag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostDebugDrag.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -180,6 +184,7 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000120 /* ImageTranslatorUITests.swift */,
+				02000000000000000000001A /* NshHostUITests.swift */,
 				000000000000000000000122 /* three-pages.pdf */,
 				000000000000000000000125 /* sample.jpg */,
 				000000000000000000000130 /* batch */,
@@ -212,6 +217,7 @@
 			isa = PBXGroup;
 			children = (
 				020000000000000000000001 /* HostArtifact.swift */,
+				02000000000000000000001C /* HostDebugDrag.swift */,
 				020000000000000000000003 /* HostFiles.swift */,
 				020000000000000000000005 /* HostIngest.swift */,
 				020000000000000000000007 /* HostPdf.swift */,
@@ -405,6 +411,7 @@
 				000000000000000000000138 /* WindowSettings.swift in Sources */,
 				00000000000000000000011F /* TestHooks.swift in Sources */,
 				020000000000000000000002 /* HostArtifact.swift in Sources */,
+				02000000000000000000001D /* HostDebugDrag.swift in Sources */,
 				020000000000000000000004 /* HostFiles.swift in Sources */,
 				020000000000000000000006 /* HostIngest.swift in Sources */,
 				020000000000000000000008 /* HostPdf.swift in Sources */,
@@ -436,6 +443,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				000000000000000000000121 /* ImageTranslatorUITests.swift in Sources */,
+				02000000000000000000001B /* NshHostUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -464,6 +472,8 @@
 				COPY_PHASE_STRIP = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				"EXCLUDED_ARCHS[sdk=xrsimulator*]" = x86_64;
 				GCC_NO_COMMON_BLOCKS = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				SDKROOT = auto;
@@ -492,6 +502,8 @@
 				COPY_PHASE_STRIP = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				"EXCLUDED_ARCHS[sdk=xrsimulator*]" = x86_64;
 				GCC_NO_COMMON_BLOCKS = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				SDKROOT = auto;
