@@ -243,6 +243,7 @@ NSH 的 Web 版没有注册的原生组件, `it.pdf` 在网页上是个空 View�
 - 只渲染当前页: canvas 的像素尺寸是占位节点的显示尺寸乘 `devicePixelRatio`, 长边最多 3000 像素。新页画好之后才换掉旧 canvas, 所以翻页不闪白, 任何时刻占位节点里只有一个 canvas。`hidden` 为 true 时不渲染也不换页, 变回 false 时补画。占位节点改变大小 (窗口缩放、横竖屏) 时宿主用 `ResizeObserver` 自己重画。
 - `pdf.show` 打不开文档就 reject; TSX 在页面上显示这条原因。
 - 文档只在覆盖层显示它、或正在渲染页图时保持打开 (打开后连同 worker 和读入的数据可以占到几百 MB)。覆盖层离开屏幕或页图渲染完 20 秒后, 宿主销毁 pdf.js 的加载任务, 回来时重新打开; `pdf.release` 立即销毁并 revoke object URL。
+- 解码: `getDocument` 传了 `isImageDecoderSupported: false` 和 `isOffscreenCanvasSupported: false`, 嵌在 PDF 里的 JPEG 由 worker 里的 JS 解码。默认走浏览器的 ImageDecoder 时, 解出的位图一直留在渲染进程里: 100 页的图片 PDF 翻完渲染进程约 1.1 GB, 24 秒后仍是 1.1 GB; 关掉后翻完约 0.6 GB, 24 秒后回落到约 0.5 GB (footprint 从约 825 MB 降到约 250 MB)。代价是每页重绘慢一些, 一页重画的耗时约 56 ms 变成约 185 ms (Chrome headless, 3 次)。要换回去就删掉这两个选项。
 - pdf.js、它的 worker 和解码用的 wasm、字体、CMap 都是同源静态文件, 在站点的 `pdfjs/` 下 (`pdf.js`、`pdf.worker.js`, 改成 `.js` 是因为 Daemon 按扩展名发 Content-Type, 不认识 `.mjs`); 版本见 `web/pdfjs/VERSION`, 来源与更新方法见 `scripts/vendor-pdfjs.sh`。`scripts/build-ui.sh web` 把它们拷进 `gui/dist/pdfjs/`。
 - PDF 用 object URL 交给 pdf.js, 所以页面的 CSP 若限制了 `connect-src`, 要加上 `blob:`。
 - `pdf.renderPage` 在 Web 上用同一个 pdf.js 文档渲染到一块临时 canvas, `toBlob` 成 PNG 后立刻清零 canvas; 文件名是 `<PDF 名>-p001.png` 这种三位页号。
