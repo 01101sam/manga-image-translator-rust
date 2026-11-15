@@ -17,10 +17,10 @@ use serde::Deserialize;
 
 use crate::server::artifacts::ArtifactStore;
 use crate::server::bonjour::Bonjour;
-use crate::server::config::{ConfigStore, DaemonConfig};
+use crate::server::config::{ConfigError, ConfigStore, DaemonConfig};
 use crate::server::engine::{mime_of, Engine, WorkerParams};
 use crate::server::jobs::{apply_overrides, CancelError, JobState, JobStore};
-use crate::server::pairing::{Pairing, SystemClock, TokenStore};
+use crate::server::pairing::{key_matches, TokenStore};
 use crate::server::queue::Queue;
 use crate::server::webui;
 
@@ -37,12 +37,36 @@ pub struct AppState {
     jobs: Arc<JobStore>,
     queue: Arc<Queue>,
     config: tokio::sync::Mutex<ConfigStore>,
-    pairing: tokio::sync::Mutex<Pairing<SystemClock>>,
     tokens: Arc<TokenStore>,
     started: Instant,
     batch_ocr: usize,
     batch_upscaler: usize,
     cuda: bool,
+}
+
+impl AppState {
+    fn new(
+        config: ConfigStore,
+        artifacts: Arc<ArtifactStore>,
+        tokens: Arc<TokenStore>,
+        runtime: tokio::runtime::Handle,
+        args: &DaemonArgs,
+    ) -> Self {
+        let queue = Arc::new(Queue::new());
+        let jobs = Arc::new(JobStore::new());
+        let engine = Engine::new(queue.clone(), jobs.clone(), artifacts, runtime);
+        Self {
+            engine: tokio::sync::Mutex::new(engine),
+            jobs,
+            queue,
+            config: tokio::sync::Mutex::new(config),
+            tokens,
+            started: Instant::now(),
+            batch_ocr: args.max_batch_size_ocr,
+            batch_upscaler: args.max_batch_size_upscaler,
+            cuda: args.cuda,
+        }
+    }
 }
 
 struct Authed;
@@ -112,24 +136,24 @@ async fn health(state: web::Data<AppState>) -> impl Responder {
     }))
 }
 
-#[post("/pair/request")]
-async fn pair_request(state: web::Data<AppState>) -> impl Responder {
-    let pairing = state.pairing.lock().await;
-    let _code = pairing.request();
-    HttpResponse::Ok().json(serde_json::json!({ "ok": true }))
-}
-
 #[derive(Deserialize)]
-struct ConfirmBody {
-    code: String,
+struct PairBody {
+    key: String,
 }
 
-#[post("/pair/confirm")]
-async fn pair_confirm(state: web::Data<AppState>, body: web::Json<ConfirmBody>) -> impl Responder {
-    let pairing = state.pairing.lock().await;
-    match pairing.confirm(body.code.trim()) {
+#[post("/pair")]
+async fn pair(state: web::Data<AppState>, body: web::Json<PairBody>) -> impl Responder {
+    // 每次请求现读 Config，保证 PUT /config 改掉 Pairing Key 后立即生效。
+    let expected = state.config.lock().await.get().pairing_key.clone();
+    if !key_matches(&expected, &body.key) {
+        return fail(StatusCode::UNAUTHORIZED, "Pairing Key 不正确");
+    }
+    match state.tokens.issue() {
         Ok(token) => HttpResponse::Ok().json(serde_json::json!({ "token": token })),
-        Err(e) => fail(StatusCode::UNAUTHORIZED, e.message()),
+        Err(e) => fail(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("保存 Token 失败: {e}"),
+        ),
     }
 }
 
@@ -203,11 +227,15 @@ async fn put_config(
         Ok(c) => c,
         Err(e) => return fail(StatusCode::BAD_REQUEST, format!("invalid config: {e}")),
     };
-    cfg.apply_secrets();
     let mut store = state.config.lock().await;
     if let Err(e) = store.replace(cfg) {
-        return fail(StatusCode::INTERNAL_SERVER_ERROR, e.message());
+        let status = match e {
+            ConfigError::Invalid(_) => StatusCode::BAD_REQUEST,
+            ConfigError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        return fail(status, e.message());
     }
+    store.get().apply_secrets();
     HttpResponse::Ok().json(store.get())
 }
 
@@ -356,26 +384,50 @@ fn cleanup(artifacts: &ArtifactStore, bonjour: &Mutex<Option<Bonjour>>) {
     }
 }
 
+fn configure(cfg: &mut web::ServiceConfig, state: web::Data<AppState>) {
+    cfg.app_data(state)
+        .app_data(web::PayloadConfig::new(64 * 1024 * 1024))
+        .app_data(
+            MultipartFormConfig::default()
+                .total_limit(64 * 1024 * 1024)
+                .memory_limit(4 * 1024 * 1024),
+        )
+        .service(webui::index)
+        .service(health)
+        .service(pair)
+        .service(engine_status)
+        .service(engine_start)
+        .service(engine_stop)
+        .service(engine_restart)
+        .service(get_config)
+        .service(put_config)
+        .service(submit_job)
+        .service(list_jobs)
+        .service(get_job)
+        .service(cancel_job)
+        .service(job_artifact);
+}
+
 pub async fn main(args: DaemonArgs) -> std::io::Result<()> {
     let artifacts = Arc::new(
         ArtifactStore::platform()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
     );
-    let queue = Arc::new(Queue::new());
-    let jobs = Arc::new(JobStore::new());
     let config = ConfigStore::platform()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.message()))?;
-    let pairing = Pairing::open(config.path())
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    let tokens = pairing.tokens();
+    let tokens = Arc::new(
+        TokenStore::open(config.path())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?,
+    );
     // Capture before HttpServer. actix handlers run on a current-thread runtime.
     let engine_rt = tokio::runtime::Handle::current();
-    let engine = Engine::new(
-        queue.clone(),
-        jobs.clone(),
+    let state = web::Data::new(AppState::new(
+        config,
         artifacts.clone(),
+        tokens,
         engine_rt,
-    );
+        &args,
+    ));
     let bonjour = Mutex::new(match Bonjour::register(args.port) {
         Ok(svc) => Some(svc),
         Err(e) => {
@@ -384,46 +436,9 @@ pub async fn main(args: DaemonArgs) -> std::io::Result<()> {
         }
     });
 
-    let state = web::Data::new(AppState {
-        engine: tokio::sync::Mutex::new(engine),
-        jobs,
-        queue,
-        config: tokio::sync::Mutex::new(config),
-        pairing: tokio::sync::Mutex::new(pairing),
-        tokens,
-        started: Instant::now(),
-        batch_ocr: args.max_batch_size_ocr,
-        batch_upscaler: args.max_batch_size_upscaler,
-        cuda: args.cuda,
-    });
-
     let server = HttpServer::new({
         let state = state.clone();
-        move || {
-            App::new()
-                .app_data(state.clone())
-                .app_data(web::PayloadConfig::new(64 * 1024 * 1024))
-                .app_data(
-                    MultipartFormConfig::default()
-                        .total_limit(64 * 1024 * 1024)
-                        .memory_limit(4 * 1024 * 1024),
-                )
-                .service(webui::index)
-                .service(health)
-                .service(pair_request)
-                .service(pair_confirm)
-                .service(engine_status)
-                .service(engine_start)
-                .service(engine_stop)
-                .service(engine_restart)
-                .service(get_config)
-                .service(put_config)
-                .service(submit_job)
-                .service(list_jobs)
-                .service(get_job)
-                .service(cancel_job)
-                .service(job_artifact)
-        }
+        move || App::new().configure(|cfg| configure(cfg, state.clone()))
     })
     .bind((args.host.as_str(), args.port))?
     .run();
@@ -443,3 +458,6 @@ pub async fn main(args: DaemonArgs) -> std::io::Result<()> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

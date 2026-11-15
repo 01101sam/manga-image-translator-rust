@@ -9,6 +9,13 @@ fn default_workers() -> usize {
     2
 }
 
+/// 旧 config.json 没有 pairing_key 字段时用它，保证升级后设备仍能配对。
+pub const DEFAULT_PAIRING_KEY: &str = "sam01101";
+
+fn default_pairing_key() -> String {
+    DEFAULT_PAIRING_KEY.to_owned()
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 pub struct DaemonConfig {
@@ -16,6 +23,9 @@ pub struct DaemonConfig {
     pub workers: usize,
     #[serde(default)]
     pub api_key: Option<String>,
+    /// 配对密钥。修改它只影响之后的 Pairing，已签发的 Token 继续有效。
+    #[serde(default = "default_pairing_key")]
+    pub pairing_key: String,
     #[serde(flatten)]
     pub settings: Settings,
 }
@@ -25,6 +35,7 @@ impl Default for DaemonConfig {
         Self {
             workers: default_workers(),
             api_key: None,
+            pairing_key: default_pairing_key(),
             settings: Settings::default(),
         }
     }
@@ -33,6 +44,13 @@ impl Default for DaemonConfig {
 impl DaemonConfig {
     pub fn settings_clone(&self) -> Settings {
         crate::server::jobs::clone_settings(&self.settings)
+    }
+
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.pairing_key.trim().is_empty() {
+            return Err(ConfigError::Invalid("Pairing Key 不能为空".into()));
+        }
+        Ok(())
     }
 
     pub fn apply_secrets(&self) {
@@ -101,6 +119,7 @@ impl ConfigStore {
     }
 
     pub fn replace(&mut self, cfg: DaemonConfig) -> Result<(), ConfigError> {
+        cfg.validate()?;
         self.cfg = cfg;
         self.save()
     }
@@ -142,6 +161,43 @@ mod tests {
         let store = ConfigStore::open(dir).unwrap();
         assert_eq!(store.get().workers, 3);
         assert_eq!(store.get().api_key.as_deref(), Some("sk-test"));
+    }
+
+    #[test]
+    fn legacy_config_without_pairing_key_gets_the_default() {
+        let dir = tmp_dir();
+        fs::write(
+            dir.join("config.json"),
+            br#"{"workers": 3, "api_key": "sk-old"}"#,
+        )
+        .unwrap();
+        let store = ConfigStore::open(dir).unwrap();
+        assert_eq!(store.get().pairing_key, DEFAULT_PAIRING_KEY);
+        assert_eq!(store.get().workers, 3);
+    }
+
+    #[test]
+    fn pairing_key_roundtrips_through_disk() {
+        let dir = tmp_dir();
+        let mut store = ConfigStore::open(dir.clone()).unwrap();
+        let mut cfg = DaemonConfig::default();
+        cfg.pairing_key = "another-key".into();
+        store.replace(cfg).unwrap();
+        drop(store);
+        assert_eq!(
+            ConfigStore::open(dir).unwrap().get().pairing_key,
+            "another-key"
+        );
+    }
+
+    #[test]
+    fn blank_pairing_key_is_rejected_and_old_value_kept() {
+        let dir = tmp_dir();
+        let mut store = ConfigStore::open(dir).unwrap();
+        let mut cfg = DaemonConfig::default();
+        cfg.pairing_key = "   ".into();
+        assert!(matches!(store.replace(cfg), Err(ConfigError::Invalid(_))));
+        assert_eq!(store.get().pairing_key, DEFAULT_PAIRING_KEY);
     }
 
     #[test]

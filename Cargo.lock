@@ -6184,6 +6184,7 @@ dependencies = [
  "serde_json",
  "strum 0.27.2",
  "strum_macros 0.27.2",
+ "subtle",
  "textline-merge",
  "tokio",
  "tracing",
