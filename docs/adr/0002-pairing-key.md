@@ -21,7 +21,7 @@ ADR 0001 的 Pairing 要操作者盯着 Daemon 控制台，在 30 秒内把 6 �
 
 局域网内知道 Key 的人都能配对并取得 Token。默认值写在源码和文档里，操作者应在 Config 界面改掉。Token 没有单独吊销手段，需要时只能删除 `tokens.json`，这与 ADR 0001 一致。
 
-`gui/index.html` 和 Swift Client 仍调用已删除的 `/pair/request` 与 `/pair/confirm`。在新界面替换它们之前，它们无法对新 Daemon 配对。
+旧的 `gui/index.html` 已被 Daemon 托管的 NSH Web 版取代并删除。Swift Client 仍调用已删除的 `/pair/request` 与 `/pair/confirm`，在新界面替换它之前，它无法对新 Daemon 配对。
 
 ## 否决的方案
 

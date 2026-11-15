@@ -15,10 +15,11 @@
 3. Config 新增 `downscale_long_edge`，默认 4096，`null` 关闭。长边超过它的图在 pipeline 入口等比缩小。它放在 `DaemonConfig` 而不是 `Settings`，因为 `Settings` 同时是 CLI 的输入和 `docs/schema.json` 的来源。
 4. 每个 Daemon 实例使用 `<base>/<PID>-<随机后缀>/`。启动时只回收 PID 已不存在的实例目录，退出时（Ctrl-C 和 SIGTERM）只删自己的。旧版直接放在 `<base>` 下的平铺文件，只有在进程表里找不到可能是旧版 Daemon 的进程时才删，`ps` 失败时不删。
 5. `GET /jobs/{id}/artifact` 改为流式返回，新增 `GET /jobs/{id}/source` 返回原图。这两个 GET 路由除 Bearer 外接受 `?token=`，其他路由不接受。
-6. `/index.html` 与 `/assets/*` 和 `/` 一样免鉴权，为之后嵌入的 NSH web bundle 预留。`/assets/*` 在 bundle 嵌入前一律 404。
+6. `gui/dist`（`scripts/build-ui.sh web` 生成，不入库）在编译期由 `build.rs` 嵌进二进制，整个站点挂在 `/`，免鉴权。它是所有 API 路由之后的 `default_service`，所以 API 永远优先，也不需要鉴权白名单。`/` 返回 `index.html` 并带 `Cache-Control: no-cache`，文件名或目录名带 10 位摘要的文件用 `immutable`，存在 `.br` / `.gz` 时按 `Accept-Encoding` 返回，`.wasm` 是 `application/wasm`。同源部署，不加 CORS，也不加 CSP。`gui/dist` 不存在时构建失败并提示先运行 `scripts/build-ui.sh web`。
 7. 单次上传上限从 64 MB 放宽到 256 MB，超限返回 413 和 JSON 错误。图片落盘不占内存，上限只防磁盘被灌满。
 8. 源文件保留到 Job 被取消、被丢弃或 Daemon 退出，因为 `/source` 在 Job 完成后还要读它。
 9. `/source` 与 `/artifact` 接受 `?w=256|512|1024|2048`，返回长边不超过 w 的 JPEG 预览，不放大，透明处铺白。预览缓存在实例目录的 `preview/` 下，键是 Job id、来源和 w。同时最多生成 2 个预览，其余请求排队。NSH 的 Image 会把整个编码文件下载进内存再降采样，列表缩略图必须由 Daemon 先缩小。
+10. `GET /jobs` 每项带 `position_in_queue`（排队时从 1 开始，否则 `null`）和 `error`（失败时）。`GET /engine/status` 带 `queue_capacity`，Client 据此决定同时在途的上限。放在 Engine 状态而不是 `/health`，是因为只有配对过的 Client 需要它，它和 Engine 状态一起轮询，而 `/health` 是匿名可访问的存活探针。
 
 ## 后果
 
