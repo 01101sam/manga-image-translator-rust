@@ -26,6 +26,7 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
     private var appView: NshAppView?
     private var errorOverlay: UIStackView?
     private var autoHooksScheduled = false
+    private var debugDragSource: DebugDragSource?
 
     init(hooks: TestHooks) {
         self.hooks = hooks
@@ -47,6 +48,11 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
         session.onDaemonsChanged = { [weak self] daemons in self?.appView?.send("session.daemons", daemons) }
         session.start(seed: hooks.browseDaemon)
         mountApp()
+        if let folder = hooks.debugDragSource {
+            let source = DebugDragSource(folder: URL(fileURLWithPath: folder), count: 3, scratch: files.scratchFile(named: "debug-drag"))
+            source.install(in: view)
+            debugDragSource = source
+        }
     }
 
     // MARK: - NSH
@@ -300,11 +306,23 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
     private func scheduleAutoHooks() {
         guard !autoHooksScheduled, let folder = hooks.autoImportFolder else { return }
         autoHooksScheduled = true
+        let viaURLs = hooks.autoImportViaURLs
         Task {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
+            HostMetrics.log("hook start")
+            if viaURLs {
+                let result = await ingestor.ingest(urls: [URL(fileURLWithPath: folder)], allowing: [.image, .pdf])
+                HostMetrics.log("ingested \(result.images.count) via urls")
+                deliver(result)
+                return
+            }
             let clones = Self.cloneFiles(inFolder: URL(fileURLWithPath: folder), into: files.scratchFile(named: "drop-hook"))
-            let providers = clones.compactMap { NSItemProvider(contentsOf: $0) }
-            deliver(await ingestor.ingest(providers: providers, allowing: [.image, .pdf]))
+            HostMetrics.log("cloned \(clones.count)")
+            let providers = clones.compactMap(DebugProvider.make)
+            HostMetrics.log("providers created \(providers.count)")
+            let result = await ingestor.ingest(providers: providers, allowing: [.image, .pdf])
+            HostMetrics.log("ingested \(result.images.count) via providers")
+            deliver(result)
         }
     }
 
@@ -314,6 +332,24 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
             let target = directory.appendingPathComponent(source.lastPathComponent)
             return (try? FileManager.default.copyItem(at: source, to: target)) == nil ? nil : target
         }
+    }
+}
+
+/// 测试钩子用: 进程常驻内存, 方便把 RSS 的涨幅对到具体步骤上。
+enum HostMetrics {
+    static func residentMB() -> Int {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+        let status = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        return status == KERN_SUCCESS ? Int(info.resident_size / 1_048_576) : -1
+    }
+
+    static func log(_ stage: String) {
+        NSLog("HOSTHOOK %@ rss=%dMB", stage, residentMB())
     }
 }
 

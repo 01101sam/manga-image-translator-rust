@@ -5,10 +5,14 @@ struct TestHooks: Equatable, Sendable {
     var openPDF: String?
     var autoSubmitImage: String?
     var autoImportFolder: String?
+    /// -auto-import-urls: 与 -auto-import-folder 同一个目录, 但走文件选择器的 URL 拷贝路径, 不经过 NSItemProvider。
+    var autoImportViaURLs = false
     /// files.pick 不弹选择器, 直接从这个目录取图片 (UI 测试没法驱动系统选择器)。
     var pickFolder: String?
     /// pdf.pick 不弹选择器, 直接用这个 PDF。
     var pickPDF: String?
+    /// -debug-drag-source: 窗口里放一个可拖的小方块, UI 测试用它发起真正的拖放。
+    var debugDragSource: String?
     /// 加载这个 bundle 文件而不是 App 里内置的 (探针页用)。
     var bundlePath: String?
     /// 起始分区, 传给 TSX 的 host.params.section。
@@ -67,6 +71,11 @@ struct TestHooks: Equatable, Sendable {
                 i += 2
                 continue
             }
+            if flag == "-auto-import-urls" {
+                hooks.autoImportViaURLs = true
+                i += 1
+                continue
+            }
             if flag == "-pick-folder", i + 1 < args.count {
                 hooks.pickFolder = args[i + 1]
                 i += 2
@@ -74,6 +83,11 @@ struct TestHooks: Equatable, Sendable {
             }
             if flag == "-pick-pdf", i + 1 < args.count {
                 hooks.pickPDF = args[i + 1]
+                i += 2
+                continue
+            }
+            if flag == "-debug-drag-source", i + 1 < args.count {
+                hooks.debugDragSource = args[i + 1]
                 i += 2
                 continue
             }
