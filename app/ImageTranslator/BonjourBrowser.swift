@@ -54,7 +54,10 @@ final class BonjourBrowser: ObservableObject {
             upsert(DaemonEndpoint(name: hostLabel(host), host: hostLabel(host), port: port.rawValue))
             return
         }
-        let connection = NWConnection(to: result.endpoint, using: .tcp)
+        // Daemon 只监听 IPv4; 解析出链路本地 IPv6 地址去掉 zone 后就连不上, 所以只要 IPv4。
+        let parameters = NWParameters.tcp
+        (parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options)?.version = .v4
+        let connection = NWConnection(to: result.endpoint, using: parameters)
         let id = ObjectIdentifier(connection)
         resolvers[id] = connection
         connection.stateUpdateHandler = { [weak self] state in

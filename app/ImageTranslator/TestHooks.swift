@@ -5,6 +5,16 @@ struct TestHooks: Equatable, Sendable {
     var openPDF: String?
     var autoSubmitImage: String?
     var autoImportFolder: String?
+    /// files.pick 不弹选择器, 直接从这个目录取图片 (UI 测试没法驱动系统选择器)。
+    var pickFolder: String?
+    /// pdf.pick 不弹选择器, 直接用这个 PDF。
+    var pickPDF: String?
+    /// 加载这个 bundle 文件而不是 App 里内置的 (探针页用)。
+    var bundlePath: String?
+    /// 起始分区, 传给 TSX 的 host.params.section。
+    var section: String?
+    /// 启动时先清掉 Keychain 里的配对, 让 UI 测试从未配对开始。
+    var forgetPairing = false
     var daemonHost: String?
     var daemonPort: UInt16?
 
@@ -55,6 +65,31 @@ struct TestHooks: Equatable, Sendable {
             if flag == "-auto-import-folder", i + 1 < args.count {
                 hooks.autoImportFolder = args[i + 1]
                 i += 2
+                continue
+            }
+            if flag == "-pick-folder", i + 1 < args.count {
+                hooks.pickFolder = args[i + 1]
+                i += 2
+                continue
+            }
+            if flag == "-pick-pdf", i + 1 < args.count {
+                hooks.pickPDF = args[i + 1]
+                i += 2
+                continue
+            }
+            if flag == "-bundle", i + 1 < args.count {
+                hooks.bundlePath = args[i + 1]
+                i += 2
+                continue
+            }
+            if flag == "-section", i + 1 < args.count {
+                hooks.section = args[i + 1]
+                i += 2
+                continue
+            }
+            if flag == "-forget-pairing" {
+                hooks.forgetPairing = true
+                i += 1
                 continue
             }
             if flag == "-daemon-host", i + 1 < args.count {

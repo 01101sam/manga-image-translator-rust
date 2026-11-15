@@ -2,19 +2,44 @@ import SwiftUI
 
 @main
 struct ImageTranslatorApp: App {
-    @StateObject private var session = AppSession()
     @StateObject private var windowSettings = WindowSettings()
 
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .environmentObject(session)
+            HostRootView()
                 .environmentObject(windowSettings)
                 .modifier(AppWindowFrame(settings: windowSettings))
-                .task { session.consumePendingHooks() }
         }
         .windowResizability(.contentSize)
         .defaultSize(windowSettings.idealSize)
+    }
+}
+
+/// 界面全在 NshAppView 里; SwiftUI 只剩窗口框架, 以及 visionOS 的横竖屏 ornament。
+struct HostRootView: View {
+    #if os(visionOS)
+    @EnvironmentObject private var windowSettings: WindowSettings
+    #endif
+
+    var body: some View {
+        NshHostView(hooks: TestHooks.fromProcessInfo())
+            .ignoresSafeArea(.keyboard)
+            #if os(visionOS)
+            .ornament(visibility: .visible, attachmentAnchor: .scene(.bottom)) {
+                Button {
+                    windowSettings.windowLandscape.toggle()
+                } label: {
+                    Label(
+                        windowSettings.windowLandscape ? "横屏" : "竖屏",
+                        systemImage: windowSettings.windowLandscape ? "rectangle.landscape" : "rectangle.portrait"
+                    )
+                }
+                .accessibilityIdentifier("window-orientation")
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .glassBackgroundEffect()
+            }
+            #endif
     }
 }
 

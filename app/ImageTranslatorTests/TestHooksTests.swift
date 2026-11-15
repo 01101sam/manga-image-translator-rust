@@ -55,6 +55,15 @@ final class TestHooksTests: XCTestCase {
         )
     }
 
+    func testParseHostHooks() {
+        let hooks = TestHooks.parse(["-pick-folder", "/tmp/imgs", "-pick-pdf", "/tmp/a.pdf", "-section", "reader", "-forget-pairing"])
+        XCTAssertEqual(hooks.pickFolder, "/tmp/imgs")
+        XCTAssertEqual(hooks.pickPDF, "/tmp/a.pdf")
+        XCTAssertEqual(hooks.section, "reader")
+        XCTAssertTrue(hooks.forgetPairing)
+        XCTAssertFalse(TestHooks.parse([]).forgetPairing)
+    }
+
     func testEmptyArgsStayInert() {
         let hooks = TestHooks.parse(["ImageTranslator"])
         XCTAssertNil(hooks.paired)
