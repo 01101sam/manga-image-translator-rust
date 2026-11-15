@@ -163,6 +163,7 @@ pub struct JobView {
 pub struct JobListItem {
     pub job_id: String,
     pub state: JobState,
+    pub error: Option<String>,
 }
 
 pub struct JobStore {
@@ -223,6 +224,7 @@ impl JobStore {
             .map(|(id, j)| JobListItem {
                 job_id: id.clone(),
                 state: j.state,
+                error: j.error.clone(),
             })
             .collect()
     }

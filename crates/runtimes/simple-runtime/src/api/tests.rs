@@ -529,29 +529,106 @@ async fn query_token_unlocks_the_image_routes_only() {
     }
 }
 
+/// 站点是匿名可开的。逐个请求编进二进制的每个文件, 保证没有哪个路径落到鉴权上。
 #[actix_web::test]
-async fn public_routes_need_no_token_and_every_api_route_does() {
+async fn every_embedded_file_is_served_without_a_token() {
     let fx = Fixture::new();
     let app = app!(fx.state());
-    for path in [
-        "/",
-        "/index.html",
-        "/health",
-        "/assets/app.js",
-        "/assets/chunks/a.css",
-    ] {
-        let status = fetch!(app, path, None::<&String>).0;
-        assert_ne!(status, StatusCode::UNAUTHORIZED, "{path}");
+    assert!(webui::files().len() > 10);
+    for file in webui::files() {
+        let uri = format!("/{}", file.path);
+        let (status, content_type, _, body) = fetch!(app, &uri, None::<&String>);
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        assert_eq!(body.as_ref(), file.identity, "{uri}");
+        assert!(content_type.is_some(), "{uri}");
     }
+    let (_, content_type, _, root) = fetch!(app, "/", None::<&String>);
+    let (_, _, _, index) = fetch!(app, "/index.html", None::<&String>);
+    assert_eq!(root, index, "/ is index.html");
+    assert_eq!(content_type.unwrap(), "text/html; charset=utf-8");
+}
+
+macro_rules! site_get {
+    ($app:expr, $uri:expr, $accept:expr) => {{
+        let mut req = test::TestRequest::get().uri($uri);
+        if let Some(accept) = $accept {
+            req = req.insert_header(("Accept-Encoding", accept));
+        }
+        test::call_service(&$app, req.to_request()).await
+    }};
+}
+
+fn header(resp: &actix_web::dev::ServiceResponse, name: &str) -> Option<String> {
+    resp.headers()
+        .get(name)
+        .map(|v| v.to_str().unwrap().to_owned())
+}
+
+#[actix_web::test]
+async fn site_headers_follow_the_file_kind() {
+    let fx = Fixture::new();
+    let app = app!(fx.state());
+
+    let index = site_get!(app, "/", None::<&str>);
+    assert_eq!(header(&index, "cache-control").unwrap(), "no-cache");
+    assert!(header(&index, "access-control-allow-origin").is_none());
+    assert!(header(&index, "content-security-policy").is_none());
+
+    let wasm = webui::files()
+        .iter()
+        .find(|f| f.path.ends_with(".wasm"))
+        .expect("the site ships a wasm runtime");
+    let resp = site_get!(app, &format!("/{}", wasm.path), None::<&str>);
+    assert_eq!(header(&resp, "content-type").unwrap(), "application/wasm");
     assert_eq!(
-        fetch!(app, "/index.html", None::<&String>).0,
-        StatusCode::OK
+        header(&resp, "cache-control").unwrap(),
+        "public, max-age=31536000, immutable",
+        "the digest in {} makes it immutable",
+        wasm.path
     );
-    assert_eq!(
-        fetch!(app, "/assets/app.js", None::<&String>).0,
-        StatusCode::NOT_FOUND,
-        "no bundle is embedded yet"
-    );
+
+    let manifest = site_get!(app, "/manifest.webmanifest", None::<&str>);
+    assert_eq!(header(&manifest, "cache-control").unwrap(), "no-cache");
+}
+
+#[actix_web::test]
+async fn precompressed_variants_follow_accept_encoding() {
+    let fx = Fixture::new();
+    let app = app!(fx.state());
+    let both = webui::files()
+        .iter()
+        .find(|f| f.br.is_some() && f.gzip.is_some())
+        .expect("some file ships both .br and .gz");
+    let uri = format!("/{}", both.path);
+
+    let resp = site_get!(app, &uri, Some("gzip, deflate, br"));
+    assert_eq!(header(&resp, "content-encoding").unwrap(), "br");
+    assert_eq!(header(&resp, "vary").unwrap(), "Accept-Encoding");
+    assert_eq!(test::read_body(resp).await.as_ref(), both.br.unwrap());
+
+    let resp = site_get!(app, &uri, Some("gzip"));
+    assert_eq!(header(&resp, "content-encoding").unwrap(), "gzip");
+    assert_eq!(test::read_body(resp).await.as_ref(), both.gzip.unwrap());
+
+    let resp = site_get!(app, &uri, Some("br;q=0, gzip;q=0"));
+    assert!(header(&resp, "content-encoding").is_none());
+    assert_eq!(test::read_body(resp).await.as_ref(), both.identity);
+
+    let resp = site_get!(app, &uri, None::<&str>);
+    assert!(header(&resp, "content-encoding").is_none());
+    assert_eq!(header(&resp, "vary").unwrap(), "Accept-Encoding");
+}
+
+#[actix_web::test]
+async fn api_routes_win_over_the_site_and_still_need_a_token() {
+    let fx = Fixture::new();
+    let app = app!(fx.state());
+
+    let (status, content_type, _, body) = fetch!(app, "/health", None::<&String>);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type.unwrap(), "application/json");
+    assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["ok"], true);
+
     for path in [
         "/engine/status",
         "/config",
@@ -565,6 +642,87 @@ async fn public_routes_need_no_token_and_every_api_route_does() {
             StatusCode::UNAUTHORIZED,
             "{path}"
         );
+    }
+
+    for path in ["/assets/app.js", "/nope", "/jobs/x/unknown"] {
+        let (status, content_type, _, body) = fetch!(app, path, None::<&String>);
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(content_type.unwrap(), "application/json");
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["ok"], false);
+    }
+    let (status, _) = send!(app, test::TestRequest::post().uri("/index.html"));
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the site only answers GET and HEAD"
+    );
+}
+
+#[actix_web::test]
+async fn engine_status_reports_the_queue_capacity_for_paired_clients_only() {
+    let fx = Fixture::new();
+    let app = app!(fx.state());
+    let (status, _) = send!(app, test::TestRequest::get().uri("/engine/status"));
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (_, body) = pair_with!(app, DEFAULT_PAIRING_KEY);
+    let token = body["token"].as_str().unwrap().to_owned();
+    let (status, body) = send!(
+        app,
+        test::TestRequest::get()
+            .uri("/engine/status")
+            .insert_header(bearer(&token))
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["state"], "stopped");
+    assert_eq!(body["queue_capacity"], crate::server::queue::QUEUE_CAPACITY);
+    let (_, probe) = send!(app, test::TestRequest::get().uri("/health"));
+    assert!(probe.get("queue_capacity").is_none());
+}
+
+#[actix_web::test]
+async fn job_list_carries_queue_position_and_error() {
+    let fx = Fixture::new();
+    let state = fx.state();
+    let token = running_state(&state).await;
+    let app = app!(state.clone());
+    let png = png_bytes(8, 8);
+
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        let (status, body) = submit!(app, &token, &png);
+        assert_eq!(status, StatusCode::OK);
+        ids.push(body["job_id"].as_str().unwrap().to_owned());
+    }
+    state.jobs.take_for_run(&ids[0]).unwrap();
+    state.jobs.finish_err(&ids[0], "boom".into()).unwrap();
+    state.queue.remove(&ids[0]);
+
+    let (status, body) = send!(
+        app,
+        test::TestRequest::get()
+            .uri("/jobs")
+            .insert_header(bearer(&token))
+    );
+    assert_eq!(status, StatusCode::OK);
+    let item = |id: &str| {
+        body["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["job_id"] == id)
+            .unwrap_or_else(|| panic!("{id} is listed"))
+            .clone()
+    };
+    let failed = item(&ids[0]);
+    assert_eq!(failed["state"], "failed");
+    assert_eq!(failed["error"], "boom");
+    assert_eq!(failed["position_in_queue"], Value::Null);
+    for (id, position) in [(&ids[1], 1), (&ids[2], 2)] {
+        let queued = item(id);
+        assert_eq!(queued["state"], "queued");
+        assert_eq!(queued["position_in_queue"], position);
+        assert_eq!(queued["error"], Value::Null);
     }
 }
 

@@ -165,8 +165,16 @@ fn field_text(field: Option<&MpBytes>) -> String {
         .unwrap_or_default()
 }
 
-fn engine_status_json(state: crate::server::engine::EngineState) -> HttpResponse {
-    HttpResponse::Ok().json(serde_json::json!({ "state": state }))
+/// queue_capacity 放在 Engine 的响应里而不是 /health: 它是 Client 登录后决定一次最多提交几张的依据,
+/// 只有配对过的 Client 会读, 且和 Engine 状态一起轮询; /health 是匿名可访问的存活探针, 不该承载这类约定。
+fn engine_status_json(
+    state: crate::server::engine::EngineState,
+    queue_capacity: usize,
+) -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "state": state,
+        "queue_capacity": queue_capacity,
+    }))
 }
 
 #[get("/health")]
@@ -204,7 +212,7 @@ async fn pair(state: web::Data<AppState>, body: web::Json<PairBody>) -> impl Res
 
 #[get("/engine/status")]
 async fn engine_status(state: web::Data<AppState>, _auth: Authed) -> impl Responder {
-    engine_status_json(state.engine.lock().await.state())
+    engine_status_json(state.engine.lock().await.state(), state.queue.capacity())
 }
 
 #[post("/engine/start")]
@@ -225,14 +233,14 @@ async fn engine_start(state: web::Data<AppState>, _auth: Authed) -> impl Respond
             },
         )
         .await;
-    engine_status_json(engine.state())
+    engine_status_json(engine.state(), state.queue.capacity())
 }
 
 #[post("/engine/stop")]
 async fn engine_stop(state: web::Data<AppState>, _auth: Authed) -> impl Responder {
     let mut engine = state.engine.lock().await;
     engine.stop().await;
-    engine_status_json(engine.state())
+    engine_status_json(engine.state(), state.queue.capacity())
 }
 
 #[post("/engine/restart")]
@@ -253,7 +261,7 @@ async fn engine_restart(state: web::Data<AppState>, _auth: Authed) -> impl Respo
             },
         )
         .await;
-    engine_status_json(engine.state())
+    engine_status_json(engine.state(), state.queue.capacity())
 }
 
 #[get("/config")]
@@ -357,14 +365,22 @@ async fn submit_job(
 
 #[get("/jobs")]
 async fn list_jobs(state: web::Data<AppState>, _auth: Authed) -> impl Responder {
+    let positions = state.queue.positions();
     let jobs: Vec<serde_json::Value> = state
         .jobs
         .list()
         .into_iter()
         .map(|j| {
+            let position_in_queue = if j.state == JobState::Queued {
+                positions.get(&j.job_id).copied()
+            } else {
+                None
+            };
             serde_json::json!({
                 "job_id": j.job_id,
                 "state": j.state,
+                "position_in_queue": position_in_queue,
+                "error": j.error,
             })
         })
         .collect();
@@ -585,9 +601,6 @@ fn configure(cfg: &mut web::ServiceConfig, state: web::Data<AppState>) {
                 .error_handler(move |err, _| upload_error(err, max_upload)),
         )
         .app_data(TempFileConfig::default().directory(upload_dir))
-        .service(webui::index)
-        .service(webui::index_html)
-        .service(webui::asset)
         .service(health)
         .service(pair)
         .service(engine_status)
@@ -601,7 +614,8 @@ fn configure(cfg: &mut web::ServiceConfig, state: web::Data<AppState>) {
         .service(get_job)
         .service(cancel_job)
         .service(job_artifact)
-        .service(job_source);
+        .service(job_source)
+        .default_service(web::to(webui::serve));
 }
 
 /// 等 Ctrl-C 或 SIGTERM。只收 SIGINT 的话，`kill` 掉的 Daemon 不会删实例目录，也不会注销 Bonjour。

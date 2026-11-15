@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use parking_lot::Mutex;
 use tokio::sync::Notify;
@@ -52,11 +52,22 @@ impl Queue {
         g.drain(..).collect()
     }
 
-    pub fn position(&self, job_id: &str) -> Option<usize> {
+    pub fn capacity(&self) -> usize {
+        QUEUE_CAPACITY
+    }
+
+    /// 排队中每个 Job 的名次, 从 1 开始 (与 GET /jobs/{id} 的 position_in_queue 一致)。一次加锁取完, 列表不必逐项扫队列。
+    pub fn positions(&self) -> HashMap<String, usize> {
         self.inner
             .lock()
             .iter()
-            .position(|id| id == job_id)
+            .enumerate()
+            .map(|(i, id)| (id.clone(), i + 1))
+            .collect()
+    }
+
+    pub fn position(&self, job_id: &str) -> Option<usize> {
+        self.inner.lock().iter().position(|id| id == job_id)
     }
 
     pub fn wake_all(&self) {
