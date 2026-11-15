@@ -7,7 +7,7 @@ import {
   reducePage,
   renderLongEdge,
   translateAllOrder,
-  userPage,
+  followHost,
   type PageCommand,
   type PageEvent,
   type ReaderPage,
@@ -45,12 +45,11 @@ let rendering = false;
 const prepared = new Map<string, { readonly epoch: number; readonly index: number }>();
 let loadWatchdog: ReturnType<typeof setTimeout> | undefined;
 let longEdgeFromDaemon: number | null = null;
+/** 宿主 (PDFView) 上一次报告的页码; 显示端刚挂载、还没报告过时为 null。 */
+let hostPage: number | null = null;
 
 /** 宿主 15 秒内没有报出页数, 就当这个 PDF 打不开 (原生组件没有错误事件)。 */
 const LOAD_TIMEOUT_MS = 15_000;
-/** PDFView 对每次换页都发 pageChanged, 包括 TSX 自己改 page 引起的; 这段时间内回来的、等于自己发出过的页码按回声处理。 */
-const ECHO_MS = 2000;
-const requested = new Map<number, number>();
 
 const makePages = (count: number): ReaderPage[] => Array.from({ length: count }, (_, index) => newPage(index));
 
@@ -69,7 +68,7 @@ function closeDocument() {
   epoch++;
   if (loadWatchdog !== undefined) clearTimeout(loadWatchdog);
   renderQueue = [];
-  requested.clear();
+  hostPage = null;
   const orphans = [...prepared.keys()];
   prepared.clear();
   removeItems(orphans.map(localKey));
@@ -129,18 +128,20 @@ export function documentFailed(message: string) {
 
 export function goTo(page: number) {
   const next = clampPage(page, pages().length);
-  if (next === current()) return;
-  requested.set(next, Date.now());
-  current.set(next);
+  if (next !== current()) current.set(next);
 }
 
 export const step = (delta: number) => goTo(current() + delta);
 
-/** 宿主报告的换页: 回声忽略, 剩下的是用户自己在 PDF 里翻的 (滑动、点链接)。 */
+/** 原生组件刚挂载 (回到阅读器): 它会从第 0 页开始, 再跳到 TSX 要的页, 这些报告都不是用户翻的。 */
+export function surfaceAttached() {
+  hostPage = null;
+}
+
+/** 宿主报告的换页: 只有用户自己在 PDF 里翻的 (滑动、点链接) 才跟着走, 判断见 followHost。 */
 export function nativePageChanged(page: number) {
-  const now = Date.now();
-  for (const [asked, at] of requested) if (now - at > ECHO_MS) requested.delete(asked);
-  const next = userPage(page, current(), pages().length, [...requested.keys()]);
+  const next = followHost(hostPage, current(), pages().length, page);
+  hostPage = page;
   if (next !== null) current.set(next);
 }
 

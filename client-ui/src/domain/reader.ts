@@ -152,10 +152,12 @@ export function spaceLabel(page: ReaderPage): string {
 export const canPressSpace = (page: ReaderPage): boolean => page.translation === "untranslated" || page.translation === "done";
 
 /**
- * 宿主报告换页时判断这是不是用户自己翻的。PDFView 对每次换页都发 pageChanged, 包括 TSX 改 page 引起的;
- * 连按方向键时回声滞后, 不能把页码拉回去。`recent` 是 TSX 最近自己要求过的页码; 返回要跳到的页, 回声和越界返回 null。
+ * 宿主报告换页时, 这是用户自己翻的页吗? PDFView 对每次换页都发 pageChanged: TSX 改 page 属性引起的、
+ * 重新挂载时先落在第 0 页再跳到 TSX 要的页, 都会发。所以只在宿主上一次报告的页码就等于 TSX 的当前页时
+ * (两边本来同步) 才跟着走: 此后宿主多走的一步只能是用户做的。`synced` 是宿主上一次报告的页码, 还没有报告过 (刚挂载) 时为 null。
+ * 返回要跳到的页, 不跟着走返回 null。
  */
-export function userPage(page: number, current: number, count: number, recent: readonly number[]): number | null {
-  if (!Number.isInteger(page) || page < 0 || page >= count || page === current || recent.includes(page)) return null;
-  return page;
+export function followHost(synced: number | null, current: number, count: number, reported: number): number | null {
+  if (!Number.isInteger(reported) || reported < 0 || reported >= count) return null;
+  return synced === current && reported !== current ? reported : null;
 }
