@@ -13,3 +13,7 @@ dist
 !python-render.py
 crates/runtimes/simple-runtime/debug
 .env
+
+# NSH 构建产物 (scripts/nsh-visionos/build.sh)
+/app/Frameworks/
+/scripts/nsh-visionos/bin/
