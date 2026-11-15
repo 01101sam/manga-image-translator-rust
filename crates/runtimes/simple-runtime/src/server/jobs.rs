@@ -1,6 +1,6 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
-use image::DynamicImage;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -127,27 +127,37 @@ pub fn clone_settings(settings: &Settings) -> Settings {
         .expect("settings deserialize")
 }
 
-pub struct JobWork {
-    pub image: DynamicImage,
+/// 排队的 Job 只带源文件路径，像素在 Worker 取走时才解码，队列长度不会放大内存。
+pub struct JobSpec {
+    pub source: PathBuf,
+    pub source_mime: &'static str,
     pub settings: Settings,
+    pub downscale_long_edge: Option<u32>,
+}
+
+pub struct JobWork {
+    pub source: PathBuf,
+    pub settings: Settings,
+    pub downscale_long_edge: Option<u32>,
 }
 
 struct Job {
     state: JobState,
     error: Option<String>,
-    artifact: Option<std::path::PathBuf>,
+    artifact: Option<PathBuf>,
     mime: Option<String>,
     renderer: Renderer,
-    image: Option<DynamicImage>,
-    settings: Settings,
+    spec: JobSpec,
 }
 
 pub struct JobView {
     pub state: JobState,
     pub error: Option<String>,
-    pub artifact: Option<std::path::PathBuf>,
+    pub artifact: Option<PathBuf>,
     pub mime: Option<String>,
     pub renderer: Renderer,
+    pub source: PathBuf,
+    pub source_mime: &'static str,
 }
 
 pub struct JobListItem {
@@ -166,26 +176,28 @@ impl JobStore {
         }
     }
 
-    pub fn create(&self, image: DynamicImage, settings: Settings) -> String {
-        let id = Uuid::new_v4().to_string();
-        let renderer = match settings.render.renderer {
+    /// 源文件路径依赖 Job id，所以 id 要先于 `create` 生成。
+    pub fn new_id() -> String {
+        Uuid::new_v4().to_string()
+    }
+
+    pub fn create(&self, id: String, spec: JobSpec) {
+        let renderer = match spec.settings.render.renderer {
             Renderer::Png => Renderer::Png,
             Renderer::Html => Renderer::Html,
             Renderer::Raw => Renderer::Raw,
         };
         self.jobs.lock().insert(
-            id.clone(),
+            id,
             Job {
                 state: JobState::Queued,
                 error: None,
                 artifact: None,
                 mime: None,
                 renderer,
-                image: Some(image),
-                settings,
+                spec,
             },
         );
-        id
     }
 
     pub fn get(&self, id: &str) -> Option<JobView> {
@@ -199,6 +211,8 @@ impl JobStore {
                 Renderer::Html => Renderer::Html,
                 Renderer::Raw => Renderer::Raw,
             },
+            source: j.spec.source.clone(),
+            source_mime: j.spec.source_mime,
         })
     }
 
@@ -213,8 +227,11 @@ impl JobStore {
             .collect()
     }
 
+    /// 入队失败时撤销 Job，同时删掉已落盘的源文件。
     pub fn discard(&self, id: &str) {
-        self.jobs.lock().remove(id);
+        if let Some(job) = self.jobs.lock().remove(id) {
+            let _ = std::fs::remove_file(&job.spec.source);
+        }
     }
 
     pub fn cancel(&self, id: &str) -> Result<JobState, CancelError> {
@@ -223,7 +240,7 @@ impl JobStore {
         match job.state.cancel() {
             Ok(next) => {
                 job.state = next;
-                job.image = None;
+                let _ = std::fs::remove_file(&job.spec.source);
                 Ok(next)
             }
             Err(e) => Err(CancelError::NotQueued { state: e.from }),
@@ -236,7 +253,7 @@ impl JobStore {
             if let Some(job) = g.get_mut(id) {
                 if let Ok(next) = job.state.cancel() {
                     job.state = next;
-                    job.image = None;
+                    let _ = std::fs::remove_file(&job.spec.source);
                 }
             }
         }
@@ -246,10 +263,10 @@ impl JobStore {
         let mut g = self.jobs.lock();
         let job = g.get_mut(id)?;
         job.state = job.state.start().ok()?;
-        let image = job.image.take()?;
         Some(JobWork {
-            image,
-            settings: clone_settings(&job.settings),
+            source: job.spec.source.clone(),
+            settings: clone_settings(&job.spec.settings),
+            downscale_long_edge: job.spec.downscale_long_edge,
         })
     }
 
@@ -298,8 +315,27 @@ impl Default for JobStore {
 mod tests {
     use super::*;
 
-    fn dummy_image() -> DynamicImage {
-        DynamicImage::new_rgb8(1, 1)
+    fn spec_at(source: PathBuf) -> JobSpec {
+        JobSpec {
+            source,
+            source_mime: "image/png",
+            settings: Settings::default(),
+            downscale_long_edge: Some(4096),
+        }
+    }
+
+    fn create_job(store: &JobStore) -> String {
+        let id = JobStore::new_id();
+        store.create(id.clone(), spec_at(PathBuf::from("/nonexistent/source")));
+        id
+    }
+
+    fn create_job_with_file(store: &JobStore) -> (String, PathBuf) {
+        let id = JobStore::new_id();
+        let path = std::env::temp_dir().join(format!("it-job-{id}"));
+        std::fs::write(&path, b"bytes").unwrap();
+        store.create(id.clone(), spec_at(path.clone()));
+        (id, path)
     }
 
     #[test]
@@ -342,7 +378,7 @@ mod tests {
     #[test]
     fn store_cancel_running_returns_not_queued() {
         let store = JobStore::new();
-        let id = store.create(dummy_image(), Settings::default());
+        let id = create_job(&store);
         assert!(store.take_for_run(&id).is_some());
         let err = store.cancel(&id).unwrap_err();
         assert_eq!(
@@ -356,9 +392,35 @@ mod tests {
     #[test]
     fn store_cancel_queued_ok() {
         let store = JobStore::new();
-        let id = store.create(dummy_image(), Settings::default());
+        let id = create_job(&store);
         assert_eq!(store.cancel(&id).unwrap(), JobState::Cancelled);
         assert_eq!(store.get(&id).unwrap().state, JobState::Cancelled);
+    }
+
+    #[test]
+    fn take_for_run_hands_out_the_path_and_the_downscale_setting() {
+        let store = JobStore::new();
+        let (id, path) = create_job_with_file(&store);
+        let work = store.take_for_run(&id).unwrap();
+        assert_eq!(work.source, path);
+        assert_eq!(work.downscale_long_edge, Some(4096));
+        assert!(
+            path.exists(),
+            "the source must outlive the run for GET /source"
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn cancel_and_discard_delete_the_source_file() {
+        let store = JobStore::new();
+        let (cancelled, cancelled_path) = create_job_with_file(&store);
+        let (discarded, discarded_path) = create_job_with_file(&store);
+        store.cancel(&cancelled).unwrap();
+        store.discard(&discarded);
+        assert!(!cancelled_path.exists());
+        assert!(!discarded_path.exists());
+        assert!(store.get(&discarded).is_none());
     }
 
     #[test]

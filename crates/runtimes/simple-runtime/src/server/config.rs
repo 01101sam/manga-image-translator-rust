@@ -16,6 +16,13 @@ fn default_pairing_key() -> String {
     DEFAULT_PAIRING_KEY.to_owned()
 }
 
+/// 解码后长边超过它就在 pipeline 入口缩小。8000x12000 的图跑完一轮要 14GB，缩到 4096 后像素少 8 倍。
+pub const DEFAULT_DOWNSCALE_LONG_EDGE: u32 = 4096;
+
+fn default_downscale_long_edge() -> Option<u32> {
+    Some(DEFAULT_DOWNSCALE_LONG_EDGE)
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 pub struct DaemonConfig {
@@ -26,6 +33,9 @@ pub struct DaemonConfig {
     /// 配对密钥。修改它只影响之后的 Pairing，已签发的 Token 继续有效。
     #[serde(default = "default_pairing_key")]
     pub pairing_key: String,
+    /// `None` 关闭缩放，序列化成 `null`，这样重启后「关闭」不会退回默认值。
+    #[serde(default = "default_downscale_long_edge")]
+    pub downscale_long_edge: Option<u32>,
     #[serde(flatten)]
     pub settings: Settings,
 }
@@ -36,6 +46,7 @@ impl Default for DaemonConfig {
             workers: default_workers(),
             api_key: None,
             pairing_key: default_pairing_key(),
+            downscale_long_edge: default_downscale_long_edge(),
             settings: Settings::default(),
         }
     }
@@ -50,7 +61,18 @@ impl DaemonConfig {
         if self.pairing_key.trim().is_empty() {
             return Err(ConfigError::Invalid("Pairing Key 不能为空".into()));
         }
-        Ok(())
+        match self.downscale_long_edge {
+            Some(0) => Err(ConfigError::Invalid(
+                "downscale_long_edge 必须大于 0，关闭缩放请设为 null".into(),
+            )),
+            Some(edge) if edge > crate::server::source::MAX_EDGE => {
+                Err(ConfigError::Invalid(format!(
+                    "downscale_long_edge 不能超过 {}",
+                    crate::server::source::MAX_EDGE
+                )))
+            }
+            _ => Ok(()),
+        }
     }
 
     pub fn apply_secrets(&self) {
@@ -198,6 +220,45 @@ mod tests {
         cfg.pairing_key = "   ".into();
         assert!(matches!(store.replace(cfg), Err(ConfigError::Invalid(_))));
         assert_eq!(store.get().pairing_key, DEFAULT_PAIRING_KEY);
+    }
+
+    #[test]
+    fn downscale_defaults_to_4096_when_the_field_is_missing() {
+        let dir = tmp_dir();
+        fs::write(dir.join("config.json"), br#"{"workers": 2}"#).unwrap();
+        assert_eq!(
+            ConfigStore::open(dir).unwrap().get().downscale_long_edge,
+            Some(4096)
+        );
+    }
+
+    #[test]
+    fn disabled_downscale_stays_disabled_after_a_restart() {
+        let dir = tmp_dir();
+        let mut store = ConfigStore::open(dir.clone()).unwrap();
+        let mut cfg = DaemonConfig::default();
+        cfg.downscale_long_edge = None;
+        store.replace(cfg).unwrap();
+        drop(store);
+        assert_eq!(
+            ConfigStore::open(dir).unwrap().get().downscale_long_edge,
+            None
+        );
+    }
+
+    #[test]
+    fn nonsensical_downscale_values_are_rejected() {
+        let dir = tmp_dir();
+        let mut store = ConfigStore::open(dir).unwrap();
+        for bad in [Some(0), Some(65_536)] {
+            let mut cfg = DaemonConfig::default();
+            cfg.downscale_long_edge = bad;
+            assert!(
+                matches!(store.replace(cfg), Err(ConfigError::Invalid(_))),
+                "{bad:?}"
+            );
+        }
+        assert_eq!(store.get().downscale_long_edge, Some(4096));
     }
 
     #[test]

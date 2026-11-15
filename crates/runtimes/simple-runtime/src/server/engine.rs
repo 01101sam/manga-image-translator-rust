@@ -15,8 +15,9 @@ use tokio::task::JoinHandle;
 
 use crate::render_config;
 use crate::server::artifacts::ArtifactStore;
-use crate::server::jobs::JobStore;
+use crate::server::jobs::{JobStore, JobWork};
 use crate::server::queue::Queue;
+use crate::server::source;
 use crate::settings::{Renderer, Settings};
 use crate::setup::Models;
 
@@ -183,9 +184,7 @@ async fn worker_loop(mut ctx: WorkerCtx) {
             continue;
         };
         ctx.running.fetch_add(1, Ordering::SeqCst);
-        let result = models
-            .execute(work.image, &work.settings, None, None)
-            .await;
+        let result = run_job(&mut models, &work).await;
         match result {
             Ok(Some(exp)) => {
                 let ext = work.settings.render.renderer.extension();
@@ -209,6 +208,17 @@ async fn worker_loop(mut ctx: WorkerCtx) {
         }
         ctx.running.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+/// 解码放在阻塞线程池里，且解码失败也要落在 `running` 的加减之间，否则 `Engine::stop` 会一直等。
+async fn run_job(models: &mut Models, work: &JobWork) -> anyhow::Result<Option<export::Export>> {
+    let path = work.source.clone();
+    let long_edge = work.downscale_long_edge;
+    let img = tokio::task::spawn_blocking(move || source::decode_for_pipeline(&path, long_edge))
+        .await
+        .map_err(|e| anyhow::anyhow!("解码线程异常: {e}"))?
+        .map_err(|e| anyhow::anyhow!("无法解码图片: {e}"))?;
+    models.execute(img, &work.settings, None, None).await
 }
 
 pub fn mime_of(renderer: &Renderer) -> &'static str {
@@ -258,11 +268,11 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let root = std::env::temp_dir().join(format!("it-eng-{}", uuid::Uuid::new_v4()));
+        let base = std::env::temp_dir().join(format!("it-eng-{}", uuid::Uuid::new_v4()));
         let engine = Engine::new(
             Arc::new(Queue::new()),
             Arc::new(JobStore::new()),
-            Arc::new(ArtifactStore::open_at(root).unwrap()),
+            Arc::new(ArtifactStore::open_at(base).unwrap()),
             rt.handle().clone(),
         );
         (engine, rt)
