@@ -189,10 +189,12 @@ impl Models {
             save_img(&img, &debug_path.join("5_inpainted.png"))?;
         }
 
+        // 修复完成后 inpainter 已归还它的引用，通常能直接取回所有权而不用再拷一份全分辨率图。
+        let source = Arc::try_unwrap(upscaled_img).unwrap_or_else(|shared| (*shared).clone());
         Ok(Some(Export::new(
             match alpha {
-                Some(a) => upscaled_img.as_ref().clone().add_a(a),
-                None => upscaled_img.as_ref().clone(),
+                Some(a) => source.add_a(a),
+                None => source,
             }
             .to_image()?,
             inpainted.to_image()?,

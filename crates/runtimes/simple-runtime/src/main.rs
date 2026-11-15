@@ -54,10 +54,15 @@ async fn main() {
     let _ = check_crate_version("frederik-uni/manga-image-translator-rust").await;
 
     match cli.command {
-        cli::Commands::Daemon { host, port } => {
+        cli::Commands::Daemon {
+            host,
+            port,
+            no_bonjour,
+        } => {
             api::main(api::DaemonArgs {
                 host,
                 port,
+                bonjour: !no_bonjour,
                 max_batch_size_ocr: cli.max_batch_size_ocr,
                 max_batch_size_upscaler: cli.max_batch_size_upscaler,
                 cuda,

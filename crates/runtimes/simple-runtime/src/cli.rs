@@ -55,6 +55,10 @@ pub enum Commands {
         /// Port to bind the Daemon
         #[arg(long, default_value_t = 8080)]
         port: u16,
+
+        /// Skip the Bonjour announcement. Every Daemon on one host announces the same instance name, so a test Daemon would shadow the real one in discovery.
+        #[arg(long)]
+        no_bonjour: bool,
     },
 
     /// Run the UI

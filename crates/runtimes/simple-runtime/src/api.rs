@@ -1,12 +1,16 @@
-use std::fs;
 use std::future::{ready, Ready};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use actix_multipart::form::{
-    bytes::Bytes as MpBytes, tempfile::TempFile, MultipartForm, MultipartFormConfig,
+    bytes::Bytes as MpBytes,
+    tempfile::{TempFile, TempFileConfig},
+    MultipartForm, MultipartFormConfig,
 };
+use actix_multipart::MultipartError;
 use actix_web::dev::Payload;
+use actix_web::error::{InternalError, JsonPayloadError, PayloadError};
 use actix_web::http::StatusCode;
 use actix_web::{
     get, post, put,
@@ -14,19 +18,25 @@ use actix_web::{
     App, Error, FromRequest, HttpRequest, HttpResponse, HttpServer, Responder,
 };
 use serde::Deserialize;
+use tokio_util::io::ReaderStream;
 
 use crate::server::artifacts::ArtifactStore;
 use crate::server::bonjour::Bonjour;
 use crate::server::config::{ConfigError, ConfigStore, DaemonConfig};
 use crate::server::engine::{mime_of, Engine, WorkerParams};
-use crate::server::jobs::{apply_overrides, CancelError, JobState, JobStore};
+use crate::server::jobs::{apply_overrides, CancelError, JobSpec, JobState, JobStore};
 use crate::server::pairing::{key_matches, TokenStore};
 use crate::server::queue::Queue;
+use crate::server::source::{self, ProbeError};
 use crate::server::webui;
+
+/// 一次上传（含 multipart 开销）的字节上限。图片落盘不占内存，所以这里只防磁盘被灌满。
+const MAX_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
 
 pub struct DaemonArgs {
     pub host: String,
     pub port: u16,
+    pub bonjour: bool,
     pub max_batch_size_ocr: usize,
     pub max_batch_size_upscaler: usize,
     pub cuda: bool,
@@ -38,6 +48,8 @@ pub struct AppState {
     queue: Arc<Queue>,
     config: tokio::sync::Mutex<ConfigStore>,
     tokens: Arc<TokenStore>,
+    artifacts: Arc<ArtifactStore>,
+    max_upload_bytes: usize,
     started: Instant,
     batch_ocr: usize,
     batch_upscaler: usize,
@@ -54,13 +66,15 @@ impl AppState {
     ) -> Self {
         let queue = Arc::new(Queue::new());
         let jobs = Arc::new(JobStore::new());
-        let engine = Engine::new(queue.clone(), jobs.clone(), artifacts, runtime);
+        let engine = Engine::new(queue.clone(), jobs.clone(), artifacts.clone(), runtime);
         Self {
             engine: tokio::sync::Mutex::new(engine),
             jobs,
             queue,
             config: tokio::sync::Mutex::new(config),
             tokens,
+            artifacts,
+            max_upload_bytes: MAX_UPLOAD_BYTES,
             started: Instant::now(),
             batch_ocr: args.max_batch_size_ocr,
             batch_upscaler: args.max_batch_size_upscaler,
@@ -71,25 +85,53 @@ impl AppState {
 
 struct Authed;
 
+/// 图片类 GET 路由额外接受 `?token=`：NSH 的 Image 和浏览器的 <img> 发不出 Authorization 头。
+struct AuthedMedia;
+
+#[derive(Deserialize)]
+struct TokenQuery {
+    token: String,
+}
+
+fn authorize(req: &HttpRequest, token: Option<String>) -> Result<(), Error> {
+    let allowed = req
+        .app_data::<web::Data<AppState>>()
+        .zip(token)
+        .is_some_and(|(state, token)| state.tokens.contains(&token));
+    if allowed {
+        Ok(())
+    } else {
+        Err(InternalError::from_response(
+            "unauthorized",
+            fail(StatusCode::UNAUTHORIZED, "unauthorized"),
+        )
+        .into())
+    }
+}
+
 impl FromRequest for Authed {
     type Error = Error;
     type Future = Ready<Result<Self, Error>>;
 
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
-        let allowed = req
-            .app_data::<web::Data<AppState>>()
-            .and_then(|state| bearer_token(req).filter(|t| state.tokens.contains(t)))
-            .is_some();
-        if allowed {
-            ready(Ok(Authed))
-        } else {
-            ready(Err(actix_web::error::InternalError::from_response(
-                "unauthorized",
-                fail(StatusCode::UNAUTHORIZED, "unauthorized"),
-            )
-            .into()))
-        }
+        ready(authorize(req, bearer_token(req)).map(|()| Authed))
     }
+}
+
+impl FromRequest for AuthedMedia {
+    type Error = Error;
+    type Future = Ready<Result<Self, Error>>;
+
+    fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
+        let token = bearer_token(req).or_else(|| query_token(req));
+        ready(authorize(req, token).map(|()| AuthedMedia))
+    }
+}
+
+fn query_token(req: &HttpRequest) -> Option<String> {
+    web::Query::<TokenQuery>::from_query(req.query_string())
+        .ok()
+        .map(|q| q.into_inner().token)
 }
 
 fn bearer_token(req: &HttpRequest) -> Option<String> {
@@ -257,25 +299,49 @@ async fn submit_job(
     if form.image.size == 0 {
         return fail(StatusCode::BAD_REQUEST, "没有选择图片");
     }
-    let base = state.config.lock().await.get().settings_clone();
+    let (base, downscale_long_edge) = {
+        let store = state.config.lock().await;
+        (
+            store.get().settings_clone(),
+            store.get().downscale_long_edge,
+        )
+    };
     let settings = match apply_overrides(&base, &field_text(form.overrides.as_ref())) {
         Ok(s) => s,
         Err(e) => return fail(StatusCode::BAD_REQUEST, e.message()),
     };
-    let bytes = match fs::read(form.image.file.path()) {
-        Ok(b) => b,
+    let upload = form.image.file;
+    let probe_path = upload.path().to_owned();
+    let source_mime = match web::block(move || source::probe(&probe_path)).await {
+        Ok(Ok(mime)) => mime,
+        Ok(Err(e @ ProbeError::TooLarge { .. })) => {
+            return fail(StatusCode::PAYLOAD_TOO_LARGE, e.message())
+        }
+        Ok(Err(e)) => return fail(StatusCode::BAD_REQUEST, e.message()),
         Err(e) => {
             return fail(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("读取上传图片失败: {e}"),
-            );
+            )
         }
     };
-    let img = match image::load_from_memory(&bytes) {
-        Ok(i) => i,
-        Err(e) => return fail(StatusCode::BAD_REQUEST, format!("无法解码图片: {e}")),
-    };
-    let job_id = state.jobs.create(img, settings);
+    let job_id = JobStore::new_id();
+    let source = state.artifacts.source_path_for(&job_id);
+    if let Err(e) = upload.persist(&source) {
+        return fail(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("保存上传图片失败: {e}"),
+        );
+    }
+    state.jobs.create(
+        job_id.clone(),
+        JobSpec {
+            source,
+            source_mime,
+            settings,
+            downscale_long_edge,
+        },
+    );
     if let Err(full) = state.queue.try_push(job_id.clone()) {
         state.jobs.discard(&job_id);
         return fail(
@@ -344,10 +410,41 @@ async fn cancel_job(
     }
 }
 
+/// 流式返回文件，大图不会整份读进内存。
+async fn stream_file(path: &Path, mime: &str) -> HttpResponse {
+    let file = match tokio::fs::File::open(path).await {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return fail(StatusCode::NOT_FOUND, "文件已被清理")
+        }
+        Err(e) => {
+            return fail(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("读取文件失败: {e}"),
+            )
+        }
+    };
+    let len = match file.metadata().await {
+        Ok(m) => m.len(),
+        Err(e) => {
+            return fail(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("读取文件失败: {e}"),
+            )
+        }
+    };
+    HttpResponse::Ok()
+        .content_type(mime)
+        // Job id 唯一，文件写完后不再变化，浏览器和 NSH Image 可以放心缓存。
+        .insert_header(("Cache-Control", "private, max-age=86400, immutable"))
+        .no_chunking(len)
+        .streaming(ReaderStream::with_capacity(file, 256 * 1024))
+}
+
 #[get("/jobs/{id}/artifact")]
 async fn job_artifact(
     state: web::Data<AppState>,
-    _auth: Authed,
+    _auth: AuthedMedia,
     id: web::Path<String>,
 ) -> impl Responder {
     let id = id.into_inner();
@@ -360,23 +457,26 @@ async fn job_artifact(
     let Some(path) = job.artifact else {
         return fail(StatusCode::NOT_FOUND, "artifact missing");
     };
-    let data = match fs::read(&path) {
-        Ok(d) => d,
-        Err(e) => {
-            return fail(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("读取 Artifact 失败: {e}"),
-            );
-        }
-    };
     let mime = job
         .mime
         .unwrap_or_else(|| mime_of(&job.renderer).to_string());
-    HttpResponse::Ok().content_type(mime).body(data)
+    stream_file(&path, &mime).await
+}
+
+#[get("/jobs/{id}/source")]
+async fn job_source(
+    state: web::Data<AppState>,
+    _auth: AuthedMedia,
+    id: web::Path<String>,
+) -> impl Responder {
+    let Some(job) = state.jobs.get(&id.into_inner()) else {
+        return fail(StatusCode::NOT_FOUND, "job not found");
+    };
+    stream_file(&job.source, job.source_mime).await
 }
 
 fn cleanup(artifacts: &ArtifactStore, bonjour: &Mutex<Option<Bonjour>>) {
-    let _ = artifacts.wipe();
+    let _ = artifacts.remove_instance();
     if let Ok(mut g) = bonjour.lock() {
         if let Some(svc) = g.take() {
             svc.shutdown();
@@ -384,15 +484,43 @@ fn cleanup(artifacts: &ArtifactStore, bonjour: &Mutex<Option<Bonjour>>) {
     }
 }
 
+fn json_error(err: JsonPayloadError) -> Error {
+    let status = match err {
+        JsonPayloadError::Overflow { .. } | JsonPayloadError::OverflowKnownLength { .. } => {
+            StatusCode::PAYLOAD_TOO_LARGE
+        }
+        _ => StatusCode::BAD_REQUEST,
+    };
+    let message = format!("请求体不是有效的 JSON: {err}");
+    InternalError::from_response(err, fail(status, message)).into()
+}
+
+fn upload_error(err: MultipartError, max_bytes: usize) -> Error {
+    let (status, message) = match &err {
+        MultipartError::Payload(PayloadError::Overflow) => (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("上传的图片超过 {} MB 上限", max_bytes >> 20),
+        ),
+        _ => (StatusCode::BAD_REQUEST, format!("上传内容无法解析: {err}")),
+    };
+    InternalError::from_response(err, fail(status, message)).into()
+}
+
 fn configure(cfg: &mut web::ServiceConfig, state: web::Data<AppState>) {
+    let max_upload = state.max_upload_bytes;
+    let upload_dir = state.artifacts.upload_dir();
     cfg.app_data(state)
-        .app_data(web::PayloadConfig::new(64 * 1024 * 1024))
+        .app_data(web::JsonConfig::default().error_handler(|err, _| json_error(err)))
         .app_data(
             MultipartFormConfig::default()
-                .total_limit(64 * 1024 * 1024)
-                .memory_limit(4 * 1024 * 1024),
+                .total_limit(max_upload)
+                .memory_limit(4 * 1024 * 1024)
+                .error_handler(move |err, _| upload_error(err, max_upload)),
         )
+        .app_data(TempFileConfig::default().directory(upload_dir))
         .service(webui::index)
+        .service(webui::index_html)
+        .service(webui::asset)
         .service(health)
         .service(pair)
         .service(engine_status)
@@ -405,7 +533,26 @@ fn configure(cfg: &mut web::ServiceConfig, state: web::Data<AppState>) {
         .service(list_jobs)
         .service(get_job)
         .service(cancel_job)
-        .service(job_artifact);
+        .service(job_artifact)
+        .service(job_source);
+}
+
+/// 等 Ctrl-C 或 SIGTERM。只收 SIGINT 的话，`kill` 掉的 Daemon 不会删实例目录，也不会注销 Bonjour。
+async fn shutdown_signal() -> &'static str {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => "ctrl-c",
+            _ = term.recv() => "SIGTERM",
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        "ctrl-c"
+    }
 }
 
 pub async fn main(args: DaemonArgs) -> std::io::Result<()> {
@@ -428,12 +575,16 @@ pub async fn main(args: DaemonArgs) -> std::io::Result<()> {
         engine_rt,
         &args,
     ));
-    let bonjour = Mutex::new(match Bonjour::register(args.port) {
-        Ok(svc) => Some(svc),
-        Err(e) => {
-            eprintln!("bonjour unavailable: {e}");
-            None
+    let bonjour = Mutex::new(if args.bonjour {
+        match Bonjour::register(args.port) {
+            Ok(svc) => Some(svc),
+            Err(e) => {
+                eprintln!("bonjour unavailable: {e}");
+                None
+            }
         }
+    } else {
+        None
     });
 
     let server = HttpServer::new({
@@ -449,8 +600,8 @@ pub async fn main(args: DaemonArgs) -> std::io::Result<()> {
             cleanup(&artifacts, &bonjour);
             r
         }
-        _ = tokio::signal::ctrl_c() => {
-            eprintln!("daemon received ctrl-c");
+        signal = shutdown_signal() => {
+            eprintln!("daemon received {signal}");
             state.engine.lock().await.stop().await;
             cleanup(&artifacts, &bonjour);
             handle.stop(true).await;
