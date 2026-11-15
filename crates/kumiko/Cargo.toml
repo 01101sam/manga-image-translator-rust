@@ -5,6 +5,6 @@ edition.workspace = true
 
 [dependencies]
 image.workspace = true
-opencv = { workspace = true, features=["imgproc"] }
+opencv = { workspace = true, features = ["imgproc", "geometry"] }
 itertools.workspace = true
 ordered-float.workspace = true

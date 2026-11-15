@@ -110,9 +110,9 @@ impl SegDetectorRepresenter {
     }
 
     fn get_mini_boxes(contour: &Vector<Point>) -> Result<(Vec<(f32, f32)>, f32), opencv::Error> {
-        let box_ = opencv::imgproc::min_area_rect(&contour)?;
+        let box_ = opencv::geometry::min_area_rect(&contour)?;
         let mut points: Mat = Mat::default();
-        opencv::imgproc::box_points(box_, &mut points)?;
+        opencv::geometry::box_points(box_, &mut points)?;
 
         let points: Vec<Vec<f32>> = points.to_vec_2d()?;
         let mut points_vec = points

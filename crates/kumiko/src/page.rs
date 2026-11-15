@@ -4,12 +4,13 @@ use opencv::{
         no_array, Mat, MatTraitConst, Point, Size, ToInputArray, Vec4f, Vector, BORDER_DEFAULT,
         CV_16S,
     },
+    geometry::{approx_poly_dp, arc_length, convex_hull},
     imgproc::{
-        self, approx_poly_dp, arc_length, convex_hull, create_line_segment_detector, cvt_color_def,
-        get_structuring_element_def, morphology_ex_def, CHAIN_APPROX_SIMPLE, COLOR_RGB2GRAY,
-        LSD_REFINE_NONE, MORPH_CLOSE, MORPH_RECT, RETR_EXTERNAL, THRESH_BINARY, THRESH_OTSU,
+        self, create_line_segment_detector, cvt_color_def, get_structuring_element_def,
+        morphology_ex_def, LineSegmentDetectorModes, CHAIN_APPROX_SIMPLE, COLOR_RGB2GRAY,
+        MORPH_CLOSE, MORPH_RECT, RETR_EXTERNAL, THRESH_BINARY, THRESH_OTSU,
     },
-    prelude::LineSegmentDetectorTrait,
+    prelude::{LineSegmentDetectorTrait, MatTraitConstManual},
 };
 use std::collections::{BTreeSet, HashMap};
 
@@ -418,16 +419,31 @@ fn get_segments(
     small_panel_ratio: f64,
 ) -> Result<Vec<Segment>, opencv::Error> {
     let mut segments = None;
-    let mut lsd =
-        create_line_segment_detector(LSD_REFINE_NONE, 0.8, 0.6, 2.0, 22.5, 0.0, 0.7, 1024)?;
-    let mut dlines = Vector::<Vec4f>::new();
+    let mut lsd = create_line_segment_detector(
+        LineSegmentDetectorModes::LSD_REFINE_NONE,
+        0.8,
+        0.6,
+        2.0,
+        22.5,
+        0.0,
+        0.7,
+        1024,
+    )?;
+    // OpenCV 5 的绑定不再生成 Vector<Vec4f>，改用 Mat 接收（N x 1, CV_32FC4），与原 vector 输出的内存布局一致。
+    let mut lines = Mat::default();
     lsd.detect(
         gray,
-        &mut dlines,
+        &mut lines,
         &mut no_array(),
         &mut no_array(),
         &mut no_array(),
     )?;
+    // 无线段时输出 Mat 为空，其元素类型不是 CV_32FC4，不能直接 data_typed。
+    let dlines: &[Vec4f] = if lines.empty() {
+        &[]
+    } else {
+        lines.data_typed::<Vec4f>()?
+    };
     let mut min_dist = width.min(height) as f64 * small_panel_ratio;
     let helper = |seg: &Option<Vec<_>>| match seg {
         Some(seg) => seg.len() > 500,
@@ -439,7 +455,7 @@ fn get_segments(
         if dlines.is_empty() {
             break;
         }
-        for dline in &dlines {
+        for dline in dlines {
             let [x0, y0, x1, y1] = dline.0;
             // 半整数向偶数舍入，与 Python 的 round 一致。
             let (x0, y0, x1, y1) = (

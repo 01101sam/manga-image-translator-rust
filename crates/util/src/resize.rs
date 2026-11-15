@@ -3,11 +3,11 @@ use image::{DynamicImage, RgbImage};
 use interface_detector::textlines::{MyPoint, Quadrilateral};
 use interface_image::RawImage;
 use opencv::{
-    calib3d::{find_homography, RANSAC},
     core::{
-        no_array, rotate, Mat, Point2f, Scalar, Size, Vector, BORDER_CONSTANT,
+        no_array, rotate, AlgorithmHint, Mat, Point2f, Scalar, Size, Vector, BORDER_CONSTANT,
         ROTATE_90_COUNTERCLOCKWISE,
     },
+    geometry::{find_homography_1, RANSAC},
     imgproc::INTER_LINEAR,
 };
 
@@ -76,7 +76,7 @@ pub fn get_transformed_region(
     ]
     .into_iter()
     .collect::<Vector<Point2f>>();
-    let m = find_homography(&src_points, &dst_points, &mut no_array(), RANSAC, 5.0)?;
+    let m = find_homography_1(&src_points, &dst_points, &mut no_array(), RANSAC, 5.0)?;
     let mut region = Mat::default();
     opencv::imgproc::warp_perspective(
         &img_croped,
@@ -86,6 +86,7 @@ pub fn get_transformed_region(
         INTER_LINEAR,
         BORDER_CONSTANT,
         Scalar::default(),
+        AlgorithmHint::ALGO_HINT_DEFAULT,
     )?;
     if q.vertical() {
         let mut reg = Mat::default();

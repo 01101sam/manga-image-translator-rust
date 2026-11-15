@@ -8,7 +8,7 @@ ndarray-npy = { workspace = true }
 opencv = { workspace = true, default-features = false, features = [
     "imgproc",
     "clang-runtime",
-    "calib3d",
+    "geometry",
 ] }
 petgraph.workspace = true
 itertools.workspace = true
