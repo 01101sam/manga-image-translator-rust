@@ -55,6 +55,52 @@ index ab60add..8141733 100644
          windows
      )))]
      {
+diff --git a/crates/nsh-core/src/runtime/os.rs b/crates/nsh-core/src/runtime/os.rs
+index 1af403c..fe72dac 100644
+--- a/crates/nsh-core/src/runtime/os.rs
++++ b/crates/nsh-core/src/runtime/os.rs
+@@ -5,6 +5,10 @@ use std::path::PathBuf;
+ 
+ use crate::element::{JsError, System, codes, module};
+ 
++/// `std::env::consts::OS`, except that visionOS reports `"ios"`: it runs the iOS backend, so `platform.os`,
++/// the `ios:` variants and `process.platform` all say the same thing.
++pub(super) const PLATFORM: &str = if cfg!(target_os = "visionos") { "ios" } else { std::env::consts::OS };
++
+ /// Native OS metadata. Returned paths confer no filesystem access.
+ #[module]
+ #[derive(Default)]
+@@ -20,7 +24,7 @@ impl Os {
+     /// and gpui-shell's say it: `"macos"`, `"windows"`, `"linux"`, `"ios"`,
+     /// `"android"` (not Node's `"darwin"` / `"win32"`).
+     pub(crate) fn platform() -> String {
+-        std::env::consts::OS.to_owned()
++        PLATFORM.to_owned()
+     }
+ 
+     /// The native CPU architecture's name, as Rust's
+@@ -84,7 +88,7 @@ mod tests {
+ 
+     #[test]
+     fn metadata_matches_native_values_without_surface_context() {
+-        assert_eq!(Os::platform(), std::env::consts::OS);
++        assert_eq!(Os::platform(), PLATFORM);
+         assert_eq!(Os::arch(), std::env::consts::ARCH);
+         assert_eq!(Os::EOL, if cfg!(windows) { "\r\n" } else { "\n" });
+         if let Ok(home) = Os::homedir(sys(Capabilities::all())) {
+diff --git a/crates/nsh-core/src/runtime/process.rs b/crates/nsh-core/src/runtime/process.rs
+index 9422c0d..5cb5b7a 100644
+--- a/crates/nsh-core/src/runtime/process.rs
++++ b/crates/nsh-core/src/runtime/process.rs
+@@ -30,7 +30,7 @@ impl Process {
+     /// and gpui-shell's say it: `"macos"`, `"windows"`, `"linux"`, `"ios"`,
+     /// `"android"` (not Node's `"darwin"` / `"win32"`).
+     #[allow(non_upper_case_globals)]
+-    pub(crate) const platform: &'static str = std::env::consts::OS;
++    pub(crate) const platform: &'static str = super::os::PLATFORM;
+     /// The native CPU architecture's name, as Rust's
+     /// `std::env::consts::ARCH` and gpui-shell's say it: `"aarch64"`,
+     /// `"x86_64"` (not Node's `"arm64"` / `"x64"`).
 diff --git a/crates/nsh-core/src/svg/mod.rs b/crates/nsh-core/src/svg/mod.rs
 index 35417b6..49caa78 100644
 --- a/crates/nsh-core/src/svg/mod.rs
