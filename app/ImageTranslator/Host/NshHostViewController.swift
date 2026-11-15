@@ -311,7 +311,7 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             HostMetrics.log("hook start")
             if viaURLs {
-                let result = await ingestor.ingest(urls: [URL(fileURLWithPath: folder)], allowing: [.image, .pdf])
+                let result = await HostMetrics.measured("ingest urls") { await ingestor.ingest(urls: [URL(fileURLWithPath: folder)], allowing: [.image, .pdf]) }
                 HostMetrics.log("ingested \(result.images.count) via urls")
                 deliver(result)
                 return
@@ -320,7 +320,7 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
             HostMetrics.log("cloned \(clones.count)")
             let providers = clones.compactMap(DebugProvider.make)
             HostMetrics.log("providers created \(providers.count)")
-            let result = await ingestor.ingest(providers: providers, allowing: [.image, .pdf])
+            let result = await HostMetrics.measured("ingest providers") { await ingestor.ingest(providers: providers, allowing: [.image, .pdf]) }
             HostMetrics.log("ingested \(result.images.count) via providers")
             deliver(result)
         }
@@ -348,8 +348,57 @@ enum HostMetrics {
         return status == KERN_SUCCESS ? Int(info.resident_size / 1_048_576) : -1
     }
 
+    /// phys_footprint 是系统判断内存压力和 jetsam 的口径; 干净的文件映射页算进 RSS 但不算它。
+    static func footprintMB() -> Int {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let status = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return status == KERN_SUCCESS ? Int(info.phys_footprint / 1_048_576) : -1
+    }
+
     static func log(_ stage: String) {
-        NSLog("HOSTHOOK %@ rss=%dMB", stage, residentMB())
+        NSLog("HOSTHOOK %@ rss=%dMB footprint=%dMB", stage, residentMB(), footprintMB())
+    }
+
+    /// 跑 body 期间每 20 ms 采一次样, 取 RSS 和 footprint 的峰值: 平均值和结束时的数看不出摄入过程中的尖峰。
+    static func measure<T>(_ body: () async -> T) async -> (value: T, peak: (rss: Int, footprint: Int)) {
+        let sampler = PeakSampler()
+        sampler.start()
+        let value = await body()
+        return (value, sampler.stop())
+    }
+
+    static func measured<T>(_ stage: String, _ body: () async -> T) async -> T {
+        let (value, peak) = await measure(body)
+        NSLog("HOSTHOOK %@ peak rss=%dMB footprint=%dMB, after rss=%dMB footprint=%dMB", stage, peak.rss, peak.footprint, residentMB(), footprintMB())
+        return value
+    }
+}
+
+private final class PeakSampler: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "peak-sampler")
+    private var timer: DispatchSourceTimer?
+    private var rss = 0
+    private var footprint = 0
+
+    func start() {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(20))
+        timer.setEventHandler { [self] in
+            rss = max(rss, HostMetrics.residentMB())
+            footprint = max(footprint, HostMetrics.footprintMB())
+        }
+        timer.resume()
+        self.timer = timer
+    }
+
+    func stop() -> (rss: Int, footprint: Int) {
+        timer?.cancel()
+        return queue.sync { (rss, footprint) }
     }
 }
 

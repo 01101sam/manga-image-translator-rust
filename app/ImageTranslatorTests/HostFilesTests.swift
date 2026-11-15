@@ -124,6 +124,20 @@ final class HostFilesTests: XCTestCase {
         XCTAssertEqual(Set(result.images.map(\.size)), [64])
     }
 
+    /// 进程内 provider 同时读多个大文件时, 读过的文件页会一直算在 RSS 里直到这一批结束 (30 张 37 MB 的 PNG 涨到 1.3 GB, 模拟器里测的)。
+    /// 一次只读一个, RSS 只比起点多出一个文件的大小。footprint 不受影响, 但 RSS 涨到 GB 会让监控和排查都误判。
+    func testProviderIngestOfBigFilesKeepsResidentMemoryNearOneFile() async throws {
+        let files = makeFiles()
+        let megabytes = 24
+        let sources = try (0..<10).map { try write("big\($0).png", bytes: megabytes * 1_048_576, in: directory.appendingPathComponent("drop")) }
+        let providers = sources.compactMap { NSItemProvider(contentsOf: $0) }
+        XCTAssertEqual(providers.count, 10)
+        let before = HostMetrics.residentMB()
+        let (result, peak) = await HostMetrics.measure { await FileIngestor(files: files).ingest(providers: providers, allowing: [.image]) }
+        XCTAssertEqual(result.images.count, 10)
+        XCTAssertLessThan(peak.rss - before, megabytes * 4, "peak RSS grew by \(peak.rss - before) MB while reading \(10 * megabytes) MB of files")
+    }
+
     func testProviderIngestIgnoresKindsTheCallerDidNotAllow() async throws {
         let files = makeFiles()
         let pdf = try makePDF(pages: 1)

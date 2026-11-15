@@ -42,7 +42,10 @@ struct ProviderBox: @unchecked Sendable {
 /// 把拖放 / 选择得到的东西变成沙盒里的文件。
 /// 每个 NSItemProvider 只读一种表示 (PDF 或图片, 不再试第二种), 并发读取不超过 limit 个。
 final class FileIngestor: @unchecked Sendable {
-    static let concurrency = 4
+    /// 一次只读一个。进程内 provider 两个以上同时读时, 读过的文件页会一直留在 RSS 里直到这一批结束: 模拟器里 30 张 37 MB 的 PNG,
+    /// 并发 2 和 4 的 RSS 峰值都是 1.37 GB, 并发 1 是 332 MB; 200 张 1.7 MB 的 JPEG 并发 1 和 4 都是 0.9 秒。
+    /// 两种都不改变 phys_footprint (24 MB), 并发 1 只是让 RSS 不虚高。
+    static let concurrency = 1
 
     private let files: ManagedFiles
     private let limiter: AsyncLimiter
