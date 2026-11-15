@@ -114,7 +114,7 @@
 { "url": "http://…/jobs/{id}/artifact?w=2048&token=…", "filename": "page01" }   // 返回 null
 ```
 
-让用户保存译图。App 下载后弹分享面板 (ShareLink)。Web 用 `<a download>` 触发浏览器下载。`url` 是预览用的降采样版本; 需要原始 Artifact 时 TSX 会改传不带 `w` 的 URL (目前只有「在浏览器打开」走这条路, 由 `openUrl` 处理)。
+让用户保存译图 (或原图)。`url` 是不带 `w` 的原始文件地址 (带 `?token=`), `filename` 不含扩展名。宿主自己下载, 按应答的 `Content-Type` 补扩展名 (`image/png` 为 `.png`, `text/html` 为 `.html`, 其他 `.bin`): App 下载到临时文件后弹分享面板 (ShareLink), Web 用 `fetch` 取回再交给 `<a download>`。失败 reject, TSX 用 toast 显示原因。
 
 ## 宿主发给 TSX 的事件
 
@@ -137,7 +137,9 @@
 
 ## 嵌入 iOS 时可用的 nsh/base 组件
 
-NativeShell.xcframework 的默认运行时只带 `nsh/base` 的 **core** 部分: `Button`、`Switch`、`Tab` / `Tabs`、`Progress`、`Checkbox`、`Radio` / `RadioGroup`、`Slider`、`Toggle`、`Toolbar` 等。`Select`、`Menu`、`Popover`、`Sheet`、`Dialog`、`Toast`、`NavStack` 不在其中, 一旦 import 整个 bundle 加载失败 (`Could not find export 'Select' in module 'nsh/base'`); 嵌入运行时没有 Swift 侧的开关可以加。所以 `client-ui` 只用 core 部分, `scripts/build-ui.sh check` 会检查这一点。
+NativeShell.xcframework 的默认运行时只注册 `nsh/base` 的 **core** 部分, 其余部分 (`Select`、`Menu`、`Popover`、`Sheet`、`ToastStack`、`Combobox`、`Tooltip` 等) 不在, 按名字 import 它们会让整个 bundle 加载失败 (`Could not find export 'Select' in module 'nsh/base'`); 嵌入运行时没有 Swift 侧的开关可以加。
+
+实测 (iPad 模拟器与 visionOS 模拟器上, 探针 bundle 用 `import * as base from "nsh/base"` 看 `typeof`): 有 `Button`、`Input`、`Switch`、`Tabs`、`Radio`、`Progress`、`Dialog`、`NavStack`、`NavPage`、`createNavStack`、`AlertDialog`; 没有 `Select`、`Menu`、`Popover`、`Sheet`、`ToastStack`、`Combobox`、`Tooltip`。`Dialog` 与 `NavStack` 的导出存在, 但没有在这两个平台上渲染过, 步骤 6 要用时先实测。`client-ui` 目前只用 `Button`、`Input`、`Switch`、`Tab`、`Tabs`、`Progress`、`Radio`、`RadioGroup`, `scripts/build-ui.sh check` 会拦住 core 以外的导入。
 
 ## 为 PDF 阅读器预留
 

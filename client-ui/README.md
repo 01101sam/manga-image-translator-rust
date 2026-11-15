@@ -56,11 +56,12 @@ scripts/build-ui.sh native   # client-ui/dist/native
 - `gui/dist` 下的所有其他文件按原路径返回, **无需鉴权**: `app.<digest>.js`、`host.<digest>.js`、`nsh.<digest>.js`、`nsh.<digest>.wasm` (`Content-Type: application/wasm`)、`nsh-*.js`、`nsh-syntaxes.<digest>.bin`、`nsh-math.<digest>.bin`、目录 `browser.<digest>/`、`facades/`、`icons/`、`assets/`。文件名带内容摘要, 可以 `Cache-Control: public, max-age=31536000, immutable`。有 `.br` / `.gz` 预压缩副本时, 按 `Accept-Encoding` 返回。
 - 这些路径与 Daemon 的 API 路径 (`/health`、`/pair`、`/jobs`、`/config`、`/engine/*`) 不重名。API 保持同源, 页面用 `location.origin` 当 Daemon 地址, 不需要 CORS。
 
-CSP: 页面自己不要求 CSP, Daemon 不发 CSP 头最简单。如果要发, 至少需要
+CSP: 页面自己不要求 CSP, Daemon 不发 CSP 头最简单。要发的话, 下面这条在 Chrome 里实测够用 (配对、上传、查看、Config、Engine 启停全流程 21 步, 控制台没有任何 CSP 违规):
 
 ```
-default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-<构建时打印的 hash>'; style-src 'self' 'unsafe-inline';
-img-src 'self' data: blob:; connect-src 'self'; frame-src 'self' blob: about:; worker-src 'self' blob:
+default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-<构建时打印的 hash>'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'
 ```
 
-其中 `sha256-…` 随每次构建变化, `scripts/build-ui.sh web` 把 `script-src` 整行写进 `gui/dist/csp-script-src.txt`。
+逐条去掉做过对照: 去掉 `script-src` 的 hash (页面里有一段内联 import map)、去掉 `wasm-unsafe-eval`、把 `connect-src` 设成 `'none'` (runtime 与 bundle 用 fetch 加载) 都会让页面起不来, 去掉 `style-src` 的 `'unsafe-inline'` 会有大量 inline style 被拦 (NSH 用 style 属性定位); `frame-src`、`worker-src`、`img-src` 的 `blob:` 不需要。`sha256-…` 随每次构建变化, `scripts/build-ui.sh web` 把 `script-src` 整行写进 `gui/dist/csp-script-src.txt`。
+
+浏览器会请求 `/favicon.ico`, 页面声明的图标在 `icons/` 下, 所以这个请求在 Daemon 上是 404, 无害; 想去掉就给 `/favicon.ico` 返回 `icons/` 里的 32px 图标。

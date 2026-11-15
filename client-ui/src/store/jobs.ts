@@ -5,6 +5,7 @@ import {
   applyJobEvent,
   applyJobList,
   clearableKeys,
+  isRemovable,
   countItems,
   emptyBoard,
   jobsNeedingError,
@@ -106,12 +107,11 @@ export async function pickAndAdd(): Promise<void> {
 }
 
 export function removeItems(keys: readonly string[]) {
-  const releasable = keys.flatMap((key) => {
+  const removable = keys.filter((key) => isRemovable(board.items[key]));
+  const releasable = removable.flatMap((key) => {
     const item = board.items[key];
-    // 上传中的文件宿主还在读, 等它结束 (成功后宿主自己释放, 失败回到 Pending 才能移除)。
     return item?.kind === "pending" ? [item.file.id] : [];
   });
-  const removable = keys.filter((key) => board.items[key]?.kind !== "uploading");
   hostPort.release(releasable);
   commit(removeKeys(board, removable));
 }
@@ -226,13 +226,18 @@ export function startPolling(): () => void {
   const generation = ++pollGeneration;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let tick = 0;
+  let restored = false;
   const alive = () => generation === pollGeneration;
 
   const run = async () => {
     const client = api();
     if (!alive() || !client) return;
     try {
-      if (tick === 0) await restore(client);
+      // 首轮请求失败时下一轮再试, 不然刷新页面后遇上网络抖动列表就丢了。
+      if (!restored) {
+        await restore(client);
+        restored = true;
+      }
       commit(applyJobList(board, await client.jobs()));
       for (const id of jobsNeedingError(board).slice(0, ERROR_FETCH_PER_TICK)) {
         const detail = await client.job(id);

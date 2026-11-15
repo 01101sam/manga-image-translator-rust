@@ -4,6 +4,7 @@ import {
   applyJobEvent,
   applyJobList,
   clearableKeys,
+  isRemovable,
   countItems,
   emptyBoard,
   inFlight,
@@ -147,6 +148,17 @@ describe("Board", () => {
     expect(clearableKeys(board)).toEqual(["j0", "j2"]);
     const cleared = removeKeys(board, clearableKeys(board)).board;
     expect(cleared.order).toEqual(["j1", "local:f3"]);
+  });
+
+  test("only finished jobs and files not yet in flight are removable", () => {
+    let board = addFiles(emptyBoard, files(3)).board;
+    board = submitted(submitted(board, "f0", "j0"), "f1", "j1");
+    board = applyJobList(board, [{ jobId: "j0", state: "queued" }, { jobId: "j1", state: "done" }]).board;
+    expect(isRemovable(board.items["j0"])).toBe(false);
+    expect(isRemovable(board.items["j1"])).toBe(true);
+    expect(isRemovable(board.items["local:f2"])).toBe(true);
+    expect(isRemovable(startUpload(board, "local:f2").board.items["local:f2"])).toBe(false);
+    expect(isRemovable(undefined)).toBe(false);
   });
 
   test("restoring keeps the saved order and drops jobs the daemon forgot", () => {

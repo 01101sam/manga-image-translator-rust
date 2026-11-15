@@ -49,8 +49,13 @@ export function Viewer(props: { itemKey: string }) {
     if (s.kind === "paired") void openUrl(rawMediaUrl(s.daemon.url, props.itemKey, viewing() === "translated" ? "artifact" : "source", s.token));
   };
   const save = async () => {
+    const s = session();
+    if (s.kind !== "paired") return;
+    // 保存的是原始大小的文件, 不是预览用的 w=2048 降采样图; 宿主自己下载, 字节不经过 JS。
+    const kind = viewing() === "translated" ? "artifact" : "source";
+    const stem = (titleOf(props.itemKey) || props.itemKey).replace(/\.[^.]+$/, "");
     try {
-      await hostPort.saveArtifact(shownUrl(), `${titleOf(props.itemKey) || props.itemKey}`);
+      await hostPort.saveArtifact(rawMediaUrl(s.daemon.url, props.itemKey, kind, s.token), `${stem}${kind === "artifact" ? "-translated" : ""}`);
     } catch (error) {
       showToast(`无法保存: ${error instanceof Error ? error.message : String(error)}`, "error");
     }

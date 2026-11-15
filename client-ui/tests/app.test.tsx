@@ -218,6 +218,18 @@ describe("viewer and keyboard", () => {
     expect(app.shows("p0.png")).toBe(false);
   });
 
+  test("Backspace leaves a queued job alone: it is still on the Daemon", async () => {
+    const daemon = createFakeDaemon({ finishPerPoll: 0 });
+    const app = await launch({ daemon, saved: true, picks: [files(2)] });
+    await app.waitFor("id:add-images");
+    await app.press("id:add-images");
+    await app.waitFor("text:/共 2 张/");
+    await app.keyboard.press("down");
+    await app.keyboard.press("backspace");
+    await app.wait(500);
+    expect(app.texts().some((t) => t.includes("共 2 张"))).toBe(true);
+  });
+
   test("the viewer loads the translated image at w=2048 with the token, and space switches to the original", async () => {
     const { app } = await withDoneJobs(1);
     const id = "job-1-aaaa-bbbb";
