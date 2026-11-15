@@ -161,6 +161,15 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
             let file = try await pickPDF()
             return ["file": file.map { $0.json as Any } ?? NSNull()]
         }
+        app.handle("pdf.open") { [weak self] data -> Any? in
+            let id = (data as? [String: Any])?["fileId"] as? String
+            return ["file": id.flatMap { self?.files.pdfRef(for: $0) }.map { $0.json as Any } ?? NSNull()]
+        }
+        app.handle("pdf.export") { [weak self] data -> Any? in
+            guard let self else { throw HostCallError("界面已关闭") }
+            let outcome = try await exportPDF(data)
+            return ["translated": outcome.translated, "missing": outcome.missing]
+        }
         app.handle("pdf.release") { [weak self] data, _ in
             if let id = (data as? [String: Any])?["fileId"] as? String { self?.files.releasePDF(id) }
         }
@@ -259,6 +268,40 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
             }.value
         }
         return try outcome.get()
+    }
+
+    /// 译文页换进原 PDF 拼成新 PDF, 逐页下载逐页写 (PdfExporter), 写完弹系统分享面板。
+    private func exportPDF(_ data: Any?) async throws -> PdfExporter.Outcome {
+        guard let args = data as? [String: Any], let id = args["fileId"] as? String, let list = args["pages"] as? [Any]
+        else { throw HostCallError("导出参数不完整") }
+        guard let source = files.pdfURL(for: id) else { throw HostCallError("这个 PDF 已经不在了, 请重新打开") }
+        var remote: [Int: URL] = [:]
+        for case let entry as [String: Any] in list {
+            guard let page = hostInt(entry["page"]), page >= 0, let text = entry["artifactUrl"] as? String, let url = URL(string: text)
+            else { throw HostCallError("导出参数不完整") }
+            remote[page] = url
+        }
+        let base = (files.pdfDisplayName(for: id) as NSString).deletingPathExtension
+        let output = files.sharedFile(named: "\(base)-translated.pdf")
+        let files = files
+        let outcome: PdfExporter.Outcome
+        do {
+            outcome = try await Task.detached(priority: .utility) {
+                try await PdfExporter.compose(
+                    source: source, output: output,
+                    artifact: { index in
+                        guard let url = remote[index] else { return nil }
+                        return try await ArtifactSaver.download(from: url, filename: "page", files: files)
+                    },
+                    release: { try? FileManager.default.removeItem(at: $0.deletingLastPathComponent()) }
+                )
+            }.value
+        } catch {
+            try? FileManager.default.removeItem(at: output.deletingLastPathComponent())
+            throw error
+        }
+        ArtifactSaver.present(output, from: self)
+        return outcome
     }
 
     // MARK: - 拖放

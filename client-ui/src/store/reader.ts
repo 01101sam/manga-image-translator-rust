@@ -1,5 +1,6 @@
-import { batch, signal, untracked } from "nsh";
+import { batch, effect, signal, Storage, untracked } from "nsh";
 import { localKey } from "../domain/board";
+import { rawMediaUrl } from "../domain/media";
 import {
   clampPage,
   newPage,
@@ -13,11 +14,11 @@ import {
   type ReaderPage,
 } from "../domain/reader";
 import type { JobState } from "../domain/types";
-import { pdfPort, type PdfFile } from "../ports/pdf";
+import { pdfPort, type PdfExportPage, type PdfFile } from "../ports/pdf";
 import { configOriginal } from "./config";
 import { addLocalFiles, itemOf, onFileOutcome, removeItems } from "./jobs";
 import { section } from "./route";
-import { api, hostPort } from "./session";
+import { api, hostPort, session } from "./session";
 import { showToast } from "./toast";
 
 /**
@@ -35,6 +36,7 @@ export const pages = signal<readonly ReaderPage[]>([]);
 export const current = signal(0);
 export const loadError = signal<string | null>(null);
 export const opening = signal(false);
+export const exporting = signal(false);
 
 /** 换文档、关文档、换 Daemon 时加一; 异步结果带着发起时的值回来, 对不上就丢掉。 */
 let epoch = 0;
@@ -88,6 +90,7 @@ function openDocument(file: PdfFile) {
 
 export function closePdf() {
   closeDocument();
+  void Storage.removeItem(LAST_PDF_KEY);
   batch(() => {
     pdf.set(null);
     pages.set([]);
@@ -122,6 +125,34 @@ export function documentLoaded(pageCount: number) {
 
 export function documentFailed(message: string) {
   if (pdf() !== null) loadError.set(message);
+}
+
+// ---- 导出 ----
+
+/** 已翻译的页换成译文, 其余页保持原样, 拼成新 PDF 交给系统分享 (宿主逐页写, 见 HOST_PROTOCOL.md 的 pdf.export)。 */
+export async function exportPdf(): Promise<void> {
+  const open = pdf();
+  const s = session();
+  if (open === null || s.kind !== "paired" || exporting()) return;
+  const translated: PdfExportPage[] = [];
+  for (const page of pages()) {
+    if (page.translation === "done" && page.jobId !== undefined) {
+      translated.push({ page: page.index, artifactUrl: rawMediaUrl(s.daemon.url, page.jobId, "artifact", s.token) });
+    }
+  }
+  if (translated.length === 0) {
+    showToast("还没有翻译完成的页");
+    return;
+  }
+  exporting.set(true);
+  try {
+    const result = await pdfPort.export(open.id, translated);
+    if (result.missing > 0) showToast(`有 ${result.missing} 页的译文已不在 Daemon 上, 这几页导出的是原页`);
+  } catch (error) {
+    showToast(`无法导出: ${error instanceof Error ? error.message : String(error)}`, "error");
+  } finally {
+    exporting.set(false);
+  }
 }
 
 // ---- 翻页 ----
@@ -251,12 +282,57 @@ async function pumpRenders(): Promise<void> {
   void pumpRenders();
 }
 
+/** 上次打开的 PDF: 宿主把 PDF 留在沙盒里 (超过 30 天没打开才清), 重启后按 id 找回来。页的翻译进度属于 Daemon 的 Job, 不保存。 */
+const LAST_PDF_KEY = "reader.last";
+
+interface LastPdf {
+  readonly id: string;
+  readonly page: number;
+}
+
+function parseLastPdf(raw: string | null): LastPdf | null {
+  if (raw === null) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (typeof value === "object" && value !== null && "id" in value && "page" in value && typeof value.id === "string" && typeof value.page === "number") {
+      return { id: value.id, page: value.page };
+    }
+  } catch {
+    // 存的东西坏了就当没有。
+  }
+  return null;
+}
+
+async function restoreLastPdf(): Promise<void> {
+  const saved = parseLastPdf(await Storage.getItem(LAST_PDF_KEY));
+  if (saved === null) return;
+  try {
+    const file = await pdfPort.open(saved.id);
+    // 等宿主回答的时候用户可能已经自己打开了别的 PDF。
+    if (pdf() !== null) return;
+    if (file === null) {
+      void Storage.removeItem(LAST_PDF_KEY);
+      return;
+    }
+    openDocument(file);
+    current.set(file.pageCount === undefined ? Math.max(0, Math.trunc(saved.page)) : clampPage(saved.page, file.pageCount));
+  } catch {
+    // 宿主打不开就当没有这个文件, 留着记录等下次。
+  }
+}
+
 let started = false;
 
-/** 挂宿主事件和 Board 的回调。只调用一次。 */
+/** 挂宿主事件和 Board 的回调, 并找回上次打开的 PDF。只调用一次。 */
 export function startReader(): void {
   if (started) return;
   started = true;
+  effect(() => {
+    const open = pdf();
+    const page = current();
+    if (open !== null) void Storage.setItem(LAST_PDF_KEY, JSON.stringify({ id: open.id, page }));
+  });
+  void restoreLastPdf();
   pdfPort.onAdded((files) => {
     const [first, ...extra] = files;
     if (first === undefined) return;

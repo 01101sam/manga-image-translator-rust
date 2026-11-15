@@ -148,6 +148,13 @@ final class ManagedFiles: @unchecked Sendable {
         scratch.appendingPathComponent("\(UUID().uuidString)-\(Self.safeFileName(name, fallback: "file"))")
     }
 
+    /// 要交给系统分享面板的文件: 面板和「存储到文件」显示的就是文件名, 所以名字不带前缀, 重名靠独立的子目录避免。
+    func sharedFile(named name: String) -> URL {
+        let directory = scratch.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent(Self.safeFileName(name, fallback: "file"))
+    }
+
     // MARK: - PDF
 
     func importPDF(from source: URL, name: String? = nil, move: Bool) throws -> FileRef {
@@ -169,6 +176,12 @@ final class ManagedFiles: @unchecked Sendable {
         guard fileManager.fileExists(atPath: url.path) else { return nil }
         try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
         return url
+    }
+
+    /// 重启后 TSX 凭上次的 id 找回 PDF: 文件还在就返回和 pdf.pick 一样的引用, 没有了返回 nil。
+    func pdfRef(for id: String) -> FileRef? {
+        guard let url = pdfURL(for: id) else { return nil }
+        return FileRef(id: id, name: pdfDisplayName(for: id), size: Self.size(of: url), type: "application/pdf", pageCount: Self.pageCount(of: url))
     }
 
     func pdfDisplayName(for id: String) -> String {

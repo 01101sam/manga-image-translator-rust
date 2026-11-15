@@ -1,5 +1,6 @@
 import ImageIO
 import UIKit
+import UniformTypeIdentifiers
 import XCTest
 @testable import ImageTranslator
 
@@ -90,6 +91,16 @@ final class HostFilesTests: XCTestCase {
         XCTAssertNil(files.url(for: image.id))
         XCTAssertNil(files.pdfURL(for: stale.id))
         XCTAssertNotNil(files.pdfURL(for: fresh.id))
+    }
+
+    func testSharedFileKeepsTheCleanNameInItsOwnDirectory() {
+        let files = makeFiles()
+        let first = files.sharedFile(named: "vol01-translated.pdf")
+        let second = files.sharedFile(named: "vol01-translated.pdf")
+        XCTAssertEqual(first.lastPathComponent, "vol01-translated.pdf")
+        XCTAssertNotEqual(first.deletingLastPathComponent(), second.deletingLastPathComponent())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.deletingLastPathComponent().path))
+        XCTAssertEqual(files.sharedFile(named: "../../etc/passwd").lastPathComponent, "passwd")
     }
 
     func testSafeFileNameStripsPathsAndControlCharacters() {
@@ -208,6 +219,140 @@ final class HostFilesTests: XCTestCase {
         }
         guard drawn else { throw XCTSkip("no bitmap context") }
         return (Int(pixel[0]) + Int(pixel[1]) + Int(pixel[2])) / 3
+    }
+
+    // MARK: - PDF 导出
+
+    /// n 页纯色 PDF: 第 i 页的颜色不同, 读回来能认出是哪一页的哪个来源。
+    private func makeColoredPDF(colors: [UIColor], size: CGSize = CGSize(width: 300, height: 400)) throws -> URL {
+        let url = directory.appendingPathComponent("colored-\(UUID().uuidString).pdf")
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: size))
+        try renderer.writePDF(to: url) { context in
+            for color in colors {
+                context.beginPage()
+                color.setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+            }
+        }
+        return url
+    }
+
+    private func makeJPEG(color: UIColor, size: CGSize) throws -> URL {
+        let url = directory.appendingPathComponent("artifact-\(UUID().uuidString).jpg")
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let data = UIGraphicsImageRenderer(size: size, format: format).jpegData(withCompressionQuality: 0.9) { context in
+            color.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+        }
+        try data.write(to: url)
+        return url
+    }
+
+    /// 把导出的某一页渲染成小图, 取中心像素的亮度和红色分量, 用来认出这一页用的是哪个来源。
+    private func centerColor(of pdf: URL, page: Int) throws -> (red: Int, green: Int, blue: Int) {
+        let output = directory.appendingPathComponent("probe-\(UUID().uuidString).png")
+        try PdfRenderer.render(document: pdf, page: page, longEdge: 64, to: output)
+        let image = try XCTUnwrap(CGImageSourceCreateWithURL(output as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) })
+        var pixel = [UInt8](repeating: 0, count: 4)
+        pixel.withUnsafeMutableBytes { buffer in
+            let context = CGContext(
+                data: buffer.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+            context?.draw(image, in: CGRect(x: -image.width / 2, y: -image.height / 2, width: image.width, height: image.height))
+        }
+        return (Int(pixel[0]), Int(pixel[1]), Int(pixel[2]))
+    }
+
+    func testExportKeepsPageCountAndSizesAndSwapsOnlyTheTranslatedPages() async throws {
+        let source = try makeColoredPDF(colors: [.red, .red, .red, .red])
+        let translated = try makeJPEG(color: .blue, size: CGSize(width: 900, height: 1200))
+        let output = directory.appendingPathComponent("out.pdf")
+        let outcome = try await PdfExporter.compose(source: source, output: output) { index in index == 1 || index == 3 ? translated : nil }
+        XCTAssertEqual(outcome, PdfExporter.Outcome(translated: 2, missing: 0))
+        let document = try XCTUnwrap(CGPDFDocument(output as CFURL))
+        XCTAssertEqual(document.numberOfPages, 4)
+        for index in 1...4 {
+            let size = PdfRenderer.displaySize(of: try XCTUnwrap(document.page(at: index)))
+            XCTAssertEqual(size.width, 300, accuracy: 0.5)
+            XCTAssertEqual(size.height, 400, accuracy: 0.5)
+        }
+        let originalPage = try centerColor(of: output, page: 0)
+        XCTAssertGreaterThan(originalPage.red, 200)
+        XCTAssertLessThan(originalPage.blue, 60)
+        let translatedPage = try centerColor(of: output, page: 1)
+        XCTAssertGreaterThan(translatedPage.blue, 200, "page 2 should show the translated image")
+        XCTAssertLessThan(translatedPage.red, 60)
+        XCTAssertGreaterThan(try centerColor(of: output, page: 2).red, 200)
+        XCTAssertGreaterThan(try centerColor(of: output, page: 3).blue, 200)
+    }
+
+    func testExportFallsBackToTheOriginalPageWhenTheTranslationCannotBeFetchedOrRead() async throws {
+        struct Gone: Error {}
+        let source = try makeColoredPDF(colors: [.red, .red, .red])
+        let notAnImage = try write("page.html", bytes: 64)
+        let output = directory.appendingPathComponent("fallback.pdf")
+        let outcome = try await PdfExporter.compose(source: source, output: output) { index in
+            if index == 0 { throw Gone() }
+            return index == 1 ? notAnImage : nil
+        }
+        XCTAssertEqual(outcome, PdfExporter.Outcome(translated: 0, missing: 2))
+        XCTAssertEqual(CGPDFDocument(output as CFURL)?.numberOfPages, 3)
+        for page in 0..<3 { XCTAssertGreaterThan(try centerColor(of: output, page: page).red, 200) }
+    }
+
+    func testExportReleasesEachArtifactRightAfterItsPage() async throws {
+        let source = try makeColoredPDF(colors: [.red, .red, .red])
+        let translated = try makeJPEG(color: .blue, size: CGSize(width: 90, height: 120))
+        var events: [String] = []
+        _ = try await PdfExporter.compose(
+            source: source, output: directory.appendingPathComponent("order.pdf"),
+            artifact: { index in events.append("get\(index)"); return translated },
+            release: { _ in events.append("release") }
+        )
+        XCTAssertEqual(events, ["get0", "release", "get1", "release", "get2", "release"])
+    }
+
+    /// 每页一张不同的 2400x3200 噪声 JPEG (位图 30 MB, 文件约 7 MB): 24 页的位图加起来 700 MB 以上。
+    /// 逐页处理时内存和页数无关; 全部留着的话这里会涨到 GB 级。
+    func testExportOfManyBigPagesDoesNotGrowMemoryWithThePageCount() async throws {
+        let pages = 24
+        let source = try makeColoredPDF(colors: Array(repeating: .red, count: pages), size: CGSize(width: 612, height: 792))
+        let (width, height) = (2400, 3200)
+        func noisyJPEG(to url: URL) throws {
+            var pixels = [UInt8](repeating: 0, count: width * height * 4)
+            pixels.withUnsafeMutableBytes { arc4random_buf($0.baseAddress, $0.count) }
+            let image = pixels.withUnsafeMutableBytes { buffer -> CGImage? in
+                CGContext(
+                    data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+                )?.makeImage()
+            }
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil))
+            CGImageDestinationAddImage(destination, try XCTUnwrap(image), [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+        }
+        let before = HostMetrics.residentMB()
+        let output = directory.appendingPathComponent("many.pdf")
+        var failure: Error?
+        let (outcome, peak) = await HostMetrics.measure {
+            try? await PdfExporter.compose(
+                source: source, output: output,
+                artifact: { _ in
+                    let url = self.directory.appendingPathComponent("noise-\(UUID().uuidString).jpg")
+                    do { try noisyJPEG(to: url) } catch { failure = error }
+                    return url
+                },
+                release: { try? FileManager.default.removeItem(at: $0) }
+            )
+        }
+        XCTAssertNil(failure)
+        XCTAssertEqual(outcome?.translated, pages)
+        XCTAssertEqual(CGPDFDocument(output as CFURL)?.numberOfPages, pages)
+        XCTAssertGreaterThan(ManagedFiles.size(of: output), pages * 100_000, "every page should carry its own image")
+        // 实测增长约 100 MB (大头是测试自己生成的噪声图); 把 24 页降采样后的位图都留着会再多出约 180 MB。
+        XCTAssertLessThan(peak.rss - before, 200, "peak RSS grew by \(peak.rss - before) MB for \(pages) pages")
     }
 
     func testDisplayNamePrefersTheSuggestedNameAndKeepsOneExtension() {

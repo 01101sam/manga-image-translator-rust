@@ -116,6 +116,10 @@ final class NshHostUITests: XCTestCase {
         waitForExpectations(timeout: 10)
         sleep(2)
         shot(app, "reader-translated")
+        // 导出: 宿主逐页下载译文、拼出 PDF、弹分享面板。
+        element(app, "reader-export").tap()
+        XCTAssertTrue(element(app, "ActivityListView").waitForExistence(timeout: 120), "the share sheet for the exported PDF did not appear")
+        shot(app, "reader-export-share")
     }
 
     func testPickedImagesUploadFinishAndOpenInViewer() {

@@ -11,6 +11,12 @@ interface Scenario {
   readonly section?: "jobs" | "reader";
   readonly renderFails?: boolean;
   readonly uploadOutcome?: () => unknown;
+  /** 预置的 NSH Storage (重启后恢复上次的 PDF)。 */
+  readonly storage?: Record<string, string>;
+  /** pdf.open 的应答: 宿主还留着的文件, 缺省或 null 表示已经没有了。 */
+  readonly openFile?: ReturnType<typeof pdfFile> | null;
+  readonly exportResult?: { translated: number; missing: number };
+  readonly exportFails?: boolean;
 }
 
 /** 宿主 (Swift / host.js) 由 handlers 扮演, Daemon 由 fake 扮演。 */
@@ -19,6 +25,8 @@ async function launch(scenario: Scenario) {
   const rendered: { fileId: string; page: number; longEdge: number }[] = [];
   const uploaded: string[] = [];
   const shown: { fileId: string; page: number; hidden: boolean }[] = [];
+  const exported: { fileId: string; pages: { page: number; artifactUrl: string }[] }[] = [];
+  const opened: string[] = [];
   const handlers = {
     "session.snapshot": () => ({
       daemons: [{ name: "studio", url: BASE }],
@@ -45,14 +53,24 @@ async function launch(scenario: Scenario) {
       return { pageCount: scenario.pageCount ?? 5 };
     },
     "pdf.dispose": null,
+    "pdf.open": (data: { fileId: string }) => {
+      opened.push(data.fileId);
+      return { file: scenario.openFile ?? null };
+    },
+    "pdf.export": (data: { fileId: string; pages: { page: number; artifactUrl: string }[] }) => {
+      exported.push(data);
+      if (scenario.exportFails) throw new Error("磁盘已满");
+      return scenario.exportResult ?? { translated: data.pages.length, missing: 0 };
+    },
   };
   const app = await open("../App.tsx", {
     clock: {},
     network: daemon.network,
     platform: scenario.platform ?? "web",
+    storage: scenario.storage,
     host: { params: { section: scenario.section ?? "reader" }, handlers },
   });
-  return { app, rendered, uploaded, shown };
+  return { app, rendered, uploaded, shown, exported, opened };
 }
 
 type Launched = Awaited<ReturnType<typeof launch>>["app"];
@@ -237,5 +255,89 @@ describe("PDF reader in the App (native component)", () => {
     expect(shown.length).toBe(0);
     expect(calls(app, "pdf.show").length).toBe(0);
     expect(posts(app, "pdf.dispose").length).toBe(0);
+  });
+});
+describe("PDF reader: export and restoring the last PDF", () => {
+  /** 在 App 平台翻译第 2 页并等它完成。 */
+  async function translatePageTwo(scenario: Omit<Scenario, "daemon"> = {}) {
+    const launched = await launch({ daemon: createFakeDaemon(), platform: "ios", ...scenario });
+    await openPdf(launched.app);
+    await launched.app.keyboard.press("right");
+    await launched.app.keyboard.press("space");
+    await launched.app.waitFor("text:/已翻译/", { timeout: 30_000 });
+    return launched;
+  }
+
+  test("the export button appears with the first translated page and sends only the translated pages with their original files", async () => {
+    const { app, exported } = await launch({ daemon: createFakeDaemon(), platform: "ios" });
+    await openPdf(app);
+    expect(app.shows("id:reader-export")).toBe(false);
+    await app.keyboard.press("right");
+    await app.keyboard.press("space");
+    await app.waitFor("text:/已翻译/", { timeout: 30_000 });
+    await app.waitFor("id:reader-export");
+    await app.press("id:reader-export");
+    await app.waitUntil(() => exported.length === 1);
+    expect(exported[0]?.fileId).toBe("pdf-1");
+    expect(exported[0]?.pages.map((p) => p.page)).toEqual([1]);
+    // 原始大小的译文文件 (不带 w), 不是预览用的降采样图。
+    expect(exported[0]?.pages[0]?.artifactUrl).toMatch(/^http:\/\/daemon\.test\/jobs\/[^/?]+\/artifact\?token=tok-1$/);
+  });
+
+  test("a translation that is gone from the Daemon is reported, the rest is exported", async () => {
+    const { app } = await translatePageTwo({ exportResult: { translated: 0, missing: 1 } });
+    await app.press("id:reader-export");
+    await app.waitFor("text:/1 页的译文已不在 Daemon 上/");
+  });
+
+  test("a failed export says why", async () => {
+    const { app } = await translatePageTwo({ exportFails: true });
+    await app.press("id:reader-export");
+    await app.waitFor("text:/无法导出: 磁盘已满/");
+  });
+
+  test("the web has no export: a translated page there shows no button", async () => {
+    const { app } = await launch({ daemon: createFakeDaemon(), platform: "web" });
+    await openPdf(app);
+    await app.keyboard.press("space");
+    await app.waitFor("text:/已翻译/", { timeout: 30_000 });
+    expect(app.shows("id:reader-export")).toBe(false);
+  });
+
+  test("the open PDF and its page are remembered and given back after a restart", async () => {
+    const { app, opened } = await launch({
+      daemon: createFakeDaemon(),
+      platform: "ios",
+      storage: { "reader.last": JSON.stringify({ id: "pdf-1", page: 2 }) },
+      openFile: pdfFile(5),
+    });
+    await app.waitFor("text:/^第 3\\/5 页/");
+    expect(opened).toEqual(["pdf-1"]);
+    expect(app.texts()).toContain("vol01.pdf");
+    await app.keyboard.press("right");
+    await app.waitFor("text:/^第 4\\/5 页/");
+    expect(JSON.parse(app.storage()["reader.last"] ?? "null")).toEqual({ id: "pdf-1", page: 3 });
+  });
+
+  test("a PDF the host no longer has is forgotten", async () => {
+    const { app, opened } = await launch({
+      daemon: createFakeDaemon(),
+      platform: "ios",
+      storage: { "reader.last": JSON.stringify({ id: "gone", page: 1 }) },
+      openFile: null,
+    });
+    await app.waitFor("id:reader-empty");
+    await app.waitUntil(() => opened.length === 1);
+    await app.waitUntil(() => app.storage()["reader.last"] === undefined);
+  });
+
+  test("opening and closing a PDF keeps and clears the record", async () => {
+    const { app } = await launch({ daemon: createFakeDaemon(), platform: "ios" });
+    await openPdf(app);
+    await app.waitUntil(() => app.storage()["reader.last"] !== undefined);
+    expect(JSON.parse(app.storage()["reader.last"] ?? "null")).toEqual({ id: "pdf-1", page: 0 });
+    await app.press("id:reader-close");
+    await app.waitFor("id:reader-empty");
+    await app.waitUntil(() => app.storage()["reader.last"] === undefined);
   });
 });
