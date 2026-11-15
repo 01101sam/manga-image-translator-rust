@@ -160,6 +160,10 @@ function openDoc(id) {
       isEvalSupported: false,
       enableXfa: false,
       disableAutoFetch: true,
+      // 默认由浏览器的 ImageDecoder 和 OffscreenCanvas 解码嵌在 PDF 里的 JPEG, 解出的位图留在渲染进程里不还:
+      // 100 页的漫画 PDF 翻完渲染进程涨到约 1.1 GB, 之后 24 秒也不回落。关掉这两个, 改由 worker 里的 JS 解码, 用完就还。
+      isImageDecoderSupported: false,
+      isOffscreenCanvasSupported: false,
     });
     return entry.task.promise;
   });
