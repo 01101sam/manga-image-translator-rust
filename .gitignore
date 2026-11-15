@@ -17,3 +17,8 @@ crates/runtimes/simple-runtime/debug
 # NSH 构建产物 (scripts/nsh-visionos/build.sh)
 /app/Frameworks/
 /scripts/nsh-visionos/bin/
+
+# client-ui: NSH 生成的类型, 构建产物 (Web 站点与原生 bundle)
+/client-ui/.nsh/
+/client-ui/dist/
+/gui/dist/

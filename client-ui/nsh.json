@@ -1,0 +1,31 @@
+{
+  "name": "图片翻译",
+  "id": "com.wisdomworldworkshop.imagetranslator.ui",
+  "version": "0.1.0",
+  "build": 1,
+  "theme": "theme.json",
+  "capabilities": {
+    "network": {
+      "hosts": [
+        "*"
+      ]
+    },
+    "host": [
+      "session.*",
+      "files.*",
+      "upload.*",
+      "artifact.*",
+      "pdf.*"
+    ],
+    "openUrl": {
+      "schemes": [
+        "http",
+        "https"
+      ]
+    },
+    "statusBar": true
+  },
+  "web": {
+    "host": "./web/host.js"
+  }
+}
