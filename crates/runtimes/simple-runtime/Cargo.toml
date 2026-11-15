@@ -72,6 +72,7 @@ tracing.workspace = true
 actix-web.workspace = true
 actix-multipart.workspace = true
 if-addrs = "0.13"
+subtle = "2.6"
 # ui
 egui = "0.32"
 eframe = { version = "0.32", default-features = false, features = [
