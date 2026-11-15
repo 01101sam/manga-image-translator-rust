@@ -1,8 +1,9 @@
 import type { ConfigDoc } from "../domain/config";
-import type { EngineState, JobEntry } from "../domain/types";
+import type { EngineState, EngineStatus, JobEntry } from "../domain/types";
 import {
   parseConfig,
   parseEngineState,
+  parseEngineStatus,
   parseJobDetail,
   parseJobList,
   parseToken,
@@ -27,7 +28,7 @@ export interface Api {
   jobs(): Promise<JobEntry[]>;
   job(id: string): Promise<{ error?: string }>;
   cancel(id: string): Promise<void>;
-  engineStatus(): Promise<EngineState>;
+  engineStatus(): Promise<EngineStatus>;
   engineAction(action: "start" | "stop" | "restart"): Promise<EngineState>;
   getConfig(): Promise<ConfigDoc>;
   putConfig(doc: ConfigDoc): Promise<ConfigDoc>;
@@ -114,7 +115,7 @@ export function createApi(baseUrl: string, token: string | null): Api {
     cancel: async (id) => {
       await call(`/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
     },
-    engineStatus: () => parsed(call("/engine/status"), parseEngineState),
+    engineStatus: () => parsed(call("/engine/status"), parseEngineStatus),
     engineAction: (action) =>
       parsed(call(`/engine/${action}`, { method: "POST", timeoutMs: ENGINE_TIMEOUT_MS }), parseEngineState),
     getConfig: () => parsed(call("/config"), parseConfig),

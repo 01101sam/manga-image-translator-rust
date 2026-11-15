@@ -3,6 +3,12 @@ export type JobState = "queued" | "running" | "done" | "failed" | "cancelled";
 
 export type EngineState = "stopped" | "starting" | "running" | "draining";
 
+/** GET /engine/status: Engine 状态, 加上 Daemon 队列容量 (一次最多能让多少张图在 Daemon 里排队或翻译)。 */
+export interface EngineStatus {
+  readonly state: EngineState;
+  readonly queueCapacity: number;
+}
+
 /** 一个可连接的 Daemon。`url` 不带结尾斜杠, 例如 `http://192.168.1.5:8080`。 */
 export interface DaemonRef {
   readonly name: string;
