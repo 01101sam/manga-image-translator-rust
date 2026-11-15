@@ -10,7 +10,6 @@ import {
   emptyBoard,
   jobsNeedingError,
   planUploads,
-  QUEUE_CAPACITY,
   removeKeys,
   restoreJobs,
   savedJobs,
@@ -28,7 +27,7 @@ import {
 } from "../domain/board";
 import { adjacentDone, moveHighlight } from "../domain/nav";
 import type { LocalFile } from "../domain/types";
-import { engineAcceptsJobs, engineState, refreshEngine } from "./engine";
+import { engineAcceptsJobs, engineState, queueCapacity, refreshEngine } from "./engine";
 import { overrides } from "./overrides";
 import { api, handleError, hostPort, session } from "./session";
 import { showToast } from "./toast";
@@ -171,8 +170,9 @@ export function pump() {
   const s = session();
   if (s.kind !== "paired") return;
   if (Date.now() < pausedUntil) return;
-  if (!engineAcceptsJobs()) return;
-  for (const key of planUploads(board, { capacity: QUEUE_CAPACITY, concurrency: UPLOAD_CONCURRENCY })) {
+  const capacity = queueCapacity();
+  if (capacity === null || !engineAcceptsJobs()) return;
+  for (const key of planUploads(board, { capacity, concurrency: UPLOAD_CONCURRENCY })) {
     commit(startUpload(board, key));
     void upload(key);
   }

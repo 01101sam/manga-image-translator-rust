@@ -1,5 +1,5 @@
 import type { ConfigDoc } from "../domain/config";
-import type { EngineState, JobEntry, JobState } from "../domain/types";
+import type { EngineState, EngineStatus, JobEntry, JobState } from "../domain/types";
 
 /** 外部数据在这里一次性解析成内部类型, 内部代码不再重复检查形状。 */
 export class ParseError extends Error {}
@@ -42,6 +42,13 @@ export function parseEngineState(body: unknown): EngineState {
   const state = isRecord(body) ? body.state : undefined;
   if (typeof state === "string" && (ENGINE_STATES as readonly string[]).includes(state)) return state as EngineState;
   throw new ParseError("Engine 状态格式不对");
+}
+
+export function parseEngineStatus(body: unknown): EngineStatus {
+  const state = parseEngineState(body);
+  const capacity = (body as { queue_capacity?: unknown }).queue_capacity;
+  if (typeof capacity === "number" && Number.isInteger(capacity) && capacity > 0) return { state, queueCapacity: capacity };
+  throw new ParseError("Engine 状态缺少队列容量 (queue_capacity), Daemon 版本可能过旧");
 }
 
 export function parseConfig(body: unknown): ConfigDoc {

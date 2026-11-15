@@ -117,14 +117,25 @@ describe("jobs", () => {
     expect(daemon.log.maxQueued).toBeLessThanOrEqual(64);
   }, 900_000);
 
-  test("when the Daemon answers 429 anyway the file goes back to pending and is retried", async () => {
+  test("the in-flight limit is the capacity the Daemon reports, not a built-in number", async () => {
     const daemon = createFakeDaemon({ capacity: 2, finishPerPoll: 1 });
     const app = await launch({ daemon, saved: true, picks: [files(6)] });
     await app.waitFor("id:add-images");
     await app.press("id:add-images");
     await app.waitFor("text:/全部完成/", { timeout: 60_000 });
     expect(daemon.log.submitted).toBe(6);
-    expect(daemon.log.rejected429).toBeGreaterThanOrEqual(0);
+    expect(daemon.log.rejected429).toBe(0);
+    expect(daemon.log.maxQueued).toBeLessThanOrEqual(2);
+  });
+
+  test("when the Daemon answers 429 anyway the file goes back to pending and is retried", async () => {
+    const daemon = createFakeDaemon({ capacity: 2, reportedCapacity: 64, finishPerPoll: 1 });
+    const app = await launch({ daemon, saved: true, picks: [files(6)] });
+    await app.waitFor("id:add-images");
+    await app.press("id:add-images");
+    await app.waitFor("text:/全部完成/", { timeout: 60_000 });
+    expect(daemon.log.submitted).toBe(6);
+    expect(daemon.log.rejected429).toBeGreaterThan(0);
   });
 
   test("a stopped Engine holds uploads, shows the banner, and starting it releases them", async () => {

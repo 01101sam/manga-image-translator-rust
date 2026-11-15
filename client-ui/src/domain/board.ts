@@ -249,7 +249,6 @@ export function planUploads(board: Board, limits: UploadLimits): string[] {
   return plan;
 }
 
-export const QUEUE_CAPACITY = 64;
 export const UPLOAD_CONCURRENCY = 3;
 
 /** 能从列表里移除的项: 上传中的宿主还在读, 排队和翻译中的 Job 还在 Daemon 上 (要先取消), 其余都可以。 */

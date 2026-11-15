@@ -7,6 +7,9 @@ import { showToast } from "./toast";
 export const engineState = signal<EngineState | "unknown">("unknown");
 export const engineBusy = signal(false);
 
+/** Daemon 的队列容量, 上传调度据此限制在途数量。没取到之前不上传: 猜小了浪费吞吐, 猜大了会吃 429。 */
+export const queueCapacity = signal<number | null>(null);
+
 /** Daemon 的 Engine 停着时提交会得到 503, 所以上传调度据此暂停。 */
 export const engineAcceptsJobs = (): boolean => {
   const state = engineState();
@@ -36,7 +39,9 @@ export async function refreshEngine(): Promise<void> {
   if (!client || refreshing || engineBusy()) return;
   refreshing = true;
   try {
-    engineState.set(await client.engineStatus());
+    const status = await client.engineStatus();
+    engineState.set(status.state);
+    queueCapacity.set(status.queueCapacity);
   } catch (error) {
     if (!handleError(error)) engineState.set("unknown");
   } finally {

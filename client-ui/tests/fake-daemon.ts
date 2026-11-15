@@ -11,6 +11,8 @@ export interface FakeJob {
 export interface FakeOptions {
   /** 队列容量, 超过时 POST /jobs 返回 429 (真实 Daemon 是 64)。 */
   readonly capacity?: number;
+  /** GET /engine/status 报出的队列容量, 默认等于 capacity; 设得比 capacity 大, 用来逼出 429 的重试路径。 */
+  readonly reportedCapacity?: number;
   /** Engine 初始状态。 */
   readonly engine?: "running" | "stopped";
   /** 每次轮询把 queued 推进成 running、running 推进成 done 的个数上限。 */
@@ -88,7 +90,7 @@ export function createFakeDaemon(options: FakeOptions = {}) {
       job.state = "cancelled";
       return json({ state: "cancelled" });
     },
-    ["GET " + BASE + "/engine/status"]: () => json({ state: engine }),
+    ["GET " + BASE + "/engine/status"]: () => json({ state: engine, queue_capacity: options.reportedCapacity ?? capacity }),
     ["POST " + BASE + "/engine/*"]: (request: StubRequest) => {
       const action = request.url.split("/engine/")[1]!;
       log.engineActions.push(action);
