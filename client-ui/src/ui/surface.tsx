@@ -33,7 +33,14 @@ export function Separator() {
 }
 
 /** 空状态: 图标 + 标题 + 说明 + 可选的主操作。 */
-export function Empty(props: { icon: IconName; title: string; description?: string; actionLabel?: string; onAction?: () => void }) {
+export function Empty(props: {
+  icon: IconName;
+  title: string;
+  description?: string;
+  actionLabel?: string;
+  actionTestID?: string;
+  onAction?: () => void;
+}) {
   return (
     <View class="flex-1 items-center justify-center gap-3 p-8">
       <View class="size-14 items-center justify-center rounded-full bg-muted">
@@ -44,7 +51,7 @@ export function Empty(props: { icon: IconName; title: string; description?: stri
         <Text class="max-w-80 text-center text-sm text-muted-foreground">{props.description}</Text>
       </If>
       <If when={props.actionLabel}>
-        <Button label={props.actionLabel ?? ""} onPress={() => props.onAction?.()} icon="plus" />
+        <Button label={props.actionLabel ?? ""} testID={props.actionTestID} onPress={() => props.onAction?.()} icon="plus" />
       </If>
     </View>
   );

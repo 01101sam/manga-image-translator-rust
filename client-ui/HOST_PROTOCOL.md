@@ -196,6 +196,32 @@ nativeComponent<
 - `longEdge` 一般取 Config 的 `downscale_long_edge` (没有就 3072)。宿主把页面画到长边等于 `longEdge` (矢量页会放大, 扫描页受原图分辨率限制); 上限 6144 是因为渲染要整页位图, 再大 iPad 会吃不消。
 - 页 → Job 的映射、译文叠加和空格切换是 TSX 的事 (`PageMachine`); 宿主只管上面这几个调用和组件。
 
+### Web: pdf.js 覆盖层 (`pdf.show` / `pdf.dispose`)
+
+NSH 的 Web 版没有注册的原生组件, `it.pdf` 在网页上是个空 View。所以 `PdfSurface` 在 `platform.os === "web"` 时改放一个 `testID="pdf-slot"` 的占位 View, 它在页面里是带 `data-testid="pdf-slot"` 的 DOM 节点, `web/host.js` 把 pdf.js 的 canvas 放进这个节点里。位置、裁剪、窗口缩放和层叠都交给浏览器; 译文 `<Image>` 是占位节点后面的兄弟节点, 自然盖在 canvas 上面。
+
+```jsonc
+// pdf.show: 幂等的「设成这个状态」。TSX 在 fileId / page / hidden 任何一个变化时调用, 连续调用时宿主只画最新的一次
+{ "fileId": "…", "page": 3, "hidden": false }
+// 返回 (所有排在前面的调用也拿到同一个结果)
+{ "pageCount": 212 }
+// pdf.dispose (post, 无参数): 占位节点要离开屏幕 (切到别的分区、关掉 PDF), 拆掉 canvas、放掉渲染缓冲; 文档保持打开
+```
+
+- 只渲染当前页: canvas 的像素尺寸是占位节点的显示尺寸乘 `devicePixelRatio`, 长边最多 3000 像素。新页画好之后才换掉旧 canvas, 所以翻页不闪白, 任何时刻占位节点里只有一个 canvas。`hidden` 为 true 时不渲染也不换页, 变回 false 时补画。占位节点改变大小 (窗口缩放、横竖屏) 时宿主用 `ResizeObserver` 自己重画。
+- `pdf.show` 打不开文档就 reject; TSX 在页面上显示这条原因。
+- 文档只在覆盖层显示它、或正在渲染页图时保持打开 (打开后连同 worker 和读入的数据可以占到几百 MB)。覆盖层离开屏幕或页图渲染完 20 秒后, 宿主销毁 pdf.js 的加载任务, 回来时重新打开; `pdf.release` 立即销毁并 revoke object URL。
+- pdf.js、它的 worker 和解码用的 wasm、字体、CMap 都是同源静态文件, 在站点的 `pdfjs/` 下 (`pdf.js`、`pdf.worker.js`, 改成 `.js` 是因为 Daemon 按扩展名发 Content-Type, 不认识 `.mjs`); 版本见 `web/pdfjs/VERSION`, 来源与更新方法见 `scripts/vendor-pdfjs.sh`。`scripts/build-ui.sh web` 把它们拷进 `gui/dist/pdfjs/`。
+- PDF 用 object URL 交给 pdf.js, 所以页面的 CSP 若限制了 `connect-src`, 要加上 `blob:`。
+- `pdf.renderPage` 在 Web 上用同一个 pdf.js 文档渲染到一块临时 canvas, `toBlob` 成 PNG 后立刻清零 canvas; 文件名是 `<PDF 名>-p001.png` 这种三位页号。
+
+### TSX 一侧的行为
+
+- 页与 Job 的对应: 页图作为普通本地文件进任务列表, 上传成功后 `jobId` 记在这一页上; 之后每页的状态跟着轮询回来的 Job 状态走。页图出现在任务列表里, 与图片一样受 Pending Upload 分批 (在途不超过 Daemon 报告的队列容量、同时上传不超过 3 个)。
+- 渲染节奏: 同一时间只有一个 `pdf.renderPage` 在途, 已渲染但还没上传的页图最多 5 张 (上传跟不上, 比如队列满或 Engine 停止, 就先不渲染下一页), 「翻译全部」不会一次渲染整本。
+- `pageChanged` 的回声: PDFView 对每次换页都发 `pageChanged`, 包括 TSX 改 `page` 属性引起的。连按方向键时回声滞后, 所以 TSX 把 2 秒内自己要求过的页码当回声忽略, 只在用户自己翻页 (滑动、点 PDF 里的链接) 时跟着走。
+- 键盘 (方向键翻页, 空格翻译本页或切换原文与译文) 由 TSX 的 `keymap` 处理, 不依赖宿主的按键事件。
+
 ## 测试
 
-`tests/app.test.tsx` 用 `nsh test` 的 `open(…, { host: { handlers } })` 扮演宿主, 用 `network` 扮演 Daemon, 覆盖本协议的每个调用。改协议时先改这些测试。
+`tests/app.test.tsx` 和 `tests/reader-app.test.tsx` 用 `nsh test` 的 `open(…, { host: { handlers } })` 扮演宿主, 用 `network` 扮演 Daemon, 覆盖本协议的每个调用 (`it.pdf` 的事件无头测试发不出来, 靠 `tests/reader.test.ts` 里的纯函数测试和宿主一侧的测试)。改协议时先改这些测试。
