@@ -12,7 +12,7 @@ import {
   translatedJobId,
   translateAllOrder,
   untranslatedIndexes,
-  userPage,
+  followHost,
   type PageEvent,
   type ReaderPage,
 } from "../src/domain/reader";
@@ -160,13 +160,39 @@ describe("reader navigation and planning", () => {
     expect(renderLongEdge({ downscale_long_edge: 50_000 })).toBe(8192);
   });
 
-  test("a page change from the host is the user's own only when TSX did not ask for it", () => {
-    // 连按方向键从 9 翻到 12, 宿主的回声 10、11 滞后到达。
-    expect(userPage(10, 12, 100, [10, 11, 12])).toBeNull();
-    expect(userPage(12, 12, 100, [10, 11, 12])).toBeNull();
-    // 用户在 PDF 里点链接跳到 40。
-    expect(userPage(40, 12, 100, [10, 11, 12])).toBe(40);
-    expect(userPage(100, 12, 100, [])).toBeNull();
-    expect(userPage(-1, 12, 100, [])).toBeNull();
+  // 宿主 (PDFView) 对每次换页都发 pageChanged; 只在两边本来同步时才跟着走。
+  const feed = (current: number, reports: number[], synced: number | null = null) => {
+    let page = current;
+    let host = synced;
+    for (const reported of reports) {
+      const next = followHost(host, page, 100, reported);
+      host = reported;
+      if (next !== null) page = next;
+    }
+    return page;
+  };
+
+  test("remounting at page 7: the host reports 0, then 7, then 7, and the page stays 7", () => {
+    expect(feed(7, [0, 7, 7])).toBe(7);
+    expect(feed(7, [0, 7])).toBe(7);
+  });
+
+  test("holding an arrow key from 9 to 12: the late echoes 10, 11, 12 never pull the page back", () => {
+    // TSX 已经在 12, 宿主上一次报告的是 9
+    expect(feed(12, [10, 11, 12], 9)).toBe(12);
+    expect(feed(12, [10, 12], 9)).toBe(12);
+  });
+
+  test("a swipe or a PDF link after the host caught up is the user's own page", () => {
+    expect(feed(12, [13], 12)).toBe(13);
+    expect(feed(12, [10, 11, 12, 13], 9)).toBe(13);
+    expect(feed(12, [40], 12)).toBe(40);
+    expect(feed(12, [13, 14], 12)).toBe(14);
+  });
+
+  test("a report for a page that does not exist is ignored", () => {
+    expect(followHost(5, 5, 100, 100)).toBeNull();
+    expect(followHost(5, 5, 100, -1)).toBeNull();
+    expect(followHost(5, 5, 100, 5.5)).toBeNull();
   });
 });

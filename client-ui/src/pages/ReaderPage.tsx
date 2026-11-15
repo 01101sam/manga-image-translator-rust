@@ -16,6 +16,7 @@ import {
   pressSpace,
   retranslateCurrent,
   step,
+  surfaceAttached,
   syncJobStates,
   translateAll,
 } from "../store/reader";
@@ -105,6 +106,7 @@ export function ReaderPage() {
                 onLoaded={documentLoaded}
                 onFailed={documentFailed}
                 onPageChanged={nativePageChanged}
+                onAttach={surfaceAttached}
               />
               <If when={translatedUrl()}>
                 {(url) => (

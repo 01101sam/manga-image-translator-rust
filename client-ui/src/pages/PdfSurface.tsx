@@ -15,12 +15,16 @@ export interface PdfSurfaceProps {
   readonly hidden: boolean;
   readonly onLoaded: (pageCount: number) => void;
   readonly onFailed: (message: string) => void;
-  /** 显示端报告的换页, 包括 TSX 自己改 page 引起的回声。 */
+  /** 显示端报告的换页, 包括 TSX 自己改 page 引起的; 只有原生组件会发。 */
   readonly onPageChanged: (page: number) => void;
+  /** 原生组件刚创建 (每次回到阅读器都会重建)。 */
+  readonly onAttach: () => void;
 }
 
+type WebPdfProps = Pick<PdfSurfaceProps, "fileId" | "page" | "hidden" | "onLoaded" | "onFailed">;
+
 /** Web 没有原生组件: 宿主 (web/host.js) 把 pdf.js 的 canvas 放进这个占位节点里。 */
-function WebPdf(props: PdfSurfaceProps) {
+function WebPdf(props: WebPdfProps) {
   effect(() => {
     const request = { fileId: props.fileId, page: props.page, hidden: props.hidden };
     untracked(() => {
@@ -37,16 +41,10 @@ function WebPdf(props: PdfSurfaceProps) {
 }
 
 export function PdfSurface(props: PdfSurfaceProps) {
-  if (platform.os === "web") return (
-      <WebPdf
-        fileId={props.fileId}
-        page={props.page}
-        hidden={props.hidden}
-        onLoaded={props.onLoaded}
-        onFailed={props.onFailed}
-        onPageChanged={props.onPageChanged}
-      />
-    );
+  if (platform.os === "web") {
+    return <WebPdf fileId={props.fileId} page={props.page} hidden={props.hidden} onLoaded={props.onLoaded} onFailed={props.onFailed} />;
+  }
+  props.onAttach();
   return (
     <NativePdf
       testID="pdf-native"
