@@ -7,6 +7,8 @@ import {
   current,
   documentFailed,
   documentLoaded,
+  exporting,
+  exportPdf,
   loadError,
   nativePageChanged,
   opening,
@@ -25,6 +27,8 @@ import { Banner, Button, Empty, Icon, IconButton, Spinner } from "../ui";
 import { PdfSurface } from "./PdfSurface";
 
 const desktop = platform.desktop;
+/** 导出要宿主逐页写 PDF, 只有 App 宿主有; 浏览器里拼 PDF 没有低成本的办法, 网页版不提供。 */
+const canExport = platform.os !== "web";
 
 /** 当前译文图片的加载结果, 按 URL 记: 翻到别的页后不沿用上一页的状态。 */
 const translated = signal<{ readonly url: string; readonly result: "ok" | "error" } | null>(null);
@@ -67,6 +71,9 @@ export function ReaderPage() {
         </View>
         <If when={pdf() !== null && pages().length > 0}>
           <Button label="翻译全部" size="sm" variant="secondary" testID="reader-translate-all" onPress={translateAll} />
+        </If>
+        <If when={canExport && pages().some((p) => p.translation === "done")}>
+          <Button label="导出" size="sm" variant="secondary" icon="download" testID="reader-export" loading={exporting()} onPress={() => void exportPdf()} />
         </If>
         <If when={pdf() !== null}>
           <Button label="换一个" size="sm" variant="secondary" icon="doc" testID="reader-open" loading={opening()} onPress={() => void pickPdf()} />

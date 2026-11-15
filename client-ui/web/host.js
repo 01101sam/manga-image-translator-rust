@@ -488,6 +488,11 @@ export async function createHost(player) {
           return saveArtifact(args);
         case "pdf.pick":
           return hasDom ? pickPdf() : { file: null };
+        case "pdf.open":
+          // 网页的 PDF 是 File 对象和 object URL, 刷新页面就没了, 没有可以找回的东西。
+          return { file: null };
+        case "pdf.export":
+          throw new Error("网页版不支持导出 PDF, 请用 App");
         case "pdf.renderPage":
           return renderPageToFile(args);
         case "pdf.show":

@@ -122,12 +122,17 @@ enum PdfRenderer {
         return (max(1, Int((page.width * scale).rounded())), max(1, Int((page.height * scale).rounded())))
     }
 
+    static func open(_ url: URL) throws -> CGPDFDocument {
+        guard let document = CGPDFDocument(url as CFURL) else { throw HostCallError("打不开这个 PDF") }
+        if document.isEncrypted, !document.isUnlocked, !document.unlockWithPassword("") {
+            throw HostCallError("这个 PDF 有密码, 暂不支持")
+        }
+        return document
+    }
+
     static func render(document url: URL, page index: Int, longEdge: Int, to output: URL) throws {
         try autoreleasepool {
-            guard let document = CGPDFDocument(url as CFURL) else { throw HostCallError("打不开这个 PDF") }
-            if document.isEncrypted, !document.isUnlocked, !document.unlockWithPassword("") {
-                throw HostCallError("这个 PDF 有密码, 暂不支持")
-            }
+            let document = try open(url)
             guard index >= 0, index < document.numberOfPages, let page = document.page(at: index + 1) else {
                 throw HostCallError("页码超出范围: 第 \(index + 1) 页, 共 \(document.numberOfPages) 页")
             }
@@ -152,5 +157,100 @@ enum PdfRenderer {
             CGImageDestinationAddImage(destination, image, nil)
             guard CGImageDestinationFinalize(destination) else { throw HostCallError("写 PNG 失败") }
         }
+    }
+}
+/// pdf.export: 译文页和没翻译的原页按页序拼成一个新 PDF (HOST_PROTOCOL.md 的 pdf.export)。
+/// 逐页处理: 一页的译文图下载到临时文件、降采样、画进 PDF 页、删掉, 才轮到下一页, 同一时刻最多一页的位图在内存里。
+enum PdfExporter {
+    /// 译文图降采样到页面点尺寸的这么多倍: 2 倍在 iPad 上放大看仍清晰, 文件大小按它的平方增长。
+    static let pixelsPerPoint: CGFloat = 2
+    static let jpegQuality: CGFloat = 0.85
+
+    struct Outcome: Equatable, Sendable {
+        /// 用了译文图的页数。
+        var translated = 0
+        /// 给了译文地址、但取不到或不是图片 (比如 Daemon 重启后 Artifact 没了) 而退回原页的页数。
+        var missing = 0
+    }
+
+    /// artifact 对页码 (从 0 起) 返回译文图的本地文件, 返回 nil 表示这页用原页, 抛错表示这页的译文取不到 (记入 missing, 也用原页)。
+    /// release 在这一页用完后调用, 由调用方删临时文件。
+    static func compose(
+        source: URL, output: URL,
+        artifact: (Int) async throws -> URL?,
+        release: (URL) -> Void = { _ in }
+    ) async throws -> Outcome {
+        let document = try PdfRenderer.open(source)
+        var firstBox = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let context = CGContext(output as CFURL, mediaBox: &firstBox, nil) else { throw HostCallError("写不出 PDF") }
+        var outcome = Outcome()
+        for index in 0..<document.numberOfPages {
+            guard let page = document.page(at: index + 1) else { throw HostCallError("读不出第 \(index + 1) 页") }
+            var file: URL?
+            var asked = false
+            do {
+                file = try await artifact(index)
+                asked = file != nil
+            } catch {
+                outcome.missing += 1
+            }
+            if appendPage(page, translated: file, to: context) {
+                outcome.translated += 1
+            } else if asked {
+                outcome.missing += 1
+            }
+            if let file { release(file) }
+        }
+        context.closePDF()
+        return outcome
+    }
+
+    /// 写一页。有译文图且读得出就画译文图, 否则画原页 (保留矢量)。返回是否用了译文图。
+    private static func appendPage(_ page: CGPDFPage, translated file: URL?, to context: CGContext) -> Bool {
+        autoreleasepool {
+            let size = PdfRenderer.displaySize(of: page)
+            var box = CGRect(origin: .zero, size: size)
+            context.beginPDFPage([kCGPDFContextMediaBox as String: Data(bytes: &box, count: MemoryLayout<CGRect>.size)] as CFDictionary)
+            defer { context.endPDFPage() }
+            if let file, let image = downsampledJPEG(at: file, maxPixel: Int((max(size.width, size.height) * pixelsPerPoint).rounded())) {
+                context.draw(image, in: fit(CGSize(width: image.width, height: image.height), in: box))
+                return true
+            }
+            context.saveGState()
+            context.concatenate(page.getDrawingTransform(.cropBox, rect: box, rotate: 0, preserveAspectRatio: true))
+            context.drawPDFPage(page)
+            context.restoreGState()
+            return false
+        }
+    }
+
+    static func fit(_ content: CGSize, in box: CGRect) -> CGRect {
+        guard content.width > 0, content.height > 0 else { return box }
+        let scale = min(box.width / content.width, box.height / content.height)
+        let size = CGSize(width: content.width * scale, height: content.height * scale)
+        return CGRect(x: box.midX - size.width / 2, y: box.midY - size.height / 2, width: size.width, height: size.height)
+    }
+
+    /// 读出降采样后的位图, 再编成 JPEG 并作为 JPEG 数据源的图返回: CoreGraphics 对这种图把 DCT 流原样嵌进 PDF,
+    /// 比 Flate 压缩的位图小得多, 也不会在写完整个文件前一直留着每页的位图。图读不出来时返回 nil。
+    static func downsampledJPEG(at url: URL, maxPixel: Int) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(maxPixel, 1),
+        ]
+        guard let bitmap = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else { return bitmap }
+        CGImageDestinationAddImage(destination, bitmap, [
+            kCGImageDestinationLossyCompressionQuality: jpegQuality,
+            kCGImageDestinationBackgroundColor: CGColor(red: 1, green: 1, blue: 1, alpha: 1),
+        ] as CFDictionary)
+        guard CGImageDestinationFinalize(destination), let provider = CGDataProvider(data: data as CFData),
+              let jpeg = CGImage(jpegDataProviderSource: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+        else { return bitmap }
+        return jpeg
     }
 }

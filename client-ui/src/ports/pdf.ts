@@ -26,6 +26,18 @@ const NO_TIMEOUT = { timeout: 0 } as const;
 /** 渲染一页大图在慢设备上可能超过 30 秒。 */
 const RENDER_TIMEOUT = { timeout: 120_000 } as const;
 
+/** 导出 PDF 时要换成译文的一页: 页码从 0 起, artifactUrl 是 Daemon 上这个 Job 译文的原始文件地址 (带 token)。 */
+export interface PdfExportPage {
+  readonly page: number;
+  readonly artifactUrl: string;
+}
+
+/** translated 页用了译文, missing 页给了地址却取不到 (Daemon 重启后译文没了), 那几页用的是原页。 */
+export interface PdfExportResult {
+  readonly translated: number;
+  readonly missing: number;
+}
+
 export interface PdfShow {
   readonly fileId: string;
   readonly page: number;
@@ -38,6 +50,10 @@ export interface PdfShow {
  */
 export interface PdfPort {
   pick(): Promise<PdfFile | null>;
+  /** 重新打开宿主还留着的 PDF (重启后恢复上次的阅读); 宿主已经没有它时为 null。 */
+  open(fileId: string): Promise<PdfFile | null>;
+  /** 译文页换进原 PDF 拼成新 PDF 再交给系统分享。只有 App 宿主有; Web 宿主 reject。 */
+  export(fileId: string, pages: readonly PdfExportPage[]): Promise<PdfExportResult>;
   release(fileId: string): void;
   renderPage(fileId: string, page: number, longEdge: number): Promise<LocalFile>;
   show(request: PdfShow): Promise<number | null>;
@@ -50,6 +66,16 @@ export function createPdfPort(): PdfPort {
     pick: async () => {
       const answer = await host.call("pdf.pick", undefined, NO_TIMEOUT);
       return isRecord(answer) ? parsePdfFile(answer.file) : null;
+    },
+    open: async (fileId) => {
+      const answer = await host.call("pdf.open", { fileId });
+      return isRecord(answer) ? parsePdfFile(answer.file) : null;
+    },
+    export: async (fileId, pages) => {
+      // 逐页下载译文再写 PDF, 页多时要很久。
+      const answer = await host.call("pdf.export", { fileId, pages }, NO_TIMEOUT);
+      const count = (key: string) => (isRecord(answer) && typeof answer[key] === "number" ? (answer[key] as number) : 0);
+      return { translated: count("translated"), missing: count("missing") };
     },
     release: (fileId) => host.post("pdf.release", { fileId }),
     renderPage: async (fileId, page, longEdge) => {

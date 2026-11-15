@@ -30,7 +30,7 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | `Host/HostPickers.swift` | 照片 (PHPicker)、文件、文件夹三种选择器, iPad 与 visionOS 用居中的 popover |
 | `Host/HostUpload.swift` | `upload.start`: multipart 先分块写进临时文件, 再 `URLSession.upload(fromFile:)`, 字节不进 JS 也不在内存里拼 `Data` |
 | `Host/HostArtifact.swift` | `artifact.save`: 下载到临时文件, 弹系统分享面板 |
-| `Host/HostPdf.swift` | 原生组件 `it.pdf` (PDFView, 单页, 只渲染当前页) 和 `pdf.renderPage` (CGContext 画到长边, 直接写 PNG 文件) |
+| `Host/HostPdf.swift` | 原生组件 `it.pdf` (PDFView, 单页, 只渲染当前页)、`pdf.renderPage` (CGContext 画到长边, 直接写 PNG 文件) 和 `pdf.export` (译文页换进原 PDF, 逐页下载逐页写) |
 
 旧的 SwiftUI 界面 (`RootView`、`JobListView`、`PDFReaderView`、`AppSession` 等) 还留在 target 里但不再被引用, 步骤 7 删除。
 

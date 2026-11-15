@@ -28,7 +28,7 @@ enum ArtifactSaver {
             throw HostCallError("下载失败: HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)")
         }
         let name = ManagedFiles.safeFileName(filename, fallback: "image")
-        let target = files.scratchFile(named: "\(name).\(fileExtension(forContentType: http.value(forHTTPHeaderField: "Content-Type")))")
+        let target = files.sharedFile(named: "\(name).\(fileExtension(forContentType: http.value(forHTTPHeaderField: "Content-Type")))")
         try FileManager.default.moveItem(at: temporary, to: target)
         return target
     }
@@ -36,7 +36,8 @@ enum ArtifactSaver {
     @MainActor
     static func present(_ file: URL, from host: UIViewController) {
         let sheet = UIActivityViewController(activityItems: [file], applicationActivities: nil)
-        sheet.completionWithItemsHandler = { _, _, _, _ in try? FileManager.default.removeItem(at: file) }
+        // 文件在 sharedFile 给的独立子目录里, 连目录一起删。
+        sheet.completionWithItemsHandler = { _, _, _, _ in try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
         if let popover = sheet.popoverPresentationController {
             popover.sourceView = host.view
             popover.sourceRect = CGRect(x: host.view.bounds.midX, y: host.view.bounds.midY, width: 0, height: 0)

@@ -143,7 +143,7 @@ NativeShell.xcframework 的默认运行时只注册 `nsh/base` 的 **core** 部�
 
 ## PDF 阅读器
 
-Server 不接触 PDF, 来源只有用户本地文件。App 宿主把 PDF 存进沙盒, Web 的 `web/host.js` 把浏览器的 `File` 管成 object URL。分区路由 `reader` 承载阅读器; `pdf.*` 前缀已在 `capabilities.host` 里授权。
+Server 不接触 PDF, 来源只有用户本地文件。App 宿主把 PDF 存进沙盒, Web 的 `web/host.js` 把浏览器的 `File` 管成 object URL。分区路由 `reader` 承载阅读器; `pdf.*` 前缀已在 `capabilities.host` 里授权 (`pdf.open` 与 `pdf.export` 也在其中)。
 
 ### `pdf.pick`
 
@@ -155,6 +155,38 @@ Server 不接触 PDF, 来源只有用户本地文件。App 宿主把 PDF 存进�
 
 - App: 复制到 `Application Support/…/pdfs/<uuid>.pdf` (不放 tmp), `id` 就是这个 uuid, 重启后仍能解析; 只有 `pdf.release` 或超过 30 天没有被打开才会删。`pageCount` 由宿主读出; Web 同形返回, 读不到时省略。TSX 以组件的 `loaded` 事件为准。
 - 拖放进来的 PDF 不走 `files.added` (那里只有图片), 而是事件 `pdf.added`, 载荷是上面 `file` 的数组。一次拖放里既有图片又有 PDF 时, 两个事件各发一次。
+
+### `pdf.open`
+
+重启后恢复上次打开的 PDF: TSX 在 NSH Storage 里记着上次的 `fileId` 和页码 (键 `reader.last`), 启动时用它问宿主文件还在不在。
+
+```jsonc
+// 参数
+{ "fileId": "…" }
+// 返回; 宿主已经没有这个文件时 file 为 null, TSX 随即忘掉这条记录
+{ "file": { "id": "…", "name": "book.pdf", "size": 1234567, "type": "application/pdf", "pageCount": 120 } }
+```
+
+- App: PDF 在 `Application Support/…/pdfs` 里留 30 天 (每次打开刷新), 所以重启后通常还在; 只恢复文档和页码, 各页的翻译进度属于 Daemon 的 Job, 不恢复。
+- Web: 恒为 `{ "file": null }` (object URL 刷新页面就失效)。
+
+### `pdf.export`
+
+把已翻译的页换进原 PDF, 拼成新 PDF 再交给系统分享面板。只有 App 宿主实现; Web 宿主 reject 一句「网页版不支持导出 PDF」, TSX 在网页上不显示导出按钮。
+
+```jsonc
+// 参数 (TSX 以 timeout: 0 调用: 逐页下载译文, 页多时要很久)
+{
+  "fileId": "…",
+  "pages": [{ "page": 1, "artifactUrl": "http://…/jobs/{id}/artifact?token=…" }]   // 页码从 0 起; 没列出的页用原页
+}
+// 返回 (用户关掉分享面板之前就返回)
+{ "translated": 3, "missing": 0 }
+```
+
+- 宿主在后台线程**逐页**处理: 下载这一页的译文到临时文件、用 ImageIO 降采样到页面点尺寸的 2 倍 (JPEG 编码后嵌入, 文件小)、写进输出 PDF、删临时文件, 再处理下一页, 不同时持有多页位图。没列出的页把原页 (矢量) 原样画进去, 页面框取原页的显示尺寸。
+- `missing` 是给了地址却取不到或不是图片的页数 (比如 Daemon 重启后 Artifact 没了), 这几页用原页; TSX 据此提示。
+- `fileId` 不存在、PDF 有密码、写文件失败时 reject。输出文件名 `<原名>-translated.pdf`, 分享面板关闭后宿主删掉它。
 
 ### `pdf.release` (post, 无返回)
 
