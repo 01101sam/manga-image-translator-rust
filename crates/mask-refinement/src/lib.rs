@@ -12,9 +12,10 @@ use opencv::{
     core::{
         bitwise_and, no_array, Mat, MatTraitConst, Point, Scalar, Vector, BORDER_CONSTANT, CV_8UC1,
     },
+    geometry::bounding_rect,
     imgproc::{
-        bounding_rect, dilate, draw_contours, find_contours, morphology_default_border_value,
-        rectangle, CHAIN_APPROX_SIMPLE, LINE_8, RETR_EXTERNAL,
+        dilate, draw_contours, find_contours, morphology_default_border_value, rectangle,
+        CHAIN_APPROX_SIMPLE, LINE_8, RETR_EXTERNAL,
     },
 };
 use schemars::JsonSchema;

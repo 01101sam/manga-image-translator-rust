@@ -32,7 +32,7 @@ maplit = "1.0.2"
 base-util = { path = "crates/base-util" }
 anyhow = "1.0"
 util = { path = "crates/util" }
-opencv = { version = "0.95", default-features = false }
+opencv = { version = "0.102", default-features = false }
 fast_image_resize = "5.3"
 tokio = "1.47"
 env_logger = "0.11.8"

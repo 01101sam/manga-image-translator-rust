@@ -12,11 +12,11 @@ use interface_image::{DimType, Mask, RawImage};
 mod layout;
 use layout::{BubbleFrame, fit_font_px, layout, rasterize_placed, shrink_isotropic};
 use opencv::{
-    calib3d::{find_homography, RANSAC},
     core::{
-        no_array, Mat, MatTraitManual as _, Point, Point2f, Scalar, Size, Vector,
+        no_array, AlgorithmHint, Mat, MatTraitManual as _, Point, Point2f, Scalar, Size, Vector,
         BORDER_CONSTANT,
     },
+    geometry::{find_homography_1, RANSAC},
     imgproc::{self, warp_perspective, INTER_LINEAR},
 };
 use ordered_float::OrderedFloat;
@@ -476,7 +476,7 @@ fn warp_onto(dest: &mut RawImage, src: &RawImage, dst: [(i64, i64); 4]) -> anyho
         .into_iter()
         .map(|(x, y)| Point2f::new(x as f32, y as f32))
         .collect::<Vector<Point2f>>();
-    let mut m = find_homography(&src_pts, &dst_pts, &mut no_array(), RANSAC, 5.0)?;
+    let mut m = find_homography_1(&src_pts, &dst_pts, &mut no_array(), RANSAC, 5.0)?;
     let h = m.data_typed_mut::<f64>()?;
     let (x0, y0, x1, y1) = warp_roi(h, src, dest);
     if x1 <= x0 || y1 <= y0 {
@@ -497,6 +497,7 @@ fn warp_onto(dest: &mut RawImage, src: &RawImage, dst: [(i64, i64); 4]) -> anyho
         INTER_LINEAR,
         BORDER_CONSTANT,
         Scalar::all(0.0),
+        AlgorithmHint::ALGO_HINT_DEFAULT,
     )?;
     let warped = RawImage::try_from(warped)?;
     blend_warped(dest, &warped, x0, y0);
