@@ -1,0 +1,244 @@
+diff --git a/crates/nsh-base/src/rich_editor/commands/base.rs b/crates/nsh-base/src/rich_editor/commands/base.rs
+index d5470e8..25c37cf 100644
+--- a/crates/nsh-base/src/rich_editor/commands/base.rs
++++ b/crates/nsh-base/src/rich_editor/commands/base.rs
+@@ -1449,7 +1449,7 @@ pub fn base_keymap() -> Vec<(String, BoxCommand)> {
+ /// or in a browser the platform it runs on (a headless run says either),
+ /// or outside an engine the one this was built for.
+ pub(crate) fn apple() -> bool {
+-    nsh_core::prelude::try_apple_keys().unwrap_or(cfg!(any(target_os = "macos", target_os = "ios")))
++    nsh_core::prelude::try_apple_keys().unwrap_or(cfg!(any(target_os = "macos", any(target_os = "ios", target_os = "visionos"))))
+ }
+ 
+ #[cfg(test)]
+diff --git a/crates/nsh-core/src/image/loader.rs b/crates/nsh-core/src/image/loader.rs
+index 9f51f57..f2a86de 100644
+--- a/crates/nsh-core/src/image/loader.rs
++++ b/crates/nsh-core/src/image/loader.rs
+@@ -72,7 +72,7 @@ pub const FAILURE_TTL: Duration = Duration::from_secs(30);
+ 
+ /// The encoded bytes kept in memory (L3) by default; an app sets its own
+ /// with [`Loader::set_encoded_limit`].
+-pub const ENCODED_BYTES: usize = if cfg!(any(target_os = "ios", target_os = "android")) {
++pub const ENCODED_BYTES: usize = if cfg!(any(any(target_os = "ios", target_os = "visionos"), target_os = "android")) {
+     16 << 20
+ } else {
+     32 << 20
+diff --git a/crates/nsh-core/src/image/memory.rs b/crates/nsh-core/src/image/memory.rs
+index ab60add..8141733 100644
+--- a/crates/nsh-core/src/image/memory.rs
++++ b/crates/nsh-core/src/image/memory.rs
+@@ -73,7 +73,7 @@ pub fn budget() -> &'static Arc<Budget> {
+ /// The budget of decoded images by default: on desktops a sixteenth of the
+ /// memory, at most 256 MiB; on phones an eighth, at most 128 MiB.
+ pub fn default_budget() -> usize {
+-    let (share, cap): (u64, u64) = if cfg!(any(target_os = "ios", target_os = "android")) {
++    let (share, cap): (u64, u64) = if cfg!(any(any(target_os = "ios", target_os = "visionos"), target_os = "android")) {
+         (8, 128 << 20)
+     } else {
+         (16, 256 << 20)
+@@ -91,7 +91,7 @@ fn physical_memory() -> Option<u64> {
+         let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+         Some(kib * 1024)
+     }
+-    #[cfg(any(target_os = "macos", target_os = "ios"))]
++    #[cfg(any(target_os = "macos", any(target_os = "ios", target_os = "visionos")))]
+     {
+         let mut bytes: u64 = 0;
+         let mut len = std::mem::size_of::<u64>();
+@@ -122,7 +122,7 @@ fn physical_memory() -> Option<u64> {
+         target_os = "linux",
+         target_os = "android",
+         target_os = "macos",
+-        target_os = "ios",
++        any(target_os = "ios", target_os = "visionos"),
+         windows
+     )))]
+     {
+diff --git a/crates/nsh-core/src/svg/mod.rs b/crates/nsh-core/src/svg/mod.rs
+index 35417b6..49caa78 100644
+--- a/crates/nsh-core/src/svg/mod.rs
++++ b/crates/nsh-core/src/svg/mod.rs
+@@ -225,7 +225,7 @@ static SYSTEM_FONTS: std::sync::LazyLock<std::sync::Arc<usvg::fontdb::Database>>
+         // does not build on Android or iOS).
+         #[cfg(target_os = "android")]
+         fontdb.load_fonts_dir("/system/fonts");
+-        #[cfg(target_os = "ios")]
++        #[cfg(any(target_os = "ios", target_os = "visionos"))]
+         {
+             fontdb.load_fonts_dir("/System/Library/Fonts");
+             fontdb.load_fonts_dir("/Library/Fonts");
+diff --git a/crates/nsh-engine/src/storage.rs b/crates/nsh-engine/src/storage.rs
+index 75b0bfd..ceef4b7 100644
+--- a/crates/nsh-engine/src/storage.rs
++++ b/crates/nsh-engine/src/storage.rs
+@@ -77,7 +77,7 @@ fn data_dir_in(os: &str, env: impl Fn(&str) -> Option<PathBuf>) -> Option<PathBu
+     let env = |name| env(name).filter(|v| !v.as_os_str().is_empty());
+     match os {
+         "android" => None,
+-        "macos" | "ios" => env("HOME").map(|home| home.join("Library/Application Support")),
++        "macos" | "ios" | "visionos" => env("HOME").map(|home| home.join("Library/Application Support")),
+         "windows" => env("APPDATA"),
+         _ => env("XDG_DATA_HOME").or_else(|| env("HOME").map(|home| home.join(".local/share"))),
+     }
+@@ -99,7 +99,7 @@ fn cache_dir_in(os: &str, env: impl Fn(&str) -> Option<PathBuf>) -> Option<PathB
+     let env = |name| env(name).filter(|v| !v.as_os_str().is_empty());
+     match os {
+         "android" => None,
+-        "macos" | "ios" => env("HOME").map(|home| home.join("Library/Caches")),
++        "macos" | "ios" | "visionos" => env("HOME").map(|home| home.join("Library/Caches")),
+         "windows" => env("LOCALAPPDATA"),
+         _ => env("XDG_CACHE_HOME").or_else(|| env("HOME").map(|home| home.join(".cache"))),
+     }
+diff --git a/crates/nsh-macros/src/native_components.rs b/crates/nsh-macros/src/native_components.rs
+index f19b53a..8a80536 100644
+--- a/crates/nsh-macros/src/native_components.rs
++++ b/crates/nsh-macros/src/native_components.rs
+@@ -18,7 +18,7 @@ const PLATFORMS: &[(&str, &str)] = &[
+     ("windows", "target_os = \"windows\""),
+     ("macos", "target_os = \"macos\""),
+     ("linux", "target_os = \"linux\""),
+-    ("ios", "target_os = \"ios\""),
++    ("ios", "any(target_os = \"ios\", target_os = \"visionos\")"),
+ ];
+ 
+ pub(crate) fn expand(platform: Ident, item: ItemFn) -> syn::Result<TokenStream2> {
+diff --git a/crates/nsh-platform-apple/Cargo.toml b/crates/nsh-platform-apple/Cargo.toml
+index 75b71ce..155e1ae 100644
+--- a/crates/nsh-platform-apple/Cargo.toml
++++ b/crates/nsh-platform-apple/Cargo.toml
+@@ -17,7 +17,7 @@ workspace = true
+ cc.workspace = true
+ 
+ # Empty off Apple platforms (like the platform crates off their targets).
+-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
++[target.'cfg(any(target_os = "macos", any(target_os = "ios", target_os = "visionos")))'.dependencies]
+ libc.workspace = true
+ log.workspace = true
+ nsh-core.workspace = true
+@@ -34,5 +34,5 @@ serde_json.workspace = true
+ [target.'cfg(target_os = "macos")'.dependencies]
+ objc2-app-kit.workspace = true
+ 
+-[target.'cfg(target_os = "ios")'.dependencies]
++[target.'cfg(any(target_os = "ios", target_os = "visionos"))'.dependencies]
+ objc2-ui-kit.workspace = true
+diff --git a/crates/nsh-platform-apple/build.rs b/crates/nsh-platform-apple/build.rs
+index 52c1ed9..adcc497 100644
+--- a/crates/nsh-platform-apple/build.rs
++++ b/crates/nsh-platform-apple/build.rs
+@@ -5,7 +5,7 @@
+ fn main() {
+     println!("cargo:rerun-if-changed=src/os_log.c");
+     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+-    if os == "macos" || os == "ios" {
++    if os == "macos" || os == "ios" || os == "visionos" {
+         cc::Build::new()
+             .file("src/os_log.c")
+             // Mac Catalyst's flags carry the iOSSupport library path, which
+diff --git a/crates/nsh-platform-apple/src/audio.rs b/crates/nsh-platform-apple/src/audio.rs
+index f445eba..cfc69a3 100644
+--- a/crates/nsh-platform-apple/src/audio.rs
++++ b/crates/nsh-platform-apple/src/audio.rs
+@@ -493,7 +493,7 @@ impl Voice {
+ 
+ /// On iOS, the audio session plays sound as `ambient` (once).
+ fn session() {
+-    #[cfg(target_os = "ios")]
++    #[cfg(any(target_os = "ios", target_os = "visionos"))]
+     {
+         static SET: OnceLock<()> = OnceLock::new();
+         SET.get_or_init(|| {
+diff --git a/crates/nsh-platform-apple/src/lib.rs b/crates/nsh-platform-apple/src/lib.rs
+index a85add8..f6c5886 100644
+--- a/crates/nsh-platform-apple/src/lib.rs
++++ b/crates/nsh-platform-apple/src/lib.rs
+@@ -2,7 +2,7 @@
+ //! release runners: `unified_log`): both build on the same Apple frameworks
+ //! for these. A crate of its own so each backend builds from its published
+ //! package (a `#[path]` into a sibling crate does not ship with it).
+-#![cfg(any(target_os = "macos", target_os = "ios"))]
++#![cfg(any(target_os = "macos", any(target_os = "ios", target_os = "visionos")))]
+ 
+ pub mod audio;
+ pub mod canvas_image;
+diff --git a/crates/nsh-platform-apple/src/notifications.rs b/crates/nsh-platform-apple/src/notifications.rs
+index 760871e..04f15e3 100644
+--- a/crates/nsh-platform-apple/src/notifications.rs
++++ b/crates/nsh-platform-apple/src/notifications.rs
+@@ -63,12 +63,12 @@ thread_local! {
+     /// The delegate; the center does not retain it.
+     static DELEGATE: RefCell<Option<Retained<Delegate>>> = const { RefCell::new(None) };
+     /// The process's notifications are the app's ([`enable`]).
+-    static ENABLED: Cell<bool> = const { Cell::new(cfg!(target_os = "ios")) };
++    static ENABLED: Cell<bool> = const { Cell::new(cfg!(any(target_os = "ios", target_os = "visionos"))) };
+ }
+ 
+ /// Makes the process's notifications the app's and becomes the notification
+ /// center's delegate ([`install`]). On the main thread.
+-#[cfg_attr(target_os = "ios", allow(dead_code))]
++#[cfg_attr(any(target_os = "ios", target_os = "visionos"), allow(dead_code))]
+ pub fn enable() {
+     ENABLED.set(true);
+     install();
+diff --git a/crates/nsh-platform-apple/src/speech.rs b/crates/nsh-platform-apple/src/speech.rs
+index 68acb22..68d1ad0 100644
+--- a/crates/nsh-platform-apple/src/speech.rs
++++ b/crates/nsh-platform-apple/src/speech.rs
+@@ -567,7 +567,7 @@ fn usage_described() -> bool {
+ 
+ /// Activates the app's audio session for recording (iOS), or deactivates
+ /// it, letting other apps' audio go on.
+-#[cfg(target_os = "ios")]
++#[cfg(any(target_os = "ios", target_os = "visionos"))]
+ fn audio_session(active: bool) {
+     let Some(class) = AnyClass::get(c"AVAudioSession") else {
+         return;
+@@ -600,7 +600,7 @@ fn audio_session(active: bool) {
+ }
+ 
+ /// macOS has no audio session: the microphone is the app's to open.
+-#[cfg(not(target_os = "ios"))]
++#[cfg(not(any(target_os = "ios", target_os = "visionos")))]
+ fn audio_session(_active: bool) {}
+ 
+ #[cfg(test)]
+diff --git a/crates/nsh-platform-ios/Cargo.toml b/crates/nsh-platform-ios/Cargo.toml
+index c474f5e..eb3c5d4 100644
+--- a/crates/nsh-platform-ios/Cargo.toml
++++ b/crates/nsh-platform-ios/Cargo.toml
+@@ -68,7 +68,7 @@ nsh-dev = { workspace = true, features = ["client"], optional = true }
+ nsh-testing = { workspace = true, features = ["agent"], optional = true }
+ 
+ # UIKit exists on iOS, the iOS simulator and Mac Catalyst (all `target_os = "ios"`).
+-[target.'cfg(target_os = "ios")'.dependencies]
++[target.'cfg(any(target_os = "ios", target_os = "visionos"))'.dependencies]
+ tokio.workspace = true
+ nsh-platform-apple.workspace = true
+ dispatch2.workspace = true
+diff --git a/crates/nsh-platform-ios/src/lib.rs b/crates/nsh-platform-ios/src/lib.rs
+index 7a48c9e..81f57b7 100644
+--- a/crates/nsh-platform-ios/src/lib.rs
++++ b/crates/nsh-platform-ios/src/lib.rs
+@@ -54,7 +54,7 @@
+ //! no auto-repeat, so `repeat` is false; an app that wants repeats starts
+ //! its own timer from the press.
+ 
+-#![cfg(target_os = "ios")]
++#![cfg(any(target_os = "ios", target_os = "visionos"))]
+ 
+ #[cfg(feature = "dev")]
+ mod agent;
+diff --git a/crates/nsh-updater/src/lib.rs b/crates/nsh-updater/src/lib.rs
+index 6396dd0..091d763 100644
+--- a/crates/nsh-updater/src/lib.rs
++++ b/crates/nsh-updater/src/lib.rs
+@@ -386,6 +386,8 @@ pub fn platform() -> String {
+     let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+     match os {
+         "android" | "ios" => os.to_owned(),
++        // visionOS 与 iOS 共用一份发布清单里的 ios 条目。
++        "visionos" => "ios".to_owned(),
+         _ => format!("{os}-{arch}"),
+     }
+ }
