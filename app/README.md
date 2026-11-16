@@ -26,7 +26,7 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | `Host/NshHostViewController.swift` | 持有 `NshAppView`, 注册 HOST_PROTOCOL 的全部调用, 接 `UIDropInteraction`; bundle 加载失败或 JS 虚拟机报错时显示错误和「重新载入」 |
 | `Host/HostSession.swift` | `session.*`: Bonjour 发现的 Daemon 加 Keychain 里的 Token, Token 永久保存 |
 | `Host/HostFiles.swift` | `ManagedFiles`: 文件 id 到沙盒文件。图片在 tmp, 启动时整个清掉; PDF 在 Application Support, id 是文件名里的 uuid, 超过 30 天没打开才在启动时清掉 (`pdf.open` 凭上次的 id 找回); 交给分享面板的文件放在各自的子目录里, 面板上显示的是干净的文件名 |
-| `Host/HostIngest.swift` | 拖放和选择的文件进沙盒。每个 `NSItemProvider` 只读一种表示, 一次只读一个, 目录递归并按自然序排; 只带一个网页链接的拖放会下载, 按应答类型或文件头判断是图片还是 PDF |
+| `Host/HostIngest.swift` | 拖放和选择的文件进沙盒。每个 `NSItemProvider` 只读一种表示, 一次只读一个, 目录递归并按自然序排; 只带一个网页链接的拖放会下载, 按应答类型或文件头判断是图片还是 PDF (`Info.plist` 只开了 `NSAllowsLocalNetworking`, 所以 http 链接只有局域网地址能下载, https 不受限) |
 | `Host/HostPickers.swift` | 照片 (PHPicker)、文件、文件夹三种选择器, iPad 与 visionOS 用居中的 popover |
 | `Host/HostUpload.swift` | `upload.start`: multipart 先分块写进临时文件, 再 `URLSession.upload(fromFile:)`, 字节不进 JS 也不在内存里拼 `Data` |
 | `Host/HostArtifact.swift` | `artifact.save`: 下载到临时文件, 弹系统分享面板 |
@@ -39,7 +39,8 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 - 图片字节不进 JS (嵌入式 NSH 的 JS 堆上限 256 MB); 列表和查看器显示 Daemon 降采样后的 JPEG (`?w=`)。
 - 上传、拖放、选择都走文件, 宿主不把图片读进内存。`NSItemProvider` 的文件表示由系统在回调里给一个临时文件, 宿主在回调里把它搬进沙盒。
 - NSH 的图片缓存在磁盘上限 256 MB。
-- 拖放摄入一次只读一个 provider。iPad 模拟器里用进程内 `NSItemProvider(contentsOf:)` 读 30 张 8000x12000 的 PNG (每张 37 MB): 并发 2 或 4 时 RSS 峰值 1.37 GB (4 次实测 1364 到 1374 MB), 并发 1 时 332、366、357 MB (3 次); 文件选择器的 URL 路径 (`FileManager.copyItem`, APFS 克隆) 是 295 MB。三种情况的 phys_footprint 都是 23 到 24 MB, 所以涨的是读过的文件页, 不是 jetsam 看的内存。`loadInPlaceFileRepresentation` 在并发 4 和 1 时的峰值与 `loadFileRepresentation` 一样, 没有采用。200 张 1.7 MB 的 JPEG 并发 1 和 4 的耗时都是 0.9 秒。真实跨应用拖放走系统的进程间拷贝, 没有测过, 并发 1 只是让进程内路径不虚高, 在跨进程路径上会不会慢是推测。
+- 拖放摄入一次只读一个 provider。iPad 模拟器里用进程内 `NSItemProvider(contentsOf:)` 读 30 张 8000x12000 的 PNG (每张 37 MB): 并发 2 或 4 时 RSS 峰值 1.37 GB (4 次实测 1364 到 1374 MB), 并发 1 时 332、366、357 MB (3 次); 文件选择器的 URL 路径 (`FileManager.copyItem`, APFS 克隆) 是 295 MB。三种情况的 phys_footprint 都是 23 到 24 MB, 所以 jetsam 看的内存没变。并发 2 时用 `vmmap` 看, 多出来的常驻内存在只读的系统库区域 (`__LINKEDIT` 约 778 MB、`__TEXT` 约 493 MB), 不在文件映射里 (`mapped file` 只有 11 MB 常驻), 所以机制没查清, 也只在模拟器里见过; `HostFilesTests.testProviderIngestOfBigFilesKeepsResidentMemoryNearOneFile` 断言的就是这个模拟器里的 RSS 现象。`loadInPlaceFileRepresentation` 在并发 4 和 1 时的峰值与 `loadFileRepresentation` 一样, 没有采用。200 张 1.7 MB 的 JPEG 并发 1 和 4 的耗时都是 0.9 秒。真实跨应用拖放走系统的进程间拷贝, 没有测过, 并发 1 在那条路径上会不会慢是推测。限流要罩住整个 `load`, 连类型判断也在内 (只限住读文件那一步时, 同样的测试 RSS 又涨回 240 MB); 所以网页链接的下载也占这一个名额, 一个慢链接会拖住后面的拖放和选择, 这是已知的限制。
+- PDF 导出 (`pdf.export`) 的内存随被拷贝的原页数线性增长, 没有上限。实测 (iPad 模拟器, 单元测试进程): 100 页、131 MB 的图片 PDF 换 10 页译文, 5 秒, 峰值 footprint 364 MB (起点 40 MB, 约每页 3 MB), 输出 118 MB; 24 页每页一张不同的 2400x3200 噪声译文图时 RSS +101 MB。CoreGraphics 的 PDF 上下文在 `closePDF` 之前一直持有已写页的资源。试过两种替代, 都没有更好, 所以保留最简单的写法: 每 20 页换一个上下文再用 PDFKit 合并, 写的时候 footprint 在 60 到 130 MB, 合并时峰值 429 MB; 用 PDFKit 整本换页, 峰值 350 MB。几百页以上的大图片 PDF 导出可能占到 GB 级, 这是已知的限制。手动复现: 设 `TEST_RUNNER_HOST_MANGA_PDF` 跑 `HostFilesTests.testExportOfARealImagePDFReportsItsMemory`。
 
 ## 测试钩子
 
