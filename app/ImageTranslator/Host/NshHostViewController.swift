@@ -26,6 +26,9 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
     private var appView: NshAppView?
     private var errorOverlay: UIStackView?
     private var autoHooksScheduled = false
+    /// TSX 挂好监听、来读 session.snapshot 之后才为真。在这之前宿主发的事件不会重放, 所以先攒着 (冷启动时收件箱的导入就是这样)。
+    private var tsxReady = false
+    private var heldEvents: [HostEvent] = []
     private var debugDragSource: DebugDragSource?
 
     init(hooks: TestHooks) {
@@ -45,6 +48,7 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.addInteraction(UIDropInteraction(delegate: self))
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
         if let path = hooks.seedPasteboard { Self.seedPasteboard(from: URL(fileURLWithPath: path)) }
         session.onDaemonsChanged = { [weak self] daemons in self?.appView?.send("session.daemons", daemons) }
         session.start(seed: hooks.browseDaemon)
@@ -60,6 +64,7 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
 
     /// 每次重新载入都换一个新的 NshAppView: JS 虚拟机出错停止后, 复用旧的视图没有保证。
     private func mountApp() {
+        tsxReady = false
         errorOverlay?.removeFromSuperview()
         errorOverlay = nil
         appView?.removeFromSuperview()
@@ -121,6 +126,37 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
         errorOverlay = stack
     }
 
+    // MARK: - 收件箱与事件
+
+    @objc private func appDidBecomeActive() {
+        drainInbox()
+    }
+
+    private func tsxBecameReady() {
+        guard !tsxReady else { return }
+        tsxReady = true
+        let held = heldEvents
+        heldEvents = []
+        for event in held { appView?.send(event.name, event.payload) }
+        drainInbox()
+    }
+
+    /// 启动和每次回到前台: 把分享扩展放进收件箱的文件搬进沙盒, 交给 TSX (图片进待上传并切到任务页, PDF 打开阅读器)。
+    private func drainInbox() {
+        guard tsxReady else { return }
+        Task {
+            deliver(await InboxDrainer.shared.drain(using: ingestor))
+        }
+    }
+
+    private func emit(_ events: [HostEvent]) {
+        guard tsxReady else {
+            heldEvents += events
+            return
+        }
+        for event in events { appView?.send(event.name, event.payload) }
+    }
+
     // MARK: - 宿主调用
 
     private func registerHandlers(on app: NshAppView) {
@@ -129,6 +165,7 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
             scheduleAutoHooks()
             var snapshot = session.snapshot()
             snapshot["imports"] = Self.imports
+            Task { self.tsxBecameReady() }
             return snapshot
         }
         app.handle("session.saveToken") { [weak self] data -> Any? in
@@ -233,7 +270,7 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
     private func paste() async -> [FileRef] {
         let result = await ingestor.ingest(pasteboard: .general, allowing: [.image, .pdf])
         let delivery = ImportDelivery(result)
-        if delivery.isEmpty { appView?.send("host.notice", ["text": "剪贴板里没有可以导入的图片或 PDF"]) }
+        if delivery.isEmpty { emit([HostEvent(name: "host.notice", payload: ["text": "剪贴板里没有可以导入的图片或 PDF"])]) }
         send(delivery)
         return trim(result.images, to: 200)
     }
@@ -265,7 +302,7 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
     /// 发 PDF 和提示; 图片走返回值 (files.pick) 或 deliver (其余入口)。多出来的 PDF 在这里放掉。
     private func send(_ delivery: ImportDelivery, includeImages: Bool = false) {
         delivery.droppedPDFs.forEach { files.releasePDF($0.id) }
-        for event in delivery.events(includeImages: includeImages) { appView?.send(event.name, event.payload) }
+        emit(delivery.events(includeImages: includeImages))
     }
 
     // MARK: - PDF

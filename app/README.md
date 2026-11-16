@@ -54,6 +54,7 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | `-paired-test H P TOKEN` | 内存里的已配对状态, 不碰 Keychain |
 | `-forget-pairing` | 启动时先清掉 Keychain 里的配对 |
 | `-pick-folder DIR` / `-pick-pdf FILE` | `files.pick` / `pdf.pick` 不弹选择器, 直接从这里取文件 |
+| `-inbox-dir DIR` | 分享扩展的收件箱换成这个目录 (不碰 App Group 容器里用户自己的东西), 里面按 `ShareInbox` 的格式放条目; UI 测试用 |
 | `-seed-pasteboard FILE\|DIR` | 启动时 App 自己把这个文件 (目录则取里面的图片和 PDF) 放进系统剪贴板; 是自己写的, 读的时候系统不弹「允许粘贴」, UI 测试靠它验证粘贴 |
 | `-auto-import-folder DIR` | TSX 起来后模拟一次拖放: 克隆文件, 包成 `NSItemProvider` 走真实的读取路径, 再发 `files.added`; 加 `-auto-import-urls` 改走文件选择器的 URL 路径 |
 | `-debug-drag-source DIR` | 窗口左下角放一个可拖的小方块, UI 测试用它发起真正的拖放 |
@@ -61,6 +62,17 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | `-bundle FILE.js` | 加载这个 bundle 而不是内置的。字节码 (`.nshc`) 只能从 App 自己的资源加载, 外部文件要用 `bundle.js` |
 
 `ImageTranslatorUITests/NshHostUITests.swift` 需要一个在跑的测试 Daemon (Engine 要是 running, 翻译用例才会完成), 用环境变量 `TEST_RUNNER_HOST_DAEMON_HOST`、`TEST_RUNNER_HOST_DAEMON_PORT`、`TEST_RUNNER_HOST_DAEMON_KEY`、`TEST_RUNNER_HOST_PICK_FOLDER` 传进来; 阅读器、配置页和分区切换的用例还要 `TEST_RUNNER_HOST_TOKEN` (先 `POST /pair` 取得) 和 `TEST_RUNNER_HOST_PICK_PDF`。Daemon 上可能留着之前的 Job, 用例按增量数, 不假设列表是空的。Bonjour 那个用例要先在 Mac 上 `dns-sd -R <名字> _imagetranslator._tcp local <端口>` 公布一个实例, 并设 `TEST_RUNNER_HOST_BONJOUR=1`。测试 Daemon 一律用独立的 HOME、TMPDIR 和端口, 并加 `--no-bonjour`。
+## 分享扩展与收件箱
+
+扩展只管把文件放进 App Group 的 `inbox/`, 其余都在 App 里 (`Host/HostInbox.swift` 的 `InboxDrainer`):
+
+- **何时搬:** App 启动和每次回到前台 (`didBecomeActive`)。TSX 还没读 `session.snapshot` 时 (冷启动) 先攒着事件, 读了之后补发 (见 HOST_PROTOCOL.md)。
+- **怎么搬:** 按条目名排序, 每个条目 `importSync(move: true)` 搬进沙盒 (同一个卷上是 rename), 图片走 `files.added` 进待上传并切到任务页, PDF 走 `pdf.added` 打开阅读器 (多个只开第一个, 其余宿主放掉并发 `host.notice`)。网页链接条目 (`link.weblink`) 走拖放链接的同一条下载路径。进程里只有一个 `InboxDrainer` (actor), 多个窗口不会同时搬同一个条目。
+- **幂等:** 条目只处理一次, 处理完或处理不了 (不是图片或 PDF) 整个目录都删。搬文件要么还在收件箱要么已在沙盒, 没有中间态; 搬完到删目录之间崩溃留下的是空目录, 下次直接删, 不会重复导入。`.staging/` 里超过一小时的是被杀掉的扩展留下的, 启动时删。
+- **没保证到的:** 进了沙盒的图片和拖放的一样, 待上传列表只在 TSX 的内存里, App 在上传前被系统杀掉, 这些图片就没了 (沙盒里的图片启动时清理)。所以「不丢」只到「从收件箱进沙盒」这一步。分享时还没配对也一样: 图片留在待上传, 配对后才上传。
+- **HEIC:** 分享给扩展的照片里, 扩展优先挑 PNG、JPEG、WebP 这类 Daemon 认的表示; 照片库只给 HEIC 时, Daemon 会拒绝这张图 (在列表里标红), 目前没有在宿主里转码。
+- **测试:** `ShareInboxTests`、`InboxDrainerTests` 是单测; `NshHostUITests` 里用 `-inbox-dir` 测冷启动和回前台的导入; 整条链 (照片 App 分享, 扩展, 收件箱, 打开 App) 的两个用例要 `xcrun simctl addmedia` 给模拟器放照片并设 `TEST_RUNNER_HOST_PHOTOS_SHARE=1`, 因为照片 App 的界面随系统版本变。
+
 ## 旧功能对照
 
 步骤 7 删除旧的 SwiftUI 界面前, 逐条对过旧版的 UI 测试和视图。「已补」是对照时发现新实现缺的, 当场补上; 「不再需要」写明原因。旧文件在 git 历史里, 删除它们的提交的上一个提交里能看到。
@@ -73,6 +85,7 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | 更换 Daemon、401 清 Token | 配置页「取消配对」(`changeDaemon`)、401 触发 `session.clearToken` | `app.test.tsx` 的 "a revoked Token…" 和 "forgetting the Daemon…" |
 | 添加图片: 相册、文件、文件夹 | TSX 的导入菜单 (`ImportMenu`) + `files.pick` 的 `source` + `Host/HostPickers.swift`; 文件夹含在「从文件」里, 递归并按自然序 | `HostFilesTests.testFolderIngest…`、`NshHostUITests.testPickedImagesUploadFinishAndOpenInViewer` (旧的 `testFolderBatchImport` 也并在这里)、`testImportMenuOpensListsTheHostsSourcesAndClosesOnATapOutside` |
 | 拖放文件、照片、PDF | `Host/HostIngest.swift`, 每个 provider 只读一种表示, 一次只读一个 | `HostFilesTests` 的 provider 摄入、类型过滤、限流用例、`NshHostUITests.testDraggingFilesOntoTheWindowAddsThem` (旧 `DropRoutingTests` 的路由判断随之换成 provider 的类型判断) |
+| 分享扩展 (旧版没有) | 新增: `ShareExtension/` 与 `Shared/ShareInbox.swift`, App 一侧是 `Host/HostInbox.swift` | `ShareInboxTests`、`InboxDrainerTests`、`NshHostUITests.testSharedImagesInTheInboxAreImportedAtLaunchAndAgainWhenTheAppComesBack`、`testAPhotoSharedFromPhotosShowsUpInTheAppAsAPendingUpload` |
 | 粘贴 (旧版没有) | 新增: 导入菜单的「粘贴」和 ⌘V → `files.paste` (`NshHostViewController.paste`), 剪贴板里的图片和 PDF 按文件表示读, 不解码; 内容来自别的 App 时系统会问一次「允许粘贴」 | `PasteboardIngestTests`、`NshHostUITests.testPasteFromTheMenuAndWithCommandVAddsTheClipboard`、`app.test.tsx` 的 import menu |
 | 拖放网页链接 (`testWebURLToImage`、`testWebURLToPDF`) | 已补: `HostIngest.loadWebLink` 下载后按应答类型或文件头分图片和 PDF | `HostFilesTests.testDroppedWebLinksAreDownloadedAndRoutedByWhatTheyAre`、`testWebType…` |
 | 导入结果横幅 | `host.notice` 事件, TSX 用 toast 显示「已忽略 N 个不是图片或 PDF 的文件」; 不再列出无法识别的类型标识 | `HostFilesTests.testProviderIngestIgnoresKindsTheCallerDidNotAllow` |

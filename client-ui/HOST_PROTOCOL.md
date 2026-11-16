@@ -13,7 +13,7 @@
 
 - 参数和返回值都是 JSON。调用成功 resolve 返回值; 失败时 reject, 消息是人读的中文或英文。
 - 名字只含 `A-Z a-z 0-9 _ . : -`。`nsh.json` 的 `capabilities.host` 授权 `session.*`、`files.*`、`upload.*`、`artifact.*`、`pdf.*`; 宿主新增别的前缀时要同步加。事件不需要授权。
-- 宿主**在 TSX 注册监听之前发的事件不会重放**。所以 TSX 启动时先挂监听, 再调用 `session.snapshot` 读初始状态; 宿主把初始状态放在 snapshot 里, 之后的变化才用事件推送。
+- 宿主**在 TSX 注册监听之前发的事件不会重放**。所以 TSX 启动时先挂监听, 再调用 `session.snapshot` 读初始状态; 宿主把初始状态放在 snapshot 里, 之后的变化才用事件推送。宿主因此把 `session.snapshot` 当作「监听已经挂好」的信号: 在它被调用之前要发的 `files.added`、`pdf.added`、`host.notice` (冷启动时从分享扩展的收件箱搬来的文件、「打开方式」带来的文件) 先攒着, 调用之后按原顺序补发; 界面重新载入时重新等这个信号。
 - `files.pick` 和 `upload.start` 由 TSX 以 `timeout: 0` 调用 (不限时): 用户可能在选择器里停很久, 大图上传可能很慢。其余调用用默认的 30 秒。
 - TSX 自己限制并发: 同时在途的 `upload.start` 不超过 3 个, 在途 Job (排队 + 翻译中 + 上传中) 不超过 Daemon 队列容量 64。宿主不需要再排队, 但也不要假设一次只会来一个。
 
