@@ -9,7 +9,7 @@ interface Scenario {
 }
 
 /** 打开应用: 宿主 (Swift / host.js) 由 handlers 扮演, Daemon 由 fake 扮演。 */
-async function launch({ daemon, picks = [], saved = false }: Scenario, extra: { platform?: "ios" | "web" } = {}) {
+async function launch({ daemon, picks = [], saved = false }: Scenario, extra: { platform?: "ios" | "web"; width?: number; height?: number } = {}) {
   const queue = [...picks];
   const handlers = {
     "session.snapshot": () => ({
@@ -338,5 +338,49 @@ describe("config", () => {
     await app.press("id:forget");
     await app.waitFor("id:pairing-key");
     expect(calls(app, "session.clearToken").length).toBe(1);
+  });
+});
+describe("grid on wide screens", () => {
+  async function withJobs(n: number, size: { width: number; height: number }) {
+    const daemon = createFakeDaemon({ finishPerPoll: 1000 });
+    const app = await launch({ daemon, saved: true, picks: [files(n)] }, { platform: "ios", ...size });
+    await app.waitFor("id:add-images");
+    await app.press("id:add-images");
+    await app.waitFor("text:/全部完成/", { timeout: 30_000 });
+    return app;
+  }
+
+  test("a phone-sized screen shows the list, an iPad-sized one a grid of the same jobs", async () => {
+    const phone = await withJobs(6, { width: 390, height: 844 });
+    expect(phone.shows("id:job-list")).toBe(true);
+    expect(phone.shows("id:job-grid")).toBe(false);
+    const ipad = await withJobs(6, { width: 1024, height: 768 });
+    expect(ipad.shows("id:job-grid")).toBe(true);
+    expect(ipad.shows("id:job-list")).toBe(false);
+    expect(ipad.count("id:job-row")).toBe(6);
+    expect(ipad.texts().filter((t) => t.startsWith("共 6 张")).length).toBe(1);
+  });
+
+  test("rotating a phone to landscape keeps the list, and an iPad turned into a narrow split view drops back to it", async () => {
+    const app = await withJobs(4, { width: 1024, height: 768 });
+    expect(app.shows("id:job-grid")).toBe(true);
+    await app.setViewport(430, 932);
+    await app.waitFor("id:job-list");
+    await app.setViewport(932, 430);
+    await app.wait(300);
+    expect(app.shows("id:job-list")).toBe(true);
+    await app.setViewport(1024, 768);
+    await app.waitFor("id:job-grid");
+  });
+
+  test("in the grid the arrows move a tile at a time and a row at a time, and Enter opens the highlighted one", async () => {
+    const app = await withJobs(10, { width: 1024, height: 768 });
+    await app.keyboard.press("down");
+    await app.keyboard.press("right");
+    await app.keyboard.press("down");
+    await app.keyboard.press("enter");
+    await app.waitFor("id:viewer");
+    // 4 列: 第一下选第 0 项 (没有高亮时向下选第一个), 右到第 1 项, 再下一行到第 5 项, 查看器里的位置是已完成里的第 6 个。
+    await app.waitFor("text:6 / 10");
   });
 });
