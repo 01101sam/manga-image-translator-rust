@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import UniformTypeIdentifiers
 
 /// 限制同时在途的任务数。一次拖放可能带来几百个 NSItemProvider, 不能同时展开。
@@ -46,6 +47,9 @@ struct ImportDelivery {
     let pdf: FileRef?
     let droppedPDFs: [FileRef]
     let ignored: Int
+
+    /// 什么都没有: 没图片、没 PDF、也没有被忽略的东西。粘贴时据此告诉用户剪贴板是空的。
+    var isEmpty: Bool { images.isEmpty && pdf == nil && ignored == 0 }
 
     init(_ result: IngestResult) {
         images = result.images
@@ -104,6 +108,17 @@ final class FileIngestor: @unchecked Sendable {
         return result
     }
 
+    /// 剪贴板 (⌘V、导入菜单的「粘贴」): 图片和 PDF 都当文件表示读, 不解码, 复制的文件引用也认。
+    /// 先问有没有相关类型: hasImages 这类查询不会触发系统的「允许粘贴」提示, 没有就根本不去读内容。
+    func ingest(pasteboard: UIPasteboard, allowing kinds: Set<HostFileKind>) async -> IngestResult {
+        guard Self.hasImportable(pasteboard) else { return IngestResult() }
+        return await ingest(providers: pasteboard.itemProviders, allowing: kinds)
+    }
+
+    static func hasImportable(_ pasteboard: UIPasteboard) -> Bool {
+        pasteboard.hasImages || pasteboard.hasURLs || pasteboard.contains(pasteboardTypes: [UTType.pdf.identifier])
+    }
+
     /// 文件选择器和测试钩子给的 URL: 文件或目录 (递归), 拷贝进沙盒。
     func ingest(urls: [URL], allowing kinds: Set<HostFileKind>) async -> IngestResult {
         await limiter.run { importSync(urls: urls, move: false, allowing: kinds) }
@@ -135,12 +150,14 @@ final class FileIngestor: @unchecked Sendable {
     }
 
     /// 只带一个链接的拖放 (从网页拖一个指向图片或 PDF 的链接): 下载到临时文件, 按应答的类型或文件头判断是图片还是 PDF。
-    /// 文件和目录的拖放自己带文件表示, 走不到这里; 本地的 file: 链接也不处理。
+    /// 文件和目录的拖放自己带文件表示, 走不到这里; 剪贴板里复制的本地文件引用 (file:) 在这里按文件读, 读不到 (别的 App 的沙盒) 就算忽略。
     private func loadWebLink(_ provider: NSItemProvider, allowing kinds: Set<HostFileKind>) async -> IngestResult {
         let link: URL? = await withCheckedContinuation { continuation in
             _ = provider.loadObject(ofClass: URL.self) { url, _ in continuation.resume(returning: url) }
         }
-        guard let link, link.scheme == "http" || link.scheme == "https" else { return IngestResult(ignored: 1) }
+        guard let link else { return IngestResult(ignored: 1) }
+        if link.isFileURL { return importSync(urls: [link], move: false, allowing: kinds) }
+        guard link.scheme == "http" || link.scheme == "https" else { return IngestResult(ignored: 1) }
         let downloaded: (URL, URLResponse)
         do {
             downloaded = try await URLSession.shared.download(from: link)

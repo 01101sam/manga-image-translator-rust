@@ -29,11 +29,11 @@
 {
   "daemons": [{ "name": "studio", "url": "http://192.168.1.5:8080" }],   // 此刻发现的 Daemon, url 不带结尾斜杠
   "paired": { "daemon": { "name": "studio", "url": "http://192.168.1.5:8080" }, "token": "…" }, // 已保存的配对; 没有则 null
-  "imports": ["photos", "files", "folder", "pdf"]                                              // 宿主支持的导入入口
+  "imports": ["photos", "files", "folder", "pdf", "paste"]                                     // 宿主支持的导入入口
 }
 ```
 
-- `imports`: 导入菜单只显示宿主声明的入口, 顺序固定为 `photos` (从相册, `files.pick` 的 `source: "photos"`)、`files` (从文件, `source: "files"`)、`folder` (选择文件夹, `source: "folder"`)、`pdf` (打开 PDF, `pdf.pick`)。没有这个字段 (老宿主) 当作 `["files", "pdf"]`。App 声明 `photos`、`files`、`pdf` (文件夹含在「从文件」的文档选择器里); Web 声明 `files`、`pdf`, 浏览器支持选目录 (`webkitdirectory`) 时再加 `folder`。
+- `imports`: 导入菜单只显示宿主声明的入口, 顺序固定为 `photos` (从相册, `files.pick` 的 `source: "photos"`)、`files` (从文件, `source: "files"`)、`folder` (选择文件夹, `source: "folder"`)、`pdf` (打开 PDF, `pdf.pick`)、`paste` (粘贴, `files.paste`; 声明了它 TSX 才绑 ⌘V)。没有这个字段 (老宿主) 当作 `["files", "pdf"]`。App 声明 `photos`、`files`、`pdf`、`paste` (文件夹含在「从文件」的文档选择器里); Web 声明 `files`、`pdf`, 浏览器支持选目录 (`webkitdirectory`) 时再加 `folder`。
 
 - App: `daemons` 来自 Bonjour (`BonjourBrowser`), `paired` 来自 Keychain。`paired` 的 Daemon 当前没被发现也照样返回 (Token 永久有效, 不依赖 Bonjour 在线)。url 里的 IPv6 zone (`%en0`) 要先去掉。
 - Web: `daemons` 只有一项, 就是页面自己的来源 `{ "name": location.host, "url": location.origin }`; `paired` 恒为 `null`, Token 由 TSX 存在 NSH `Storage` (浏览器 localStorage), 键 `session.token:<url>`。
@@ -69,6 +69,21 @@
 
 - `id` 由宿主生成, 只在宿主进程内有意义。宿主把 `id` 映射到文件引用 (App: 沙盒内的临时副本或安全作用域 URL; Web: `File` 对象)。**不要把文件读进内存再回传。**
 - 非图片、非 PDF 的文件不要返回, 数一下发一条 `host.notice`。
+
+### `files.paste`
+
+读系统剪贴板里的图片。导入菜单的「粘贴」和 ⌘V (`keymap` 的 `mod+v`) 调用; 只有声明了 `paste` 的宿主 (App) 才会收到, 也只有它们 TSX 才绑 ⌘V。网页不声明: 浏览器自己发 `paste` 事件, `web/host.js` 取 `clipboardData.files` 走 `files.added`, TSX 若绑了 ⌘V 反而会吃掉这个按键。
+
+```jsonc
+// 参数: 无 (TSX 以 timeout: 0 调用)
+// 返回
+{ "files": [{ "id": "…", "name": "image.png", "size": 123456, "type": "image/png" }] }
+```
+
+- 图片和 PDF 都按文件表示读 (`NSItemProvider` 的文件表示, 与拖放同一条路径), 不解码大图; 复制的文件引用 (file URL) 也认。PDF 不放进返回值, 走 `pdf.added`。
+- 剪贴板里没有图片、PDF 或文件时返回空数组, 并发一条 `host.notice` (「剪贴板里没有可以导入的图片或 PDF」)。
+- iOS 在内容来自别的 App 时会问一次「允许粘贴」。宿主先用 `hasImages`、`hasURLs` 这类不触发提示的查询看有没有可读的类型, 没有就不去读内容; 用户可以在系统设置里给这个 App 选「允许」, 之后不再问。
+- 图片一到 TSX 就回到任务页 (⌘V 在哪个分区都能按); 文本框有焦点时 ⌘V 归文本框。
 
 ### `files.release` (post, 无返回)
 

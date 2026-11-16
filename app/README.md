@@ -52,6 +52,7 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | `-paired-test H P TOKEN` | 内存里的已配对状态, 不碰 Keychain |
 | `-forget-pairing` | 启动时先清掉 Keychain 里的配对 |
 | `-pick-folder DIR` / `-pick-pdf FILE` | `files.pick` / `pdf.pick` 不弹选择器, 直接从这里取文件 |
+| `-seed-pasteboard FILE\|DIR` | 启动时 App 自己把这个文件 (目录则取里面的图片和 PDF) 放进系统剪贴板; 是自己写的, 读的时候系统不弹「允许粘贴」, UI 测试靠它验证粘贴 |
 | `-auto-import-folder DIR` | TSX 起来后模拟一次拖放: 克隆文件, 包成 `NSItemProvider` 走真实的读取路径, 再发 `files.added`; 加 `-auto-import-urls` 改走文件选择器的 URL 路径 |
 | `-debug-drag-source DIR` | 窗口左下角放一个可拖的小方块, UI 测试用它发起真正的拖放 |
 | `-section jobs\|reader\|config` | 起始分区 |
@@ -70,6 +71,7 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | 更换 Daemon、401 清 Token | 配置页「取消配对」(`changeDaemon`)、401 触发 `session.clearToken` | `app.test.tsx` 的 "a revoked Token…" 和 "forgetting the Daemon…" |
 | 添加图片: 相册、文件、文件夹 | TSX 的导入菜单 (`ImportMenu`) + `files.pick` 的 `source` + `Host/HostPickers.swift`; 文件夹含在「从文件」里, 递归并按自然序 | `HostFilesTests.testFolderIngest…`、`NshHostUITests.testPickedImagesUploadFinishAndOpenInViewer` (旧的 `testFolderBatchImport` 也并在这里)、`testImportMenuOpensListsTheHostsSourcesAndClosesOnATapOutside` |
 | 拖放文件、照片、PDF | `Host/HostIngest.swift`, 每个 provider 只读一种表示, 一次只读一个 | `HostFilesTests` 的 provider 摄入、类型过滤、限流用例、`NshHostUITests.testDraggingFilesOntoTheWindowAddsThem` (旧 `DropRoutingTests` 的路由判断随之换成 provider 的类型判断) |
+| 粘贴 (旧版没有) | 新增: 导入菜单的「粘贴」和 ⌘V → `files.paste` (`NshHostViewController.paste`), 剪贴板里的图片和 PDF 按文件表示读, 不解码; 内容来自别的 App 时系统会问一次「允许粘贴」 | `PasteboardIngestTests`、`NshHostUITests.testPasteFromTheMenuAndWithCommandVAddsTheClipboard`、`app.test.tsx` 的 import menu |
 | 拖放网页链接 (`testWebURLToImage`、`testWebURLToPDF`) | 已补: `HostIngest.loadWebLink` 下载后按应答类型或文件头分图片和 PDF | `HostFilesTests.testDroppedWebLinksAreDownloadedAndRoutedByWhatTheyAre`、`testWebType…` |
 | 导入结果横幅 | `host.notice` 事件, TSX 用 toast 显示「已忽略 N 个不是图片或 PDF 的文件」; 不再列出无法识别的类型标识 | `HostFilesTests.testProviderIngestIgnoresKindsTheCallerDidNotAllow` |
 | Job 列表: 状态、排队位置、错误、批量提交、Pending Upload、队列容量 | `JobsPage`、`JobRow`、`JobTile`、`store/jobs.ts`、`domain/board.ts` (虚拟化 List, 批量轮询, iPad 与 visionOS 是网格) | `app.test.tsx` 的 jobs 与 grid、`board.test.ts`、`job.test.ts` |

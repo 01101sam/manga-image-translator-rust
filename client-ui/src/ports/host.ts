@@ -31,6 +31,8 @@ export interface HostPort {
   saveToken(daemon: DaemonRef, token: string): Promise<void>;
   clearToken(daemon: DaemonRef): Promise<void>;
   pickFiles(limit: number, source: PickSource): Promise<LocalFile[]>;
+  /** 读系统剪贴板里的图片 (PDF 走 pdf.added)。宿主声明了 paste 才会被调用。 */
+  paste(): Promise<LocalFile[]>;
   release(ids: readonly string[]): void;
   upload(request: UploadRequest): Promise<UploadOutcome>;
   saveArtifact(url: string, filename: string): Promise<void>;
@@ -97,6 +99,10 @@ export function createHostPort(): HostPort {
     pickFiles: async (limit, source) => {
       // 用户可能在选择器里停很久, 不设超时。
       const answer = await host.call("files.pick", { limit, source }, NO_TIMEOUT);
+      return parseFiles(isRecord(answer) ? answer.files : []);
+    },
+    paste: async () => {
+      const answer = await host.call("files.paste", undefined, NO_TIMEOUT);
       return parseFiles(isRecord(answer) ? answer.files : []);
     },
     release: (ids) => {

@@ -1,5 +1,7 @@
-import { effect, platform, Text, View } from "nsh";
+import { effect, keymap, platform, Text, View } from "nsh";
 import { currentBoard, order } from "../store/jobs";
+import { pasteAndAdd } from "../store/importer";
+import { importSources } from "../store/session";
 import { closeViewer, section, viewerKey, type Section } from "../store/route";
 import { engineLabel, engineState } from "../store/engine";
 import { Badge, NavTabs, ToastHost, type BadgeTone, type TabItem } from "../ui";
@@ -25,6 +27,11 @@ export function Shell() {
     const key = viewerKey();
     order();
     if (key !== null && currentBoard().items[key] === undefined) closeViewer();
+  });
+  // 宿主声明了 paste 才绑 ⌘V。网页不声明: 浏览器自己发 paste 事件 (web/host.js 在听), 绑了反而会吃掉这个按键。
+  // 文本框有焦点时 ⌘V 归文本框, 不会触发这里。
+  effect(() => {
+    if (importSources().includes("paste")) keymap.bind("mod+v", () => void pasteAndAdd());
   });
   return (
     <View class="flex-1 bg-background">

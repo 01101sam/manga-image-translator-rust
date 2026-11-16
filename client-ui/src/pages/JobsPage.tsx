@@ -152,7 +152,11 @@ export function JobsPage() {
             <Empty
               icon="image"
               title="拖入图片, 或点击导入"
-              description={desktop ? "支持 PNG、JPEG、WebP、BMP。可以一次拖入很多张, 会按顺序提交。" : "可以一次选很多张, 会按顺序提交。"}
+              description={
+                desktop
+                  ? `支持 PNG、JPEG、WebP、BMP。可以一次拖入或粘贴 (${keymap.label("mod+v")}) 很多张, 会按顺序提交。`
+                  : "可以一次选很多张, 会按顺序提交。"
+              }
               actionLabel="导入"
               actionTestID="empty-import"
               onAction={openImportMenu}

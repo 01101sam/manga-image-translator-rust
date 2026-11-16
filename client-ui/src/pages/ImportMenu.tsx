@@ -7,7 +7,7 @@ import { Icon, type IconName } from "../ui";
 
 const desktop = platform.desktop;
 
-const icons: Record<ImportSource, IconName> = { photos: "image", files: "file", folder: "folder", pdf: "doc" };
+const icons: Record<ImportSource, IconName> = { photos: "image", files: "file", folder: "folder", pdf: "doc", paste: "clipboard" };
 
 function MenuItem(props: { source: ImportSource }) {
   return (
@@ -19,6 +19,9 @@ function MenuItem(props: { source: ImportSource }) {
     >
       <Icon name={icons[props.source]} size={desktop ? 16 : 20} />
       <Text class={`flex-1 text-foreground ${desktop ? "text-sm" : "text-base"}`}>{IMPORT_LABELS[props.source]}</Text>
+      <If when={props.source === "paste"}>
+        <Text class="text-xs text-muted-foreground">{keymap.label("mod+v")}</Text>
+      </If>
     </BaseButton>
   );
 }
