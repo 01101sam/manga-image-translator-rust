@@ -5,7 +5,7 @@
 - **Web:** `scripts/build-ui.sh web` 打包成静态站点 `gui/dist/`, 由 Daemon 托管。
 - **App (iOS / iPadOS / visionOS):** `scripts/build-ui.sh native` 产出 `client-ui/dist/native/`, Swift 宿主用 `NshAppView` 加载; 宿主侧契约见 [HOST_PROTOCOL.md](HOST_PROTOCOL.md)。
 
-页面: 配对 (Pairing Key)、任务列表 + 上传 (导入菜单: 相册、文件、打开 PDF, 项目由宿主在 `session.snapshot` 里声明)、单张查看 (原文/译文)、Config (结构化表单)、Engine 启停、PDF 阅读器 (`reader`: 本地显示 PDF, 方向键翻页, 空格把当前页送去翻译或切换原文/译文)。
+页面: 配对 (Pairing Key)、任务列表 + 上传 (导入菜单: 相册、文件、打开 PDF, 项目由宿主在 `session.snapshot` 里声明; 排序菜单: 名称 / 日期 / 大小各升降序, 一次性; 条目菜单: 移到最前 / 最后; 长按或鼠标按住拖动重排)、单张查看 (原文/译文)、Config (结构化表单)、Engine 启停、PDF 阅读器 (`reader`: 本地显示 PDF, 方向键翻页, 空格把当前页送去翻译或切换原文/译文)。
 
 ## 结构
 
@@ -18,14 +18,18 @@ web/pdfjs/         pdf.js 6.x 的运行时文件 (入库, 版本见 VERSION; scr
 src/domain/        纯函数与状态机, 不依赖 nsh; tests/ 里逐个测
   session.ts       Session = Discovering | Unpaired | Pairing | Paired{token}
   job.ts           Job 的生命周期 (queued/running/done/failed/cancelled) 与取消
-  board.ts         本地 Item = Pending | Uploading | Job; 批量状态; 上传调度
+  board.ts         本地 Item = Pending | Uploading | Job; 批量状态; 上传调度。两个顺序: submitOrder (加入顺序, Pending 按它提交) 与 displayOrder (界面顺序)
+  arrange.ts       一次性排序 (名称自然序、日期、大小, 缺值排末尾) 与单项移动, 只改 displayOrder
+  natural.ts       文件名的自然序比较: 数字段按数值, 不依赖 Intl.Collator (嵌入 App 的引擎里没有)
+  reorder.ts       拖动重排的几何: 每个单元格的位置、落点、指示线、边缘自动滚动的速度
+  saved.ts         随 Job 保存的行 (id、名字、大小、修改时间) 的读写
   nav.ts           键盘高亮与查看器的移动
   reader.ts        PDF 阅读器每页的状态机 (移植自旧 Client 的 PageMachine) 与翻页、渲染节奏的纯函数
   config.ts        Config 表单的字段表、校验、整份文档的改写
   media.ts         降采样图片 URL (w=256 列表, w=2048 查看器)
 src/api/           Daemon 的 HTTP 客户端; 外部 JSON 在 parse.ts 一次性解析
 src/ports/host.ts  宿主协议的类型化封装; ports/pdf.ts 是其中 PDF 的部分
-src/store/         signal: 每个 Item 一个 signal, 轮询只写变化的项
+src/store/         signal: 每个 Item 一个 signal, 轮询只写变化的项; reorder.ts 是拖动重排的状态 (影子、指示线、自动滚动), menu.ts 是任务页上盖着的菜单 (导入、排序、条目)
 src/ui/            应用自己的组件层 (见 DESIGN.md)
 src/pages/         页面
 tests/             nsh test: 领域单测 + 整个界面的无头流程测试
@@ -36,7 +40,8 @@ tests/             nsh test: 领域单测 + 整个界面的无头流程测试
 - 图片字节不进 JS (嵌入式 NSH 的 JS 堆上限 256 MB)。列表缩略图用 `<Image src=".../source|artifact?w=256&token=...">`, 查看器用 `w=2048`; 选文件、拖放、上传由宿主完成。
 - 状态机在 `src/domain`: 配对、Job、列表 Board 都是纯函数 reducer, 返回新状态和要执行的命令; store 执行命令、写 signal。
 - 轮询: 配对后每秒一次 `GET /jobs`, 只更新变化的行; 每 3 秒查一次 Engine。上一轮没结束不会开下一轮。
-- 上传调度: 本地 Pending 按顺序提交, 在途 (上传中 + 排队 + 翻译中) 不超过 Daemon 队列容量 64, 同时上传不超过 3 个; 429 回到 Pending 重试, Engine 停止时暂停。
+- 显示顺序: 排序和拖动只改 `displayOrder`, 不改 `submitOrder`, 所以不影响 Pending 提交给 Daemon 的先后, 也不影响 Daemon 的队列; 新加入的条目追加在末尾, 不会自动维持排序。`displayOrder` 随 Job 的 id、名字、大小、修改时间存进 NSH Storage (`jobs:<daemon url>`), 重启或刷新后按它恢复。
+- 上传调度: 本地 Pending 按加入顺序提交, 在途 (上传中 + 排队 + 翻译中) 不超过 Daemon 队列容量 64, 同时上传不超过 3 个; 429 回到 Pending 重试, Engine 停止时暂停。
 - PDF 不上传: 当前页由宿主显示 (App 是 PDFKit 的原生组件 `it.pdf`, Web 是 pdf.js 的 canvas), 要翻译的页由宿主渲染成 PNG 文件, 再走和图片同一条 `upload.start`, 成为任务列表里的普通 Job。页图一页一页地渲染, 已渲染未上传的最多 5 张, 所以「翻译全部」不会一次把整本变成 PNG。
 - 401: 任何受保护请求收到 401 就清掉 Token 回到配对页, 本地待上传的文件保留。
 

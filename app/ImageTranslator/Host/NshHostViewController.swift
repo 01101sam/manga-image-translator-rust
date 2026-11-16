@@ -91,7 +91,10 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
         registerHandlers(on: app)
         let files = files
         app.register(component: "it.pdf") { context in PdfComponent(context: context, files: files) }
-        if let section = hooks.section { app.params = ["section": section] }
+        var params: [String: String] = [:]
+        if let section = hooks.section { params["section"] = section }
+        if let layout = hooks.layout { params["layout"] = layout }
+        if !params.isEmpty { app.params = params }
         let bundled = Bundle.main.url(forResource: "bundle", withExtension: "nshc", subdirectory: "nsh")
         guard let bundle = hooks.bundlePath.map({ URL(fileURLWithPath: $0) }) ?? bundled else {
             showError("App 里没有界面 bundle (nsh/bundle.nshc)。先运行 scripts/build-ui.sh native 再构建。")

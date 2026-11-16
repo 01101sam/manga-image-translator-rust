@@ -31,6 +31,8 @@ final class TestHooksTests: XCTestCase {
         XCTAssertEqual(hooks.pickFolder, "/tmp/imgs")
         XCTAssertEqual(hooks.pickPDF, "/tmp/a.pdf")
         XCTAssertEqual(hooks.section, "reader")
+        XCTAssertEqual(TestHooks.parse(["-layout", "list"]).layout, "list")
+        XCTAssertNil(TestHooks.parse([]).layout)
         XCTAssertTrue(hooks.forgetPairing)
         XCTAssertFalse(TestHooks.parse([]).forgetPairing)
         XCTAssertEqual(TestHooks.parse(["-seed-pasteboard", "/tmp/imgs"]).seedPasteboard, "/tmp/imgs")

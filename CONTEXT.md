@@ -24,6 +24,10 @@ _Avoid_: task、request
 Client 已接收、尚未提交给 Daemon 的图片。Queue 满时图片停在这里,按顺序成为 Job。它不属于 Job 的生命周期,取消它不涉及 Daemon。
 _Avoid_: queued、draft
 
+**Display Order**:
+任务页上条目的排列顺序。一次性排序 (名称 / 日期 / 大小)、拖动和「移到最前 / 最后」只改它, 不改提交给 Daemon 的先后: Pending Upload 仍按加入顺序成为 Job, Daemon 的 Queue 也不受影响。新加入的条目追加在末尾, 随 Job 一起保存, 重启后保留。
+_Avoid_: 排序模式、队列顺序
+
 **Inbox**:
 Client 的 Share Extension 放文件的地方 (App Group 里的一个目录)。App 在启动和每次回到前台时把它搬进自己的沙盒: 图片成为 Pending Upload, PDF 在 PDF Reader 里打开。扩展只放文件, 不解码、不上传。
 _Avoid_: 队列、草稿箱

@@ -19,6 +19,8 @@ struct TestHooks: Equatable, Sendable {
     var bundlePath: String?
     /// 起始分区, 传给 TSX 的 host.params.section。
     var section: String?
+    /// 任务页的排版, 传给 TSX 的 host.params.layout; "list" 在 iPad 上也排成一行一项 (手机的样子)。
+    var layout: String?
     /// 启动时先清掉 Keychain 里的配对, 让 UI 测试从未配对开始。
     var forgetPairing = false
     var daemonHost: String?
@@ -93,6 +95,11 @@ struct TestHooks: Equatable, Sendable {
             }
             if flag == "-section", i + 1 < args.count {
                 hooks.section = args[i + 1]
+                i += 2
+                continue
+            }
+            if flag == "-layout", i + 1 < args.count {
+                hooks.layout = args[i + 1]
                 i += 2
                 continue
             }

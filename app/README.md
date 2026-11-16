@@ -60,9 +60,12 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | `-auto-import-folder DIR` | TSX 起来后模拟一次拖放: 克隆文件, 包成 `NSItemProvider` 走真实的读取路径, 再发 `files.added`; 加 `-auto-import-urls` 改走文件选择器的 URL 路径 |
 | `-debug-drag-source DIR` | 窗口左下角放一个可拖的小方块, UI 测试用它发起真正的拖放 |
 | `-section jobs\|reader\|config` | 起始分区 |
+| `-layout list` | 任务页在 iPad 上也排成一行一项 (手机的样子), 用来测列表里的拖动 |
 | `-bundle FILE.js` | 加载这个 bundle 而不是内置的。字节码 (`.nshc`) 只能从 App 自己的资源加载, 外部文件要用 `bundle.js` |
 
 `ImageTranslatorUITests/NshHostUITests.swift` 需要一个在跑的测试 Daemon (Engine 要是 running, 翻译用例才会完成), 用环境变量 `TEST_RUNNER_HOST_DAEMON_HOST`、`TEST_RUNNER_HOST_DAEMON_PORT`、`TEST_RUNNER_HOST_DAEMON_KEY`、`TEST_RUNNER_HOST_PICK_FOLDER` 传进来; 阅读器、配置页和分区切换的用例还要 `TEST_RUNNER_HOST_TOKEN` (先 `POST /pair` 取得) 和 `TEST_RUNNER_HOST_PICK_PDF`。Daemon 上可能留着之前的 Job, 用例按增量数, 不假设列表是空的。Bonjour 那个用例要先在 Mac 上 `dns-sd -R <名字> _imagetranslator._tcp local <端口>` 公布一个实例, 并设 `TEST_RUNNER_HOST_BONJOUR=1`。测试 Daemon 一律用独立的 HOME、TMPDIR 和端口, 并加 `--no-bonjour`。
+
+`TEST_RUNNER_HOST_BUNDLE` 指向 `client-ui/dist/native/bundle.js` (`scripts/build-ui.sh native` 产出的未压缩版) 时, UI 测试用它代替 App 里内置的界面, 改 TSX 后不用重新构建 App。`NshHostUITests` 里排序、拖动、条目菜单的用例 (`testSortMenu…`、`testItemMenu…`、`testLongPressDrag…`、`testDraggingToTheBottomEdge…`、`testTheArrangedOrder…`) 用 `TEST_RUNNER_HOST_ARRANGE_FOLDER` (8 张图, 名字、大小、修改时间三种顺序互不相同, 修改时间用 `touch -t` 设) 和 `TEST_RUNNER_HOST_MANY_FOLDER` (60 张, 一屏放不下) 里的图, 不需要 Daemon 的几个配到离线地址; `testTheArrangedOrderSurvivesARelaunch` 要一个能配对并接受上传的 Daemon (`TEST_RUNNER_HOST_DAEMON_PORT`), 因为只有已提交的 Job 会被保存。拖动中途的影子和指示线靠后台线程在手指停住时读辅助功能树 (`drag-ghost`、`drop-marker` 的 frame), 并存一张截图。visionOS 模拟器 (2026-11-16 实测): 排序、条目菜单、网格里的长按拖动 (含影子和指示线的位置) 都通过, 一行一项的排版下 XCUITest 的长按拖动没有触发 (拖完顺序没变, 中途也没有影子), 原因没查。
 
 不需要 Daemon 的用例 (导入菜单、粘贴、收件箱、打开方式) 配到 `127.0.0.1:1` 加一个假 Token (`offlinePairing`), 不用测试 Daemon 的端口: 假 Token 会收到 401, App 回到配对页。visionOS 上有两点不同: `typeKey` 只收 `XCUIKeyboardKey` (iOS 上这样发出的却不是 ⌘V, 要用字符串重载, 测试里按平台分开); `testDraggingFilesOntoTheWindowAddsThem` 在改动前的提交 (1b8ccea) 上也失败 (2026-11-16 实测, 78 秒后超时), 用 XCUITest 发起的拖放在 visionOS 模拟器里没有落进窗口, 原因没查。App 启动后 XCUITest 发的第一个键盘事件到不了界面 (实测: 不碰菜单直接按 ⌘V 也不生效, 日志里 `files.paste` 少一次, 第二次才生效; `paste` 用例里先按一次方向键), 原因没查清, 也不知道真键盘上是否如此。
 ## 分享扩展与收件箱
@@ -110,7 +113,7 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | 导入结果横幅 | `host.notice` 事件, TSX 用 toast 显示「已忽略 N 个不是图片或 PDF 的文件」; 不再列出无法识别的类型标识 | `HostFilesTests.testProviderIngestIgnoresKindsTheCallerDidNotAllow` |
 | Job 列表: 状态、排队位置、错误、批量提交、Pending Upload、队列容量 | `JobsPage`、`JobRow`、`JobTile`、`store/jobs.ts`、`domain/board.ts` (虚拟化 List, 批量轮询, iPad 与 visionOS 是网格) | `app.test.tsx` 的 jobs 与 grid、`board.test.ts`、`job.test.ts` |
 | 取消排队中的 Job (`testCancelQueuedJob`) | 行上的「取消」 (`cancelItem`) | `app.test.tsx` 的 "a queued job can be cancelled…"。不再做设备上的用例: 它要把 workers 设成 0 再重启 Engine, 取消只走 Daemon API, 对宿主没有增量 |
-| 删除、重排 (`EditButton`、`onDelete`、`onMove`) | 删除: 行上「移除」、「清除已结束」、Backspace。重排不再需要: 只改本地显示顺序, 与 Daemon 的队列无关 | `app.test.tsx` 的 "a queued job can be cancelled…" 与 "Backspace…" |
+| 删除、重排 (`EditButton`、`onDelete`、`onMove`) | 删除: 行上「移除」、「清除已结束」、Backspace。重排: 页头「排序」(名称 / 日期 / 大小, 一次性)、长按拖动、条目菜单的「移到最前 / 最后」, 都只改本地的显示顺序, 与提交给 Daemon 的先后和 Daemon 的队列无关 | `app.test.tsx` 的 "arranging the list" 与 "drag to reorder"、`arrange.test.ts`、`natural.test.ts`、`reorder.test.ts`、`NshHostUITests.testSortMenu…` 等 |
 | 键盘移动、回车预览 | `keymap` 与 `domain/nav.ts` (网格里上下一行, 左右一格) | `nav.test.ts`、`app.test.tsx` 的 viewer and keyboard 与 grid |
 | 预览译文与原文、上一张下一张、关闭 (`testPreviewClose`) | `Viewer.tsx`, 加载 w=2048 的降采样图 | `app.test.tsx` 的 viewer and keyboard、`NshHostUITests.testPickedImagesUploadFinishAndOpenInViewer` (已补关闭) |
 | 分享译图 (`ShareLink`) | `artifact.save` → `Host/HostArtifact.swift`, 存原始大小的文件 | `HostUploadTests.testArtifactExtensionFollowsContentType`、`app.test.tsx` 的 "saving asks the host for the full-size file…" |

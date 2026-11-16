@@ -1,8 +1,9 @@
 /**
  * 文件名的自然序: 数字段按数值比 (page2 在 page10 前), 其余文字不分大小写。
  *
- * 嵌入 App 的 JS 引擎没有可用的 Intl.Collator (实测 `new Intl.Collator` 抛错, localeCompare 的 numeric 选项被忽略),
- * 所以切段和数字比较都自己做, 只有「文字段怎么排」可以换成宿主引擎的 Collator (浏览器里有, 中日文按语言习惯排)。
+ * 嵌入 App 的 JS 引擎里 Intl 只是个空对象: iPad 模拟器实测 `Intl.Collator` 是 undefined, `"page2".localeCompare("page10", undefined, { numeric: true })`
+ * 返回 1 (numeric 选项被忽略); nsh test 的无头引擎里 `new Intl.Collator` 抛 "not a function"。所以切段和数字比较都自己做,
+ * 只有「文字段怎么排」可以换成宿主引擎的 Collator (浏览器里有, 中日文按语言习惯排)。
  */
 
 export interface TextCollator {

@@ -18,7 +18,9 @@ final class NshHostUITests: XCTestCase {
     /// seed 为假时不播种 Daemon 地址, 让 App 自己走 Bonjour 发现。
     private func launch(_ extra: [String] = [], seed: Bool = true) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = (seed ? ["-daemon-host", host, "-daemon-port", port] : []) + extra
+        // HOST_BUNDLE: 用这份 bundle.js 代替 App 里内置的界面, 改 TSX 后不用重新构建 App (只在本地调试界面时用)。
+        let bundle = ProcessInfo.processInfo.environment["HOST_BUNDLE"].map { ["-bundle", $0] } ?? []
+        app.launchArguments = (seed ? ["-daemon-host", host, "-daemon-port", port] : []) + bundle + extra
         app.launch()
         return app
     }
@@ -354,4 +356,293 @@ final class NshHostUITests: XCTestCase {
         }
         shot(app, "sections-after-30-cycles")
     }
+
+    // MARK: - 排序、拖动重排、条目菜单 (待上传的条目一样能排, 不需要 Daemon)
+
+    /// 名字、大小、日期三种顺序互不相同的 8 张图 (自然序: cover, Page1, page2, page3, Page4, page10, page11, page20)。
+    private var arrangeFolder: String { ProcessInfo.processInfo.environment["HOST_ARRANGE_FOLDER"] ?? "/tmp/sort-agent/fixture" }
+    /// 几十张图, 列表放不下一屏, 用来拖到边缘自动滚动。
+    private var manyFolder: String { ProcessInfo.processInfo.environment["HOST_MANY_FOLDER"] ?? "/tmp/sort-agent/many" }
+
+    /// 一个条目一个按钮, 标签是「名字, 状态」(等待上传、已完成……)。夹具里的名字都以 .png 结尾。
+    private let rowLabel = NSPredicate(format: "label MATCHES %@", #".*\.png, [^,]+"#)
+
+    /// 任务页上看得见的条目标题, 按屏幕位置排 (先上后下, 再左右)。NSH 的列表在可见范围外还留着几十个已渲染的 cell
+    /// (实测 60 张图时辅助功能树里有 49 个, frame 在列表上下很远的地方), 所以只取中心落在列表区域里的。
+    private func titles(_ app: XCUIApplication) -> [String] {
+        let list = element(app, "job-list")
+        let area = (list.exists ? list : element(app, "job-grid")).frame
+        let rows = app.descendants(matching: .any).matching(rowLabel).allElementsBoundByIndex.filter { $0.frame.width > 0 && area.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY)) }
+        return rows.sorted { ($0.frame.minY, $0.frame.minX) < ($1.frame.minY, $1.frame.minX) }.map { String($0.label.split(separator: ",")[0]) }
+    }
+
+    private func row(_ app: XCUIApplication, _ title: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", title + ", ")).firstMatch
+    }
+
+    /// 配成离线 (假 Token), 从目录里选图进待上传。layout 为 "list" 时 iPad 也排成一行一项。
+    private func launchWithImages(count: Int, folder: String, layout: String? = nil) -> XCUIApplication {
+        let app = launch(offlinePairing + ["-pick-folder", folder] + (layout.map { ["-layout", $0] } ?? []), seed: false)
+        let add = element(app, "add-images")
+        XCTAssertTrue(add.waitForExistence(timeout: 30))
+        add.tap()
+        let files = element(app, "import-files")
+        XCTAssertTrue(files.waitForExistence(timeout: 5))
+        files.tap()
+        let summary = element(app, "jobs-summary")
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "共 \(count) 张"), evaluatedWith: summary)
+        waitForExpectations(timeout: 30)
+        return app
+    }
+
+    private func sort(_ app: XCUIApplication, _ choice: String) {
+        element(app, "open-sort").tap()
+        let entry = element(app, "sort-\(choice)")
+        XCTAssertTrue(entry.waitForExistence(timeout: 5), "sort-\(choice) is missing from the sort menu")
+        entry.tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: element(app, "sort-menu"))
+        waitForExpectations(timeout: 5)
+    }
+
+    private let natural = ["cover.png", "Page1.png", "page2.png", "page3.png", "Page4.png", "page10.png", "page11.png", "page20.png"]
+
+    func testSortMenuOrdersTheListByNameDateAndSizeBothWays() {
+        let app = launchWithImages(count: 8, folder: arrangeFolder)
+        XCTAssertEqual(titles(app), natural, "a folder comes in natural order")
+        attach(app.screenshot(), "arrange-initial")
+        // 大小 (字节): page11 < page2 < cover < Page4 < page10 < page3 < page20 < Page1; 日期 (旧到新): Page1, page3, page20, page10, page11, Page4, cover, page2
+        let bySize = ["page11.png", "page2.png", "cover.png", "Page4.png", "page10.png", "page3.png", "page20.png", "Page1.png"]
+        let byDate = ["Page1.png", "page3.png", "page20.png", "page10.png", "page11.png", "Page4.png", "cover.png", "page2.png"]
+        sort(app, "size-asc")
+        XCTAssertEqual(titles(app), bySize)
+        attach(app.screenshot(), "arrange-size-asc")
+        sort(app, "size-desc")
+        XCTAssertEqual(titles(app), bySize.reversed())
+        sort(app, "modified-asc")
+        XCTAssertEqual(titles(app), byDate)
+        attach(app.screenshot(), "arrange-date-asc")
+        sort(app, "modified-desc")
+        XCTAssertEqual(titles(app), byDate.reversed())
+        sort(app, "name-desc")
+        XCTAssertEqual(titles(app), natural.reversed())
+        sort(app, "name-asc")
+        XCTAssertEqual(titles(app), natural)
+        attach(app.screenshot(), "arrange-name-asc")
+    }
+
+    func testItemMenuMovesAnItemToTheFrontOrTheBack() {
+        let app = launchWithImages(count: 8, folder: arrangeFolder)
+        element(app, "更多: cover.png").tap()
+        XCTAssertTrue(element(app, "item-menu").waitForExistence(timeout: 5))
+        XCTAssertFalse(element(app, "move-to-front").isEnabled, "cover.png is already first")
+        attach(app.screenshot(), "arrange-item-menu")
+        element(app, "move-to-back").tap()
+        XCTAssertEqual(titles(app), Array(natural.dropFirst()) + ["cover.png"])
+        element(app, "更多: page11.png").tap()
+        XCTAssertTrue(element(app, "move-to-front").waitForExistence(timeout: 5))
+        element(app, "move-to-front").tap()
+        XCTAssertEqual(titles(app), ["page11.png"] + Array(natural.dropFirst().filter { $0 != "page11.png" }) + ["cover.png"])
+    }
+
+    /// 拖动中途 (手指按在目标上不动) 看到的影子和指示线, 以及当时的截图。press(thenHoldForDuration:) 会一直占着主线程, 所以从后台线程查。
+    private struct MidDrag {
+        var ghost: CGRect?
+        var marker: CGRect?
+        var rows: [CGRect] = []
+        var screenshot: XCUIScreenshot?
+    }
+
+    /// 长按再拖: 按住 source 的中心, 拖到 target 的中心, 在那里停 hold 秒再放手; 停住的第 hold / 2 秒从后台线程看一眼界面。
+    private func longPressDrag(_ app: XCUIApplication, _ source: XCUIElement, to target: XCUIElement, hold: TimeInterval = 6) -> MidDrag {
+        let from = source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let to = target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let seen = Locked(MidDrag())
+        let looked = expectation(description: "looked at the screen during the drag")
+        // 按 1 秒、拖约 1.5 秒, 然后停; 停住之后再等一会儿看。
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1.0 + 2.5 + hold / 2) {
+            var value = MidDrag()
+            // 先截图: 查辅助功能树要几秒, 截图排在后面就拍到放手之后了。
+            value.screenshot = XCUIScreen.main.screenshot()
+            value.ghost = app.descendants(matching: .any).matching(identifier: "drag-ghost").firstMatch.frameIfExists
+            value.marker = app.descendants(matching: .any).matching(identifier: "drop-marker").firstMatch.frameIfExists
+            seen.set(value)
+            looked.fulfill()
+        }
+        from.press(forDuration: 1.0, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: hold)
+        wait(for: [looked], timeout: 30)
+        return seen.get()
+    }
+
+    private func attach(_ screenshot: XCUIScreenshot?, _ name: String) {
+        guard let screenshot else { return }
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        let path = (ProcessInfo.processInfo.environment["HOST_SHOTS"] ?? "/tmp/sort-agent/shots") + "/\(name).png"
+        try? FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try? screenshot.pngRepresentation.write(to: URL(fileURLWithPath: path))
+    }
+
+    /// 网格 (iPad) 里长按拖一张到另一张的位置; 拖动没有碰上点按, 所以没有打开查看器。
+    func testLongPressDragMovesATileInTheGrid() throws {
+        let app = launchWithImages(count: 8, folder: arrangeFolder)
+        XCTAssertTrue(element(app, "job-grid").exists, "an iPad shows the grid")
+        let page1 = row(app, "Page1.png")
+        let page10 = row(app, "page10.png")
+        let page10Frame = page10.frame
+        let mid = longPressDrag(app, page1, to: page10)
+        attach(mid.screenshot, "arrange-grid-mid-drag")
+        print("MIDDRAG grid ghost=\(String(describing: mid.ghost)) marker=\(String(describing: mid.marker)) target=\(page10Frame)")
+        // 影子跟着手指: 手指按在源格中心、停在 page10 的中心, 所以影子正好盖在 page10 上 (左上角重合; 按钮的 frame 不含底部的操作栏, 所以不比中心);
+        // 指示线是 page10 后缘外 4 点 (格间距的一半) 的一条竖线, 和一整格一样高。
+        let ghost = try XCTUnwrap(mid.ghost, "no drag ghost while the finger rests on the target")
+        XCTAssertEqual(ghost.minX, page10Frame.minX, accuracy: 6)
+        XCTAssertEqual(ghost.minY, page10Frame.minY, accuracy: 6)
+        let marker = try XCTUnwrap(mid.marker, "no drop marker while the finger rests on the target")
+        XCTAssertEqual(marker.midX, page10Frame.maxX + 4, accuracy: 6, "the marker sits in the gap after the tile it lands on")
+        XCTAssertEqual(marker.height, ghost.height, accuracy: 4, "the marker is as tall as a tile")
+        XCTAssertEqual(marker.minY, page10Frame.minY, accuracy: 6)
+        attach(app.screenshot(), "arrange-grid-after-drop")
+        XCTAssertEqual(titles(app), ["cover.png", "page2.png", "page3.png", "Page4.png", "page10.png", "Page1.png", "page11.png", "page20.png"])
+        XCTAssertFalse(element(app, "drag-ghost").exists, "the ghost goes away at the drop")
+        XCTAssertFalse(element(app, "drop-marker").exists)
+        XCTAssertFalse(element(app, "viewer-close").exists, "letting go of a long press must not open anything")
+    }
+
+    /// 同样的拖动, 排成一行一项 (手机的样子)。
+    func testLongPressDragMovesARowInTheList() throws {
+        let app = launchWithImages(count: 8, folder: arrangeFolder, layout: "list")
+        XCTAssertTrue(element(app, "job-list").exists)
+        let last = row(app, "page20.png")
+        let third = row(app, "page2.png")
+        let list = element(app, "job-list").frame
+        let mid = longPressDrag(app, last, to: third)
+        attach(mid.screenshot, "arrange-list-mid-drag")
+        print("MIDDRAG list ghost=\(String(describing: mid.ghost)) marker=\(String(describing: mid.marker)) list=\(list)")
+        // 往上拖: 指示线是目标那一行上缘的一条横线, 整行宽。第 2 行的上缘在列表上沿往下 2 行 (每行 72 点) 的地方。
+        let ghost = try XCTUnwrap(mid.ghost, "no drag ghost while the finger rests on the target")
+        XCTAssertEqual(ghost.height, 72, accuracy: 2)
+        XCTAssertEqual(ghost.width, list.width, accuracy: 2)
+        let marker = try XCTUnwrap(mid.marker, "no drop marker while the finger rests on the target")
+        XCTAssertEqual(marker.midY, list.minY + 2 * 72, accuracy: 4, "the marker sits on the top edge of the row it lands on")
+        XCTAssertEqual(marker.width, list.width, accuracy: 2)
+        attach(app.screenshot(), "arrange-list-after-drop")
+        XCTAssertEqual(titles(app), ["cover.png", "Page1.png", "page20.png", "page2.png", "page3.png", "Page4.png", "page10.png", "page11.png"])
+        XCTAssertFalse(element(app, "drag-ghost").exists)
+    }
+
+    /// 重启后顺序保留: 排序和移动之后退出再打开, 列表按用户看到的顺序恢复 (Job 随条目存了名字、大小和日期)。
+    /// 需要一个在跑的、没有同名旧 Job 的 Daemon 替身或测试 Daemon (HOST_DAEMON_PORT): 只有已提交的 Job 会被保存, 待上传的图片重启后本来就没有了;
+    /// 上一轮留在 App 沙盒里的存档会按 id 去 Daemon 找, 找不到就丢弃, 所以重跑前换一个新的 Daemon 进程。
+    func testTheArrangedOrderSurvivesARelaunch() {
+        let first = launch(["-forget-pairing", "-pick-folder", arrangeFolder])
+        pair(first)
+        element(first, "add-images").tap()
+        XCTAssertTrue(element(first, "import-files").waitForExistence(timeout: 5))
+        element(first, "import-files").tap()
+        let summary = element(first, "jobs-summary")
+        expectation(for: NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "全部完成", "共 8 张"), evaluatedWith: summary)
+        waitForExpectations(timeout: 60)
+        sort(first, "size-desc")
+        element(first, "更多: page11.png").tap()
+        XCTAssertTrue(element(first, "move-to-front").waitForExistence(timeout: 5))
+        element(first, "move-to-front").tap()
+        let arranged = titles(first)
+        XCTAssertEqual(arranged.first, "page11.png")
+        XCTAssertEqual(arranged.count, 8)
+        attach(first.screenshot(), "arrange-before-relaunch")
+        // 存盘有 0.4 秒的防抖。
+        sleep(2)
+        first.terminate()
+
+        let second = launch()
+        let again = element(second, "jobs-summary")
+        XCTAssertTrue(again.waitForExistence(timeout: 30))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "共 8 张"), evaluatedWith: again)
+        waitForExpectations(timeout: 30)
+        XCTAssertEqual(titles(second), arranged, "the list comes back in the order the user left it")
+        attach(second.screenshot(), "arrange-after-relaunch")
+        // 大小和日期也回来了: 再按日期排序能用。
+        sort(second, "modified-asc")
+        XCTAssertEqual(titles(second), ["Page1.png", "page3.png", "page20.png", "page10.png", "page11.png", "Page4.png", "cover.png", "page2.png"])
+        // 已完成的 Job 也能拖, 放手的那一下不会把它打开。
+        let finished = titles(second)
+        _ = longPressDrag(second, row(second, finished[1]), to: row(second, finished[0]), hold: 1)
+        XCTAssertFalse(element(second, "viewer-close").exists, "dragging a finished job must not open it")
+        XCTAssertEqual(Array(titles(second).prefix(2)), [finished[1], finished[0]])
+    }
+
+    /// 长按之后不动就抬手: 没有影子留下, 没有改顺序, 也没有打开东西, 列表还能照常滚动 (拖动开始时 List 的 scrollable 关了, 结束时要恢复)。
+    func testALongPressWithoutMovingLeavesNothingBehindAndTheListStillScrolls() {
+        let app = launchWithImages(count: 60, folder: manyFolder, layout: "list")
+        let before = Array(titles(app).prefix(6))
+        XCTAssertEqual(before.first, "img01.png")
+        row(app, "img03.png").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1.5)
+        XCTAssertFalse(element(app, "drag-ghost").exists)
+        XCTAssertFalse(element(app, "drop-marker").exists)
+        XCTAssertEqual(Array(titles(app).prefix(6)), before)
+        let list = element(app, "job-list")
+        list.swipeUp()
+        XCTAssertNotEqual(titles(app).first, "img01.png", "the list should scroll again after a long press that did not move")
+    }
+
+    /// 滚动之后再拖: 落点按滚动后的位置算, 不是按列表顶部算。
+    func testDraggingAfterScrollingUsesTheScrolledPosition() {
+        let app = launchWithImages(count: 60, folder: manyFolder, layout: "list")
+        let list = element(app, "job-list")
+        list.swipeUp()
+        list.swipeUp()
+        let visible = Array(titles(app).prefix(8))
+        XCTAssertGreaterThanOrEqual(visible.count, 8)
+        XCTAssertNotEqual(visible.first, "img01.png")
+        _ = longPressDrag(app, row(app, visible[2]), to: row(app, visible[5]), hold: 1)
+        var expected = visible
+        expected.insert(expected.remove(at: 2), at: 5)
+        XCTAssertEqual(Array(titles(app).prefix(8)), expected)
+    }
+
+    /// 普通的上下滑动照常滚动列表, 不会被当成拖动 (没有长按)。
+    func testAnOrdinarySwipeStillScrollsAndDoesNotReorder() {
+        let app = launchWithImages(count: 60, folder: manyFolder, layout: "list")
+        let before = titles(app)
+        XCTAssertEqual(before.first, "img01.png")
+        let list = element(app, "job-list")
+        list.swipeUp()
+        list.swipeUp()
+        let scrolled = titles(app)
+        XCTAssertNotEqual(scrolled.first, "img01.png", "swiping should scroll the list")
+        XCTAssertEqual(scrolled, scrolled.sorted { $0.localizedStandardCompare($1) == .orderedAscending }, "a swipe must not have moved anything")
+    }
+
+    /// 拖到列表下沿停住, 列表自动往下滚, 放手时那一项落在远处。
+    func testDraggingToTheBottomEdgeAutoScrollsTheListAndDropsFarAway() {
+        let app = launchWithImages(count: 60, folder: manyFolder, layout: "list")
+        let first = row(app, "img01.png")
+        XCTAssertTrue(first.exists)
+        let list = element(app, "job-list")
+        let from = first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let edge = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.99))
+        from.press(forDuration: 1.0, thenDragTo: edge, withVelocity: .slow, thenHoldForDuration: 3)
+        attach(app.screenshot(), "arrange-after-autoscroll-drop")
+        let nowVisible = titles(app)
+        XCTAssertFalse(nowVisible.isEmpty)
+        // 放手时指针在列表下沿, 那一项落在下沿那一格: 半截在列表外, 所以不在「看得见」的集合里, 但它在已渲染的范围内; 回到顶部才渲染的话它就是没动。
+        XCTAssertTrue(row(app, "img01.png").exists, "the dragged row dropped where the list had scrolled to, not back at the top")
+        XCTAssertNotEqual(nowVisible.first, "img02.png", "the list scrolled away from the top while the finger rested at the edge")
+        for _ in 0..<12 { list.swipeDown() }
+        XCTAssertEqual(titles(app).first, "img02.png", "img01 left the top of the list")
+    }
+}
+
+private extension XCUIElement {
+    var frameIfExists: CGRect? { exists ? frame : nil }
+}
+
+private final class Locked<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Value
+    init(_ value: Value) { self.value = value }
+    func get() -> Value { lock.lock(); defer { lock.unlock() }; return value }
+    func set(_ next: Value) { lock.lock(); value = next; lock.unlock() }
 }
