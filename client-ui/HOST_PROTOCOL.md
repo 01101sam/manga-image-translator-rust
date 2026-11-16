@@ -15,7 +15,8 @@
 - 名字只含 `A-Z a-z 0-9 _ . : -`。`nsh.json` 的 `capabilities.host` 授权 `session.*`、`files.*`、`upload.*`、`artifact.*`、`pdf.*`; 宿主新增别的前缀时要同步加。事件不需要授权。
 - 宿主**在 TSX 注册监听之前发的事件不会重放**。所以 TSX 启动时先挂监听, 再调用 `session.snapshot` 读初始状态; 宿主把初始状态放在 snapshot 里, 之后的变化才用事件推送。宿主因此把 `session.snapshot` 当作「监听已经挂好」的信号: 在它被调用之前要发的 `files.added`、`pdf.added`、`host.notice` (冷启动时从分享扩展的收件箱搬来的文件、「打开方式」带来的文件) 先攒着, 调用之后按原顺序补发; 界面重新载入时重新等这个信号。
 - `files.pick` 和 `upload.start` 由 TSX 以 `timeout: 0` 调用 (不限时): 用户可能在选择器里停很久, 大图上传可能很慢。其余调用用默认的 30 秒。
-- **文件引用** `{ id, name, size, type, modifiedAt? }` 是 `files.pick`、`files.paste`、`files.added`、`pdf.renderPage` 返回或推送的同一种结构。`size` 是字节数, `modifiedAt` 是文件的修改时间, 自 1970-01-01 UTC 起的**毫秒**数。TSX 用名字、大小、修改时间做任务页的一次性排序, 并随 Job 一起存进 NSH Storage (重启后仍可排序); 宿主读不到的值就不给 (`modifiedAt` 缺省, `size` 给 0), TSX 排序时把缺值的条目放在末尾, 不要编一个。宿主只读文件的元数据, 不读内容。
+- **文件引用** `{ id, name, size, type, modifiedAt?, thumb? }` 是 `files.pick`、`files.paste`、`files.added`、`pdf.renderPage` 返回或推送的同一种结构。`size` 是字节数, `modifiedAt` 是文件的修改时间, 自 1970-01-01 UTC 起的**毫秒**数。TSX 用名字、大小、修改时间做任务页的一次性排序, 并随 Job 一起存进 NSH Storage (重启后仍可排序); 宿主读不到的值就不给 (`modifiedAt` 缺省, `size` 给 0), TSX 排序时把缺值的条目放在末尾, 不要编一个。宿主只读文件的元数据, 不读内容。
+- `thumb` 是导入时生成的列表缩略图: 长边 256 像素的 JPEG, 编成 `data:image/jpeg;base64,...`, 总长不超过 16000 个字符 (超过就依次缩到 192、128 像素、降质量; 还装不下就不给)。还没上传的条目 (待上传、上传中、被 Daemon 拒绝) Daemon 那边没有图, NSH 的 `Image` 又读不了本地文件, 靠它显示自己; 条目成为 Job 之后换用 Daemon 的预览并丢掉它。TSX 只收 `data:image/` 开头、不超过 24000 个字符的值, 因为每张都占 JS 堆 (上限 256 MB)。App 用 `CGImageSourceCreateThumbnailAtIndex` (方向已修正, 不把整张图解进内存: 6000x4000 的 PNG 实测峰值 footprint 只多 7 MB, 整张解开是 96 MB); Web 用 `createImageBitmap(file, { resizeWidth: 256 })` 加 canvas。读不出来就没有这个字段, 条目照常显示名字和状态徽章, 只是缩略图位置是占位图标。
 - TSX 自己限制并发: 同时在途的 `upload.start` 不超过 3 个, 在途 Job (排队 + 翻译中 + 上传中) 不超过 Daemon 队列容量 64。宿主不需要再排队, 但也不要假设一次只会来一个。
 
 ## TSX 调用宿主

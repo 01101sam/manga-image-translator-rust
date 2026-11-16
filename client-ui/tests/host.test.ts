@@ -26,6 +26,18 @@ describe("file references from the host", () => {
     for (const ref of refs) expect("modifiedAt" in ref).toBe(false);
   });
 
+  test("a thumbnail is kept only when it is a small image data URI, because every one lives in the JS heap", () => {
+    const small = "data:image/jpeg;base64," + "A".repeat(100);
+    const [kept, tooBig, notData, wrongType] = parseFiles([
+      { id: "a", name: "a", thumb: small },
+      { id: "b", name: "b", thumb: "data:image/jpeg;base64," + "A".repeat(30_000) },
+      { id: "c", name: "c", thumb: "https://elsewhere.test/x.jpg" },
+      { id: "d", name: "d", thumb: 5 },
+    ]);
+    expect(kept!.thumb).toBe(small);
+    for (const ref of [tooBig!, notData!, wrongType!]) expect("thumb" in ref).toBe(false);
+  });
+
   test("an entry without an id or a name is dropped, and a missing size is 0", () => {
     expect(parseFiles([{ name: "x" }, { id: "y" }, null, "z", { id: "ok", name: "ok" }])).toEqual([{ id: "ok", name: "ok", size: 0, type: "" }]);
     expect(parseFiles("nope")).toEqual([]);

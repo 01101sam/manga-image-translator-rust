@@ -11,11 +11,14 @@ struct FileRef: Equatable, Sendable {
     var pageCount: Int?
     /// 文件的修改时间, 毫秒时间戳。来自导入时的原文件 (URLResourceValues), 读不到时为 nil, TSX 排序时把它放在末尾。
     var modifiedAt: Double?
+    /// 列表缩略图, data:image/jpeg;base64, 开头, 不超过 ImagePrep.thumbnailBudget 个字符。还没上传的条目只能显示它 (TSX 读不了本地文件)。
+    var thumb: String?
 
     var json: [String: Any] {
         var value: [String: Any] = ["id": id, "name": name, "size": size, "type": type]
         if let pageCount { value["pageCount"] = pageCount }
         if let modifiedAt { value["modifiedAt"] = modifiedAt }
+        if let thumb { value["thumb"] = thumb }
         return value
     }
 }
@@ -148,7 +151,8 @@ final class ManagedFiles: @unchecked Sendable {
         lock.lock()
         registry[id] = stored
         lock.unlock()
-        return FileRef(id: id, name: stored.lastPathComponent, size: Self.size(of: stored), type: Self.mimeType(of: stored), modifiedAt: modifiedAt)
+        let thumb = prepare ? ImagePrep.inspect(at: stored)?.thumb : nil
+        return FileRef(id: id, name: stored.lastPathComponent, size: Self.size(of: stored), type: Self.mimeType(of: stored), modifiedAt: modifiedAt, thumb: thumb)
     }
 
     func url(for id: String) -> URL? {

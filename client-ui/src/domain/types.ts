@@ -24,6 +24,8 @@ export interface LocalFile {
   readonly type: string;
   /** 文件修改时间 (毫秒时间戳), 宿主没读到时缺省。App 读文件的 contentModificationDate, Web 读 File.lastModified。 */
   readonly modifiedAt?: number;
+  /** 宿主在导入时生成的小缩略图 (data:image/jpeg;base64,...)。还没上传的条目没有别的图可显示, 上传成为 Job 之后换用 Daemon 的预览并丢掉它。 */
+  readonly thumb?: string;
 }
 
 export const isActive = (state: JobState): boolean => state === "queued" || state === "running";

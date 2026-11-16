@@ -1,4 +1,6 @@
+import ImageIO
 import UIKit
+import UniformTypeIdentifiers
 import XCTest
 
 /// 薄宿主 + NSH 界面的端到端测试。需要一个在跑的测试 Daemon: 环境变量 TEST_RUNNER_HOST_DAEMON_HOST / _PORT / _KEY 传进来。
@@ -310,6 +312,72 @@ final class NshHostUITests: XCTestCase {
         expectation(for: NSPredicate(format: "label CONTAINS %@", "共 3 张"), evaluatedWith: element(app, "jobs-summary"))
         waitForExpectations(timeout: 30)
         shot(app, "inbox-imported-on-return")
+    }
+
+    /// 一幅纯色图, 格式和方向由参数决定; 这台设备编不了这个格式时跳过。
+    private func writeSolidImage(_ name: String, colour: UIColor, type: UTType, into folder: URL, width: Int = 400, height: Int = 600) throws -> URL {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let image = UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { context in
+            colour.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        let url = folder.appendingPathComponent(name)
+        guard let cgImage = image.cgImage, let destination = CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil) else {
+            throw XCTSkip("this device cannot encode \(type.identifier)")
+        }
+        CGImageDestinationAddImage(destination, cgImage, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { throw XCTSkip("this device cannot encode \(type.identifier)") }
+        return url
+    }
+
+    /// 截图里一个点附近 9x9 像素的平均颜色 (点按 app 的坐标, 截图按像素, 所以要按比例换算)。
+    private func colour(in screenshot: XCUIScreenshot, at point: CGPoint, appWidth: CGFloat) throws -> (r: Int, g: Int, b: Int) {
+        let image = try XCTUnwrap(screenshot.image.cgImage)
+        let scale = CGFloat(image.width) / appWidth
+        let rect = CGRect(x: point.x * scale - 4, y: point.y * scale - 4, width: 9, height: 9).integral
+        let crop = try XCTUnwrap(image.cropping(to: rect))
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let context = try XCTUnwrap(CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.interpolationQuality = .medium
+        context.draw(crop, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        return (Int(pixel[0]), Int(pixel[1]), Int(pixel[2]))
+    }
+
+    /// 还没上传的图片没有别的图可显示, 条目靠宿主导入时生成的缩略图 (data URI) 显示自己; HEIC 在宿主里转成 JPEG, 名字的主干还在。
+    /// 三幅纯色图 (PNG、HEIC、JPEG): 格子中间要是各自的颜色, 而不是占位图标的灰色。不需要 Daemon。
+    func testPickedHEICAndSolidImagesShowTheirOwnThumbnailsBeforeTheyAreUploaded() throws {
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("it-thumbs-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: scratch) }
+        _ = try writeSolidImage("red.png", colour: .red, type: .png, into: scratch)
+        _ = try writeSolidImage("blue.heic", colour: .blue, type: .heic, into: scratch)
+        _ = try writeSolidImage("green.jpg", colour: UIColor(red: 0, green: 0.8, blue: 0, alpha: 1), type: .jpeg, into: scratch)
+        let app = launch(offlinePairing + ["-pick-folder", scratch.path], seed: false)
+        XCTAssertTrue(element(app, "add-images").waitForExistence(timeout: 30))
+        element(app, "add-images").tap()
+        XCTAssertTrue(element(app, "import-files").waitForExistence(timeout: 10))
+        element(app, "import-files").tap()
+        let summary = element(app, "jobs-summary")
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "共 3 张"), evaluatedWith: summary)
+        waitForExpectations(timeout: 30)
+        func tile(_ name: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", name + ",")).firstMatch
+        }
+        for name in ["blue.jpg", "green.jpg", "red.png"] { XCTAssertTrue(tile(name).waitForExistence(timeout: 10), "\(name) is not in the list") }
+        XCTAssertFalse(tile("blue.heic").exists, "the HEIC should have been converted and renamed")
+        sleep(2)
+        let screenshot = app.screenshot()
+        shot(app, "thumbnails-before-upload")
+        let width = app.frame.width
+        for (name, expected) in [("red.png", (255, 0, 0)), ("blue.jpg", (0, 0, 255)), ("green.jpg", (0, 204, 0))] {
+            let frame = tile(name).frame
+            let found = try colour(in: screenshot, at: CGPoint(x: frame.midX, y: frame.minY + frame.height * 0.3), appWidth: width)
+            XCTAssertLessThan(abs(found.r - expected.0), 70, "\(name) thumbnail red=\(found.r)")
+            XCTAssertLessThan(abs(found.g - expected.1), 70, "\(name) thumbnail green=\(found.g)")
+            XCTAssertLessThan(abs(found.b - expected.2), 70, "\(name) thumbnail blue=\(found.b)")
+        }
     }
 
     /// 收件箱里有两个 PDF: 只打开第一个, 另一个被放掉并给一条提示。

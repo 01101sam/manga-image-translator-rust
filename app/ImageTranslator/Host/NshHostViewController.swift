@@ -505,6 +505,14 @@ enum HostMetrics {
         return (value, sampler.stop())
     }
 
+    /// measure 的同步版: 在调用线程上跑 body, 另起定时器采样峰值。
+    static func measureSync<T>(_ body: () -> T) -> (value: T, peak: (rss: Int, footprint: Int)) {
+        let sampler = PeakSampler()
+        sampler.start()
+        let value = body()
+        return (value, sampler.stop())
+    }
+
     static func measured<T>(_ stage: String, _ body: () async -> T) async -> T {
         let (value, peak) = await measure(body)
         NSLog("HOSTHOOK %@ peak rss=%dMB footprint=%dMB, after rss=%dMB footprint=%dMB", stage, peak.rss, peak.footprint, residentMB(), footprintMB())

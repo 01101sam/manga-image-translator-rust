@@ -54,11 +54,67 @@ async function convertToJpeg(file) {
   }
 }
 
+const THUMB_EDGE = 256;
+/** data URI 的字符数上限, 与 App 的 ImagePrep.thumbnailBudget 一样: 它随文件引用进 NSH 的 JS 堆。 */
+const THUMB_BUDGET = 16_000;
+
+/** 把一个图像源 (位图或 canvas) 缩成长边不超过 edge 的 JPEG data URI; 超过预算返回 null。 */
+function thumbUri(source, width, height, edge) {
+  const scale = Math.min(1, edge / Math.max(width, height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  try {
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.imageSmoothingQuality = "medium";
+    context.drawImage(source, 0, 0, canvas.width, canvas.height);
+    for (const quality of [0.7, 0.5, 0.35]) {
+      const uri = canvas.toDataURL("image/jpeg", quality);
+      if (uri.length <= THUMB_BUDGET) return uri;
+    }
+    return null;
+  } finally {
+    canvas.width = canvas.height = 0;
+  }
+}
+
+/** 先 256, 压不进预算就缩到 192、128 (App 一侧同样的阶梯)。 */
+function thumbFrom(source, width, height) {
+  for (const edge of [THUMB_EDGE, 192, 128]) {
+    const uri = thumbUri(source, width, height, edge);
+    if (uri) return uri;
+  }
+  return undefined;
+}
+
+/**
+ * 列表用的小缩略图: 还没上传的条目只能显示它 (NSH 的 Image 不读 File)。createImageBitmap 带 resizeWidth, 浏览器解码时就缩小;
+ * 浏览器解不了 (比如 HEIC) 返回 undefined, 条目照常显示名字和状态。
+ */
+async function makeThumb(file) {
+  if (typeof createImageBitmap !== "function") return undefined;
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file, { resizeWidth: THUMB_EDGE, resizeQuality: "medium" });
+  } catch {
+    return undefined;
+  }
+  try {
+    return thumbFrom(bitmap, bitmap.width, bitmap.height);
+  } catch {
+    return undefined;
+  } finally {
+    bitmap.close();
+  }
+}
+
 /**
  * 登记一批文件, 一次只处理一个 (解码要占内存)。`dated` 为假时不带修改时间: PDF 渲染出来的页是刚生成的, `lastModified` 只是渲染的那一刻,
- * 不是用户的文件日期。`prepare` 为假时不加工 (渲染出来的 PNG 页)。
+ * 不是用户的文件日期。`prepare` 为假时不转码也不自己生成缩略图 (渲染出来的 PNG 页), 缩略图由调用方用 `thumb` 给。
  */
-async function register(list, { dated = true, prepare = true } = {}) {
+async function register(list, { dated = true, prepare = true, thumb: given } = {}) {
   const refs = [];
   for (const original of list) {
     const file = prepare && hasDom && needsConversion(original) ? await convertToJpeg(original) : original;
@@ -66,6 +122,8 @@ async function register(list, { dated = true, prepare = true } = {}) {
     files.set(id, file);
     const ref = { id, name: file.name, size: file.size, type: file.type };
     if (dated && file.lastModified > 0) ref.modifiedAt = file.lastModified;
+    const thumb = given ?? (prepare && hasDom ? await makeThumb(file) : undefined);
+    if (thumb) ref.thumb = thumb;
     refs.push(ref);
   }
   return refs;
@@ -313,7 +371,8 @@ async function renderPageToFile({ fileId, page, longEdge }) {
       );
       const stem = pdfs.get(fileId).file.name.replace(/\.pdf$/i, "") || "page";
       const name = stem + "-p" + String(page + 1).padStart(3, "0") + ".png";
-      const [fileRef] = await register([new File([blob], name, { type: "image/png" })], { dated: false, prepare: false });
+      // 页图本来就在 canvas 里, 缩略图直接从它缩, 不用再解码一遍 PNG。
+      const [fileRef] = await register([new File([blob], name, { type: "image/png" })], { dated: false, prepare: false, thumb: thumbFrom(canvas, canvas.width, canvas.height) });
       return { fileRef };
     } finally {
       canvas.width = canvas.height = 0;

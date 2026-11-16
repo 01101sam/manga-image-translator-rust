@@ -53,11 +53,18 @@ export function parseDaemons(value: unknown): DaemonRef[] {
   );
 }
 
+/** 缩略图每张占 JS 堆 (上限 256 MB), 一次导入几千张, 所以只收宿主按预算生成的 JPEG data URI, 超过这个长度的当作没有。 */
+export const MAX_THUMB_CHARS = 24_000;
+
+const asThumb = (value: unknown): string | undefined =>
+  typeof value === "string" && value.startsWith("data:image/") && value.length <= MAX_THUMB_CHARS ? value : undefined;
+
 export function parseFiles(value: unknown): LocalFile[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((raw) => {
     if (!isRecord(raw) || typeof raw.id !== "string" || typeof raw.name !== "string") return [];
     const modifiedAt = typeof raw.modifiedAt === "number" && raw.modifiedAt > 0 && Number.isFinite(raw.modifiedAt) ? raw.modifiedAt : undefined;
+    const thumb = asThumb(raw.thumb);
     return [
       {
         id: raw.id,
@@ -65,6 +72,7 @@ export function parseFiles(value: unknown): LocalFile[] {
         size: typeof raw.size === "number" ? raw.size : 0,
         type: typeof raw.type === "string" ? raw.type : "",
         ...(modifiedAt === undefined ? {} : { modifiedAt }),
+        ...(thumb === undefined ? {} : { thumb }),
       },
     ];
   });

@@ -175,6 +175,91 @@ final class HostImagesTests: XCTestCase {
         XCTAssertTrue(((events[0].payload as? [String: String])?["text"] ?? "").contains("没能读进来"))
     }
 
+    private func thumbnailImage(_ uri: String) throws -> CGImage {
+        let prefix = "data:image/jpeg;base64,"
+        XCTAssertTrue(uri.hasPrefix(prefix))
+        let data = try XCTUnwrap(Data(base64Encoded: String(uri.dropFirst(prefix.count))))
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
+        XCTAssertEqual(CGImageSourceGetType(source) as String?, UTType.jpeg.identifier)
+        return try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+    }
+
+    func testTheThumbnailIsASmallJPEGDataURIWithTheLongEdgeAt256() throws {
+        let source = try makeImage("wide.png", type: .png, width: 1200, height: 800)
+        let ref = try makeFiles().adopt(source, move: true)
+        let uri = try XCTUnwrap(ref.thumb)
+        XCTAssertLessThanOrEqual(uri.count, ImagePrep.thumbnailBudget)
+        let image = try thumbnailImage(uri)
+        XCTAssertEqual([image.width, image.height], [256, 171])
+        XCTAssertEqual(ref.json["thumb"] as? String, uri)
+    }
+
+    func testTheThumbnailFollowsTheOrientationAndTheInspectionReportsTheTurnedSize() throws {
+        let source = try makeImage("turned.heic", type: .heic, width: 600, height: 400, orientation: 6)
+        let ref = try makeFiles().adopt(source, move: true)
+        let image = try thumbnailImage(try XCTUnwrap(ref.thumb))
+        XCTAssertGreaterThan(image.height, image.width, "a photo shot in portrait must not show up sideways")
+        let tilted = try makeImage("tilted.jpg", type: .jpeg, width: 600, height: 400, orientation: 6)
+        let inspection = try XCTUnwrap(ImagePrep.inspect(at: tilted))
+        XCTAssertEqual([inspection.width, inspection.height], [400, 600])
+    }
+
+    func testASmallImageIsNotUpscaledForItsThumbnail() throws {
+        let source = try makeImage("tiny.png", type: .png, width: 60, height: 40)
+        let ref = try makeFiles().adopt(source, move: true)
+        let image = try thumbnailImage(try XCTUnwrap(ref.thumb))
+        XCTAssertLessThanOrEqual(max(image.width, image.height), 256)
+    }
+
+    func testNoiseThatCannotFitTheBudgetGivesNoThumbnailInsteadOfAHugeOne() throws {
+        var pixels = [UInt8](repeating: 0, count: 1000 * 1000 * 4)
+        var generator = SystemRandomNumberGenerator()
+        for index in pixels.indices { pixels[index] = index % 4 == 3 ? 255 : UInt8.random(in: 0...255, using: &generator) }
+        let provider = try XCTUnwrap(CGDataProvider(data: Data(pixels) as CFData))
+        let image = try XCTUnwrap(CGImage(
+            width: 1000, height: 1000, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 4000, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue), provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+        ))
+        let url = directory.appendingPathComponent("noise.png")
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let ref = try makeFiles().adopt(url, move: true)
+        if let thumb = ref.thumb { XCTAssertLessThanOrEqual(thumb.count, ImagePrep.thumbnailBudget) }
+    }
+
+    func testAFileThatIsNotADecodableImageStillImportsJustWithoutAThumbnail() throws {
+        let junk = directory.appendingPathComponent("junk.png")
+        try Data(repeating: 3, count: 100).write(to: junk)
+        let ref = try makeFiles().adopt(junk, move: true)
+        XCTAssertNil(ref.thumb)
+        XCTAssertNil(ref.json["thumb"])
+    }
+
+    /// 要在真机上和一次导入几百张时不涨内存, 靠的是 ImageIO 缩略图解码不把整张图解进内存。6000x4000 的 PNG 整张解开是 96 MB。
+    func testThumbnailOfALargePNGDoesNotDecodeTheWholeImage() throws {
+        let width = 6000, height = 4000
+        let space = CGColorSpaceCreateDeviceRGB()
+        let url = directory.appendingPathComponent("large.png")
+        do {
+            let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+            context.setFillColor(UIColor.red.cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: width / 2, height: height))
+            context.setFillColor(UIColor.blue.cgColor)
+            context.fill(CGRect(x: width / 2, y: 0, width: width / 2, height: height))
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil))
+            CGImageDestinationAddImage(destination, try XCTUnwrap(context.makeImage()), nil)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+        }
+        let before = HostMetrics.footprintMB()
+        var inspected: ImagePrep.Inspection?
+        let (_, peak) = HostMetrics.measureSync { inspected = ImagePrep.inspect(at: url) }
+        print("THUMBNAIL large png \(width)x\(height) footprint before=\(before)MB peak=\(peak.footprint)MB")
+        XCTAssertEqual([inspected?.width, inspected?.height], [width, height])
+        XCTAssertNotNil(inspected?.thumb)
+        XCTAssertLessThan(peak.footprint - before, 60, "a 96 MB bitmap would show here")
+    }
+
     func testTheSharedNameWinsOverTheProvidersGenericTemporaryName() {
         let temporary = URL(fileURLWithPath: "/tmp/image.heic")
         XCTAssertEqual(FileNaming.name(for: temporary, suggested: "IMG_4321", type: .heic), "IMG_4321.heic")

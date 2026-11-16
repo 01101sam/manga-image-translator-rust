@@ -51,10 +51,14 @@ export const statusOf = (item: Item): string => {
   }
 };
 
-/** 缩略图的 URL。始终是降采样的小图 (列表 w=256, 网格按格宽 256 或 512), 原图字节不会进入 JS, 也不会被整张解码。 */
+/**
+ * 缩略图的 URL。始终是降采样的小图 (列表 w=256, 网格按格宽 256 或 512), 原图字节不会进入 JS, 也不会被整张解码。
+ * 还没成为 Job 的条目 (待上传、上传中、被拒绝) Daemon 那边没有图, 用宿主导入时生成的 data URI。
+ */
 export function thumbUrl(item: Item, width: number = THUMB_WIDTH): string {
+  if (item.kind !== "job") return item.file.thumb ?? "";
   const s = session();
-  if (item.kind !== "job" || s.kind !== "paired") return "";
+  if (s.kind !== "paired") return "";
   const kind = item.row.state === "done" ? "artifact" : "source";
   return mediaUrl(s.daemon.url, item.row.jobId, kind, width, s.token);
 }

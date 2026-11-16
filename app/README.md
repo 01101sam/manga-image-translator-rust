@@ -52,6 +52,8 @@ Daemon 的 `image` crate 只带 PNG、JPEG、GIF、WebP、TIFF、BMP、ICO、PNM
 
 所以宿主在文件进沙盒时统一转码 (`ImagePrep`): 用户看到的文件名保留, 只把扩展名换成 `.jpg`; 转不了 (ImageIO 也解不开) 的文件原样保留, 让 Daemon 如实拒绝, 列表里显示「格式不支持」, 不悄悄丢掉。转码在 App 里做, 在 `FileIngestor` 的并发名额里, 一次只解一张, 12 MP 的 HEIC 解码峰值约 48 MB 的位图。转码把方向烘进像素; 原本就是 JPEG 的文件带 EXIF 方向时 Daemon 照样横着读 (现有行为, 没有改)。
 
+导入时顺带生成列表缩略图 (`ImagePrep.inspect`, 长边 256 像素、JPEG、data URI 不超过 16000 个字符, 随文件引用交给 TSX), 因为还没上传的条目没有别的图可显示。iPad 模拟器上实测 (`testPickedHEICAndSolidImagesShowTheirOwnThumbnailsBeforeTheyAreUploaded`): PNG、HEIC、JPEG 三幅纯色图, 格子里是各自的颜色, 说明 NSH 的 `Image` 在嵌入运行时里能显示 `data:` 地址。6000x4000 的 PNG 生成缩略图的峰值 footprint 只比起点多 7 MB (`testThumbnailOfALargePNGDoesNotDecodeTheWholeImage`)。一次导入几千张时每张缩略图占 JS 堆最多约 16 KB, 几千张合计几十 MB, 离 256 MB 的上限还远, 但没有在设备上实测过 2000 张。
+
 导入的结果分三类, 用户的处理办法不同: 导入了、「已忽略 N 个不是图片或 PDF 的文件」、「N 个文件没能读进来」(provider 交不出文件: iCloud 里还没下载好、离线、文件损坏、磁盘满; 或链接下载失败)。后两种各发一条 `host.notice`。
 
 ## 测试钩子

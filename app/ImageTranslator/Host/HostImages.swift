@@ -47,6 +47,58 @@ enum ImagePrep {
         }
     }
 
+    /// 列表缩略图的长边 (像素)。列表和网格的格子最大约 200 点, 256 像素在 1x 屏上够用, 2x 屏上略糊但只是占位, 上传后换成 Daemon 的预览。
+    static let thumbnailEdge = 256
+
+    /// 缩略图 data URI 的字符数上限。它随文件引用进 JS 堆 (上限 256 MB), 一次导入几千张时每张都占这么多, 所以压到 16 KB 以内; 排版很密的漫画页压到这个大小也还能认出是哪一页。
+    static let thumbnailBudget = 16_000
+
+    /// 对放进沙盒的图片读到的东西: 方向修正后的像素宽高, 和列表用的小缩略图。
+    struct Inspection: Equatable {
+        var width: Int
+        var height: Int
+        /// data:image/jpeg;base64,... 读不出来 (文件损坏、ImageIO 解不开) 时为 nil: 条目照常显示名字和状态, 只是没有缩略图。
+        var thumb: String?
+    }
+
+    /// 一次打开文件, 取尺寸和缩略图。ImageIO 的缩略图解码对 JPEG 用 DCT 缩放、对 PNG 逐行缩小, 不会为了 256 像素把整张图解进内存。
+    static func inspect(at url: URL) -> Inspection? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+              CGImageSourceGetCount(source) > 0,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0
+        else { return nil }
+        // EXIF 方向 5 到 8 是转 90 度: 显示出来的宽高互换。
+        let turned = (5...8).contains(properties[kCGImagePropertyOrientation] as? Int ?? 1)
+        return Inspection(width: turned ? height : width, height: turned ? width : height, thumb: thumbnailURI(from: source))
+    }
+
+    /// 先试 256 像素, 压不进预算就依次缩到 192、128; 每个尺寸试几档质量。
+    static func thumbnailURI(from source: CGImageSource) -> String? {
+        for edge in [thumbnailEdge, 192, 128] {
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: edge,
+            ]
+            guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+            for quality in [0.7, 0.5, 0.35] {
+                guard let data = jpegData(image, quality: quality) else { continue }
+                let uri = "data:image/jpeg;base64," + data.base64EncodedString()
+                if uri.count <= thumbnailBudget { return uri }
+            }
+        }
+        return nil
+    }
+
+    static func jpegData(_ image: CGImage, quality: Double) -> Data? {
+        let data = NSMutableData()
+        guard let target = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(target, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        return CGImageDestinationFinalize(target) ? data as Data : nil
+    }
+
     /// 解码一次、编码一次。Daemon 不读 EXIF 方向, 所以方向 (kCGImageSourceCreateThumbnailWithTransform) 烘进像素, 输出不带方向标记; 宽色域转 sRGB。
     private static func writeJPEG(from source: CGImageSource, to destination: URL) -> Bool {
         guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
