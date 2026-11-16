@@ -24,12 +24,16 @@ struct FileRef: Equatable, Sendable {
 struct IngestResult: Equatable, Sendable {
     var images: [FileRef] = []
     var pdfs: [FileRef] = []
+    /// 不是图片也不是 PDF 的文件数。
     var ignored = 0
+    /// 是图片或 PDF、却没能读进来的个数: iCloud 里还没下载好、离线、文件损坏、磁盘满。和 ignored 分开说, 因为用户的处理办法不同 (重试 vs 放弃)。
+    var failed = 0
 
     mutating func merge(_ other: IngestResult) {
         images += other.images
         pdfs += other.pdfs
         ignored += other.ignored
+        failed += other.failed
     }
 }
 
@@ -125,7 +129,8 @@ final class ManagedFiles: @unchecked Sendable {
     // MARK: - 图片 (含渲染出的 PDF 页)
 
     /// 把一个文件收进沙盒并登记。move 为真时搬走原文件 (拖放给的临时文件在回调返回后就会被系统删掉), 失败退回拷贝。
-    func adopt(_ source: URL, name: String? = nil, move: Bool, dating: FileDating = .original, now: Date = Date()) throws -> FileRef {
+    /// prepare 为真时对图片做 ImagePrep 的加工 (Daemon 读不了的格式转成 JPEG, 返回的名字、大小、类型是转之后的); 渲染出来的 PNG 页不需要。
+    func adopt(_ source: URL, name: String? = nil, move: Bool, dating: FileDating = .original, now: Date = Date(), prepare: Bool = true) throws -> FileRef {
         // 搬走之后原文件就没了, 所以修改时间要在搬之前读 (只读元数据, 不读内容)。
         let modifiedAt = Self.modifiedAt(of: source, dating: dating, now: now)
         let id = UUID().uuidString
@@ -139,10 +144,11 @@ final class ManagedFiles: @unchecked Sendable {
             try? fileManager.removeItem(at: directory)
             throw error
         }
+        let stored = prepare ? (ImagePrep.convertIfNeeded(at: destination) ?? destination) : destination
         lock.lock()
-        registry[id] = destination
+        registry[id] = stored
         lock.unlock()
-        return FileRef(id: id, name: fileName, size: Self.size(of: destination), type: Self.mimeType(of: destination), modifiedAt: modifiedAt)
+        return FileRef(id: id, name: stored.lastPathComponent, size: Self.size(of: stored), type: Self.mimeType(of: stored), modifiedAt: modifiedAt)
     }
 
     func url(for id: String) -> URL? {

@@ -70,7 +70,8 @@
 
 - `id` 由宿主生成, 只在宿主进程内有意义。宿主把 `id` 映射到文件引用 (App: 沙盒内的临时副本或安全作用域 URL; Web: `File` 对象)。**不要把文件读进内存再回传。**
 - `modifiedAt`: App 在复制或搬进沙盒**之前**从原文件读 `URLResourceValues.contentModificationDate` (文档选择器、文件夹、`-pick-folder`; 「打开方式」读的是系统拷进 `Documents/Inbox` 的副本, 读到什么报什么, 系统是否保留原时间没有测过); Web 用 `File.lastModified` (为 0 时省略)。拖放、照片选择器、粘贴走 `NSItemProvider` 的文件表示, 系统给的是临时副本, 实测 (iPad 模拟器, 进程内 provider) 副本的修改时间是复制的那一刻而不是原文件的, 所以这几条路径上离导入不到 2 分钟的修改时间当作没有 (`FileDating.providerCopy`); 真机上系统是否保留原时间没有测过。分享扩展的收件箱、下载下来的链接、`pdf.renderPage` 渲染出的页不带 `modifiedAt` (收件箱里是扩展拷贝时的时间, 页图是刚生成的)。
-- 非图片、非 PDF 的文件不要返回, 数一下发一条 `host.notice`。
+- 非图片、非 PDF 的文件不要返回, 数一下发一条 `host.notice`。是图片或 PDF、却没能读进来的 (iCloud 里还没下载好、离线、文件损坏) 另数一个数, 另发一条 `host.notice`, 因为用户该做的是重试而不是放弃。
+- **图片格式由宿主负责。** Daemon 只读 PNG、JPEG、GIF、WebP、TIFF、BMP 这类, HEIC、HEIF、AVIF 会得到 400。宿主在文件进入沙盒时按内容判断, 把别的格式转成同名的 JPEG (质量 0.92, EXIF 方向烘进像素, 不放大), 返回的 `name`、`size`、`type` 是转之后的。拖放、选择器、粘贴、分享收件箱、打开方式、链接下载走同一个入口, 没有例外。转不了的文件原样返回, 由 Daemon 拒绝, TSX 把这个 400 显示成「格式不支持」。文件名保留用户看到的名字 (`NSItemProvider.suggestedName`; Web 是 `File.name`), 只换扩展名。Web 宿主用 `createImageBitmap` 加 canvas 做同样的转换, 浏览器解不了就原样交出。
 
 ### `files.paste`
 
@@ -125,7 +126,7 @@
 | 401 | `unauthorized` | 回到未配对, 文件仍留在队列里 |
 | 429 | `queue-full` | 文件回到 Pending, 1.5 秒后重试 |
 | 503 | `engine-stopped` | 文件回到 Pending, 等 Engine 启动 |
-| 400 / 413 / 415 / 422 | `rejected` | 文件留在列表里标红, 不再自动重试, 用户可重试或移除, 宿主应保留文件直到收到 `files.release` |
+| 400 / 413 / 415 / 422 | `rejected` | 文件留在列表里标红, 不再自动重试, 用户可重试或移除, 宿主应保留文件直到收到 `files.release`。`message` 是 Daemon 的 `error` 原文; 其中「无法识别图片」「不是支持的图片格式」「not supported」这类 TSX 显示成「格式不支持」 |
 | 5xx、连不上、超时 | `network` | 文件回到 Pending, 3 秒后重试 |
 
 `queue-full`、`engine-stopped`、`unauthorized`、`network` 时宿主必须**保留**文件, TSX 会再次用同一个 `fileId` 调用。

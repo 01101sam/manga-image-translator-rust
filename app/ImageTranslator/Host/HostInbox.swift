@@ -39,7 +39,7 @@ actor InboxDrainer {
         }
         guard let text = try? String(contentsOf: payload, encoding: .utf8),
               let link = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))
-        else { return IngestResult(ignored: 1) }
+        else { return IngestResult(failed: 1) }
         return await ingestor.ingest(webLink: link, allowing: [.image, .pdf])
     }
 }

@@ -27,6 +27,7 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | `Host/HostSession.swift` | `session.*`: Bonjour 发现的 Daemon 加 Keychain 里的 Token, Token 永久保存 |
 | `Host/HostFiles.swift` | `ManagedFiles`: 文件 id 到沙盒文件。图片在 tmp, 启动时整个清掉; PDF 在 Application Support, id 是文件名里的 uuid, 超过 30 天没打开才在启动时清掉 (`pdf.open` 凭上次的 id 找回); 交给分享面板的文件放在各自的子目录里, 面板上显示的是干净的文件名 |
 | `Host/HostIngest.swift` | 拖放和选择的文件进沙盒。每个 `NSItemProvider` 只读一种表示, 一次只读一个, 目录递归并按自然序排; 只带一个网页链接的拖放会下载, 按应答类型或文件头判断是图片还是 PDF (`Info.plist` 只开了 `NSAllowsLocalNetworking`, 所以 http 链接只有局域网地址能下载, https 不受限) |
+| `Host/HostImages.swift` | `ImagePrep`: 图片进沙盒时的加工。Daemon 按内容读不了的格式 (HEIC、HEIF、AVIF、JPEG 2000、PSD、TGA 等, 以 ImageIO 的 `CGImageSourceGetType` 为准, 不看扩展名) 转成同名的 JPEG: 质量 0.92, EXIF 方向烘进像素 (Daemon 不读 EXIF 方向), 宽色域转 sRGB, 不放大。`ManagedFiles.adopt` 在放进沙盒时调用, 所以拖放、选择器、粘贴、分享收件箱、打开方式、链接这几条入口一视同仁 |
 | `Host/HostPickers.swift` | 照片 (PHPicker) 和文档选择器 (图片、PDF、文件夹)。选哪个由 TSX 的导入菜单决定 (`files.pick` 的 `source`), 宿主不再弹自己的选择菜单 |
 | `Host/HostUpload.swift` | `upload.start`: multipart 先分块写进临时文件, 再 `URLSession.upload(fromFile:)`, 字节不进 JS 也不在内存里拼 `Data` |
 | `Host/HostArtifact.swift` | `artifact.save`: 下载到临时文件, 弹系统分享面板 |
@@ -44,6 +45,14 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 - NSH 的图片缓存在磁盘上限 256 MB。
 - 拖放摄入一次只读一个 provider。iPad 模拟器里用进程内 `NSItemProvider(contentsOf:)` 读 30 张 8000x12000 的 PNG (每张 37 MB): 并发 2 或 4 时 RSS 峰值 1.37 GB (4 次实测 1364 到 1374 MB), 并发 1 时 332、366、357 MB (3 次); 文件选择器的 URL 路径 (`FileManager.copyItem`, APFS 克隆) 是 295 MB。三种情况的 phys_footprint 都是 23 到 24 MB, 所以 jetsam 看的内存没变。并发 2 时用 `vmmap` 看, 多出来的常驻内存在只读的系统库区域 (`__LINKEDIT` 约 778 MB、`__TEXT` 约 493 MB), 不在文件映射里 (`mapped file` 只有 11 MB 常驻), 所以机制没查清, 也只在模拟器里见过; `HostFilesTests.testProviderIngestOfBigFilesKeepsResidentMemoryNearOneFile` 断言的就是这个模拟器里的 RSS 现象。`loadInPlaceFileRepresentation` 在并发 4 和 1 时的峰值与 `loadFileRepresentation` 一样, 没有采用。200 张 1.7 MB 的 JPEG 并发 1 和 4 的耗时都是 0.9 秒。真实跨应用拖放走系统的进程间拷贝, 没有测过, 并发 1 在那条路径上会不会慢是推测。限流要罩住整个 `load`, 连类型判断也在内 (只限住读文件那一步时, 同样的测试 RSS 又涨回 240 MB); 所以网页链接的下载也占这一个名额, 一个慢链接会拖住后面的拖放和选择, 这是已知的限制。
 - PDF 导出 (`pdf.export`) 的内存随被拷贝的原页数线性增长, 没有上限。实测 (iPad 模拟器, 单元测试进程): 100 页、131 MB 的图片 PDF 换 10 页译文, 5 秒, 峰值 footprint 364 MB (起点 40 MB, 约每页 3 MB), 输出 118 MB; 24 页每页一张不同的 2400x3200 噪声译文图时 RSS +101 MB。CoreGraphics 的 PDF 上下文在 `closePDF` 之前一直持有已写页的资源。试过两种替代, 都没有更好, 所以保留最简单的写法: 每 20 页换一个上下文再用 PDFKit 合并, 写的时候 footprint 在 60 到 130 MB, 合并时峰值 429 MB; 用 PDFKit 整本换页, 峰值 350 MB。几百页以上的大图片 PDF 导出可能占到 GB 级, 这是已知的限制。手动复现: 设 `TEST_RUNNER_HOST_MANGA_PDF` 跑 `HostFilesTests.testExportOfARealImagePDFReportsItsMemory`。
+
+## 图片格式
+
+Daemon 的 `image` crate 只带 PNG、JPEG、GIF、WebP、TIFF、BMP、ICO、PNM、TGA (无魔数, 按内容猜不到)、QOI、DDS、EXR、HDR 的解码, 没有 HEIC、HEIF (没有 libheif) 和 AVIF (默认特性只有编码)。2026-11-16 用 `sips` 生成同一张图的各种格式 POST 给测试 Daemon (测得): PNG、JPEG、TIFF、BMP、GIF 返回 200; HEIC 返回 400 `无法识别图片: 不是支持的图片格式`, AVIF 返回 400 `The image format Avif is not supported`, JPEG 2000、PSD、TGA、PDF 同为 400。
+
+所以宿主在文件进沙盒时统一转码 (`ImagePrep`): 用户看到的文件名保留, 只把扩展名换成 `.jpg`; 转不了 (ImageIO 也解不开) 的文件原样保留, 让 Daemon 如实拒绝, 列表里显示「格式不支持」, 不悄悄丢掉。转码在 App 里做, 在 `FileIngestor` 的并发名额里, 一次只解一张, 12 MP 的 HEIC 解码峰值约 48 MB 的位图。转码把方向烘进像素; 原本就是 JPEG 的文件带 EXIF 方向时 Daemon 照样横着读 (现有行为, 没有改)。
+
+导入的结果分三类, 用户的处理办法不同: 导入了、「已忽略 N 个不是图片或 PDF 的文件」、「N 个文件没能读进来」(provider 交不出文件: iCloud 里还没下载好、离线、文件损坏、磁盘满; 或链接下载失败)。后两种各发一条 `host.notice`。
 
 ## 测试钩子
 
@@ -77,7 +86,7 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 - **幂等:** 条目只处理一次, 处理完或处理不了 (不是图片或 PDF) 整个目录都删。搬文件要么还在收件箱要么已在沙盒, 没有中间态; 搬完到删目录之间崩溃留下的是空目录, 下次直接删, 不会重复导入。`.staging/` 里超过一小时的是被杀掉的扩展留下的, 启动时删。
 - **没保证到的:** 进了沙盒的图片和拖放的一样, 待上传列表只在 TSX 的内存里, App 在上传前被系统杀掉, 这些图片就没了 (沙盒里的图片启动时清理)。所以「不丢」只到「从收件箱进沙盒」这一步。分享时还没配对也一样: 图片留在待上传, 配对后才上传。
 - **链接:** 激活规则只能按类型判断, 所以任何网页的分享面板里都会出现这个扩展; 扩展自己拦掉明显不是图片的链接 (空路径、`.html` 等, 并说明「没有可以加入的图片或 PDF」), 其余链接 (比如 `…/img?id=3`) 存成 `link.weblink`, 到 App 里下载后才知道是不是图片或 PDF, 不是就给一条「已忽略」的提示。
-- **HEIC:** 分享给扩展的照片里, 扩展优先挑 PNG、JPEG、WebP 这类 Daemon 认的表示; 照片库只给 HEIC 时, Daemon 会拒绝这张图 (在列表里标红), 目前没有在宿主里转码。
+- **HEIC:** 分享给扩展的照片里, 扩展优先挑 PNG、JPEG、WebP 这类 Daemon 认的表示; 照片库只给 HEIC 时扩展照样放进收件箱 (它有约 120 MB 的内存上限, 不解码), 转码在 App 里做 (见下面「图片格式」)。文件名用 `provider.suggestedName` (相册里看到的名字), 不用临时副本的通用名 ("HEIF图像"、"image")。
 - **测试:** `ShareInboxTests`、`InboxDrainerTests` 是单测; `NshHostUITests` 里用 `-inbox-dir` 测冷启动和回前台的导入; 整条链 (照片 App 分享, 扩展, 收件箱, 打开 App) 的两个用例要 `xcrun simctl addmedia` 给模拟器放照片并设 `TEST_RUNNER_HOST_PHOTOS_SHARE=1`, 因为照片 App 的界面随系统版本变。
 
 ## 真机签名 (App Group)

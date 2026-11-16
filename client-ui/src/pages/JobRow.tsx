@@ -3,6 +3,7 @@ import { jobStatusLabel, shortJobId } from "../domain/job";
 import { ROW_HEIGHT } from "../domain/grid";
 import { mediaUrl, THUMB_WIDTH } from "../domain/media";
 import { factsOf, isRemovable, type Item } from "../domain/board";
+import { rejectionHint, rejectionLabel } from "../domain/rejection";
 import { formatBytes, formatModified } from "../format";
 import { cancelItem, highlight, itemOf, removeItems, retryItem } from "../store/jobs";
 import { openMenu } from "../store/menu";
@@ -32,8 +33,9 @@ export const toneOf = (item: Item): BadgeTone => {
 
 export const titleOf = (item: Item): string => (item.kind === "job" ? (item.name ?? shortJobId(item.row.jobId)) : item.file.name);
 
-/** 行里状态旁的小字: 大小和修改时间, 缺的不显示。 */
+/** 行里状态旁的小字: 大小和修改时间, 缺的不显示; 被拒绝的条目改说怎么办。 */
 export const factsLabel = (item: Item): string => {
+  if (item.kind === "pending" && item.rejected !== undefined) return rejectionHint(item.rejected) ?? "";
   const { size, modifiedAt } = factsOf(item);
   return [size === undefined ? "" : formatBytes(size), modifiedAt === undefined ? "" : formatModified(modifiedAt)].filter(Boolean).join(" · ");
 };
@@ -41,7 +43,7 @@ export const factsLabel = (item: Item): string => {
 export const statusOf = (item: Item): string => {
   switch (item.kind) {
     case "pending":
-      return item.rejected ?? "等待上传";
+      return item.rejected === undefined ? "等待上传" : rejectionLabel(item.rejected);
     case "uploading":
       return "上传中";
     case "job":

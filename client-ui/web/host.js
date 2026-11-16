@@ -11,15 +11,64 @@ let seq = 0;
 
 const isImage = (file) => file.type.startsWith("image/") || IMAGE_EXT.test(file.name);
 
-/** `dated` 为假时不带修改时间: PDF 渲染出来的页是刚生成的, `lastModified` 只是渲染的那一刻, 不是用户的文件日期。 */
-function register(list, { dated = true } = {}) {
-  return list.map((file) => {
+/**
+ * Daemon 的 image crate 按内容能解码的格式 (App 一侧的 ImagePrep.daemonReadable 同一份清单)。别的 (HEIC、HEIF、AVIF、JPEG 2000 等) 不行,
+ * 所以浏览器能解码的话在这里转成 JPEG; 浏览器也解不了就原样交出去, Daemon 会拒绝, 列表里显示「格式不支持」。
+ */
+const DAEMON_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/tiff", "image/x-icon", "image/vnd.microsoft.icon"]);
+const DAEMON_EXT = /\.(png|jpe?g|gif|webp|bmp|tiff?|ico)$/i;
+const JPEG_QUALITY = 0.92;
+
+/** 浏览器有时不给 HEIC 的 type (空字符串), 所以 type 不在清单里、扩展名也不在时才转。 */
+const needsConversion = (file) => !DAEMON_TYPES.has(file.type) && !DAEMON_EXT.test(file.name);
+
+/**
+ * 转成同名 (扩展名换成 .jpg) 的 JPEG。createImageBitmap 默认按 EXIF 方向解码, 方向于是烘进像素 (Daemon 不读 EXIF 方向)。
+ * 一次解码一张, 画完立刻放掉位图和 canvas。任何一步失败都返回原文件。
+ */
+async function convertToJpeg(file) {
+  if (typeof createImageBitmap !== "function") return file;
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    return file;
+  }
+  const canvas = document.createElement("canvas");
+  try {
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", JPEG_QUALITY));
+    if (!blob) return file;
+    const stem = file.name.replace(/\.[^./\\]*$/, "") || "image";
+    return new File([blob], stem + ".jpg", { type: "image/jpeg", lastModified: file.lastModified });
+  } catch {
+    return file;
+  } finally {
+    bitmap.close();
+    canvas.width = canvas.height = 0;
+  }
+}
+
+/**
+ * 登记一批文件, 一次只处理一个 (解码要占内存)。`dated` 为假时不带修改时间: PDF 渲染出来的页是刚生成的, `lastModified` 只是渲染的那一刻,
+ * 不是用户的文件日期。`prepare` 为假时不加工 (渲染出来的 PNG 页)。
+ */
+async function register(list, { dated = true, prepare = true } = {}) {
+  const refs = [];
+  for (const original of list) {
+    const file = prepare && hasDom && needsConversion(original) ? await convertToJpeg(original) : original;
     const id = "w" + ++seq + "-" + Math.random().toString(36).slice(2, 8);
     files.set(id, file);
     const ref = { id, name: file.name, size: file.size, type: file.type };
     if (dated && file.lastModified > 0) ref.modifiedAt = file.lastModified;
-    return ref;
-  });
+    refs.push(ref);
+  }
+  return refs;
 }
 
 /** 页序靠名字里的数字: page2 排在 page10 前 (与 App 的文件夹导入一致)。 */
@@ -264,7 +313,7 @@ async function renderPageToFile({ fileId, page, longEdge }) {
       );
       const stem = pdfs.get(fileId).file.name.replace(/\.pdf$/i, "") || "page";
       const name = stem + "-p" + String(page + 1).padStart(3, "0") + ".png";
-      const [fileRef] = register([new File([blob], name, { type: "image/png" })], { dated: false });
+      const [fileRef] = await register([new File([blob], name, { type: "image/png" })], { dated: false, prepare: false });
       return { fileRef };
     } finally {
       canvas.width = canvas.height = 0;
@@ -444,7 +493,7 @@ export async function createHost(player) {
   /** 拖放和粘贴: 图片走 files.added。 */
   const add = async (items, plainFiles) => {
     const sorted = sortFiles(await filesFromTransfer(items, plainFiles));
-    if (sorted.images.length > 0) player.hostEvent("files.added", register(sorted.images.slice(0, MAX_PICK)));
+    if (sorted.images.length > 0) player.hostEvent("files.added", await register(sorted.images.slice(0, MAX_PICK)));
     await announce(sorted);
   };
   /** files.pick: 图片放在返回值里, PDF 与拖放一样走 pdf.added。 */
@@ -455,7 +504,7 @@ export async function createHost(player) {
         : await chooseFiles("image/*,application/pdf,.pdf", true);
     const sorted = sortFiles(chosen);
     await announce(sorted);
-    return { files: register(sorted.images.slice(0, limit)) };
+    return { files: await register(sorted.images.slice(0, limit)) };
   };
 
   if (hasDom) {

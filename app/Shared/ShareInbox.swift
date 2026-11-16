@@ -46,6 +46,28 @@ enum ShareInbox {
     }
 }
 
+/// 导入的文件叫什么。分享、拖放和选择器给的临时副本常叫 "image.jpeg" 或 "PNG图像" 这类通用名, 用户在相册和文件里看到的名字在 provider.suggestedName 里,
+/// 排序和识别都靠它, 所以优先用它; 扩展名取自实际的文件 (没有才取类型的), 免得把 HEIC 的内容叫成 .jpg。
+enum FileNaming {
+    static func name(for url: URL, suggested: String?, type: UTType) -> String {
+        let actual = url.pathExtension
+        let ext = actual.isEmpty ? (type.preferredFilenameExtension ?? "") : actual
+        guard let suggested = cleaned(suggested) else {
+            let base = url.lastPathComponent.isEmpty ? "file" : url.lastPathComponent
+            return actual.isEmpty && !ext.isEmpty ? "\(base).\(ext)" : base
+        }
+        if ext.isEmpty || (suggested as NSString).pathExtension.caseInsensitiveCompare(ext) == .orderedSame { return suggested }
+        return "\(suggested).\(ext)"
+    }
+
+    /// 去掉路径和不能放进文件名的字符; 空的返回 nil。
+    static func cleaned(_ name: String?) -> String? {
+        guard let name else { return nil }
+        let base = (name as NSString).lastPathComponent.replacingOccurrences(of: ":", with: "_").trimmingCharacters(in: .whitespacesAndNewlines)
+        return base.isEmpty || base == "." || base == ".." ? nil : base
+    }
+}
+
 struct ShareDeposit: Equatable {
     var added = 0
     var skipped = 0
@@ -76,13 +98,14 @@ final class ShareDepositor: @unchecked Sendable {
 
     private func deposit(_ provider: NSItemProvider, entry: String) async -> Bool {
         if let type = Self.fileType(of: provider) {
+            let suggested = provider.suggestedName
             return await withCheckedContinuation { continuation in
                 provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
                     guard let url else {
                         continuation.resume(returning: false)
                         return
                     }
-                    continuation.resume(returning: self.place(url, type: type, entry: entry))
+                    continuation.resume(returning: self.place(url, type: type, suggested: suggested, entry: entry))
                 }
             }
         }
@@ -100,10 +123,9 @@ final class ShareDepositor: @unchecked Sendable {
     }
 
     /// 系统给的临时文件在回调返回后就被删掉, 所以必须在回调里拷走; copyItem 按文件拷, 不把内容读进内存。
-    private func place(_ source: URL, type: UTType, entry: String) -> Bool {
+    private func place(_ source: URL, type: UTType, suggested: String?, entry: String) -> Bool {
         stage(entry) { directory in
-            var name = source.lastPathComponent
-            if (name as NSString).pathExtension.isEmpty, let ext = type.preferredFilenameExtension { name += ".\(ext)" }
+            let name = FileNaming.name(for: source, suggested: suggested, type: type)
             try fileManager.copyItem(at: source, to: directory.appendingPathComponent(name))
         }
     }

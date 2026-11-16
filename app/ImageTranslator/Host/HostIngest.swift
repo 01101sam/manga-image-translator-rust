@@ -47,15 +47,17 @@ struct ImportDelivery {
     let pdf: FileRef?
     let droppedPDFs: [FileRef]
     let ignored: Int
+    let failed: Int
 
-    /// 什么都没有: 没图片、没 PDF、也没有被忽略的东西。粘贴时据此告诉用户剪贴板是空的。
-    var isEmpty: Bool { images.isEmpty && pdf == nil && ignored == 0 }
+    /// 什么都没有: 没图片、没 PDF、也没有被忽略或读不出来的东西。粘贴时据此告诉用户剪贴板是空的。
+    var isEmpty: Bool { images.isEmpty && pdf == nil && ignored == 0 && failed == 0 }
 
     init(_ result: IngestResult) {
         images = result.images
         pdf = result.pdfs.first
         droppedPDFs = Array(result.pdfs.dropFirst())
         ignored = result.ignored
+        failed = result.failed
     }
 
     func events(includeImages: Bool = true) -> [HostEvent] {
@@ -66,6 +68,9 @@ struct ImportDelivery {
             events.append(HostEvent(name: "host.notice", payload: ["text": "一次只打开一个 PDF, 已忽略另外 \(droppedPDFs.count) 个"]))
         }
         if ignored > 0 { events.append(HostEvent(name: "host.notice", payload: ["text": "已忽略 \(ignored) 个不是图片或 PDF 的文件"])) }
+        if failed > 0 {
+            events.append(HostEvent(name: "host.notice", payload: ["text": "有 \(failed) 个文件没能读进来 (iCloud 里还没下载好、网络不通或文件已损坏), 请稍后再试"]))
+        }
         return events
     }
 }
@@ -160,7 +165,7 @@ final class FileIngestor: @unchecked Sendable {
         let link: URL? = await withCheckedContinuation { continuation in
             _ = provider.loadObject(ofClass: URL.self) { url, _ in continuation.resume(returning: url) }
         }
-        guard let link else { return IngestResult(ignored: 1) }
+        guard let link else { return IngestResult(failed: 1) }
         return await importWebLink(link, allowing: kinds)
     }
 
@@ -171,12 +176,12 @@ final class FileIngestor: @unchecked Sendable {
         do {
             downloaded = try await URLSession.shared.download(from: link)
         } catch {
-            return IngestResult(ignored: 1)
+            return IngestResult(failed: 1)
         }
         let (temporary, response) = downloaded
         defer { try? FileManager.default.removeItem(at: temporary) }
-        guard (response as? HTTPURLResponse)?.statusCode == 200,
-              let type = Self.webType(mimeType: response.mimeType, header: Self.firstBytes(of: temporary)),
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { return IngestResult(failed: 1) }
+        guard let type = Self.webType(mimeType: response.mimeType, header: Self.firstBytes(of: temporary)),
               let kind = Optional(type.conforms(to: .pdf) ? HostFileKind.pdf : .image), kinds.contains(kind)
         else { return IngestResult(ignored: 1) }
         let name = Self.linkFileName(link, type: type)
@@ -187,17 +192,17 @@ final class FileIngestor: @unchecked Sendable {
             case .image: result.images = [try files.adopt(temporary, name: name, move: false, dating: .none)]
             }
         } catch {
-            result.ignored = 1
+            result.failed = 1
         }
         return result
     }
 
-    /// 系统给的临时文件在回调返回后就被删掉, 所以必须在回调里搬走。
+    /// 系统给的临时文件在回调返回后就被删掉, 所以必须在回调里搬走。provider 已经说它是图片或 PDF, 所以读不出来是读取失败 (iCloud 下载失败、离线), 不是「不是图片」。
     private func loadFile(_ provider: NSItemProvider, type: UTType, _ handle: @escaping @Sendable (URL) throws -> IngestResult) async -> IngestResult {
         await withCheckedContinuation { continuation in
             _ = provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
                 guard let url, let result = try? handle(url) else {
-                    continuation.resume(returning: IngestResult(ignored: 1))
+                    continuation.resume(returning: IngestResult(failed: 1))
                     return
                 }
                 continuation.resume(returning: result)
@@ -210,7 +215,7 @@ final class FileIngestor: @unchecked Sendable {
         await withCheckedContinuation { continuation in
             _ = provider.loadInPlaceFileRepresentation(forTypeIdentifier: UTType.folder.identifier) { url, _, _ in
                 guard let url else {
-                    continuation.resume(returning: IngestResult(ignored: 1))
+                    continuation.resume(returning: IngestResult(failed: 1))
                     return
                 }
                 continuation.resume(returning: self.importSync(urls: [url], move: false, dating: .providerCopy, allowing: kinds))
@@ -241,7 +246,7 @@ final class FileIngestor: @unchecked Sendable {
             case .image: result.images = [try files.adopt(url, move: move, dating: dating)]
             }
         } catch {
-            result.ignored = 1
+            result.failed = 1
         }
         return result
     }
@@ -317,9 +322,6 @@ final class FileIngestor: @unchecked Sendable {
 
     /// 文件名: 优先 suggestedName (拖放和相册给的是用户看到的名字, 临时文件名有时只是 "PNG图像"), 扩展名取自文件或类型。
     static func name(for url: URL, suggested: String?, type: UTType) -> String {
-        guard let suggested, !suggested.isEmpty else { return url.lastPathComponent }
-        let ext = url.pathExtension.isEmpty ? (type.preferredFilenameExtension ?? "") : url.pathExtension
-        if ext.isEmpty || (suggested as NSString).pathExtension.caseInsensitiveCompare(ext) == .orderedSame { return suggested }
-        return "\(suggested).\(ext)"
+        FileNaming.name(for: url, suggested: suggested, type: type)
     }
 }

@@ -259,8 +259,8 @@ async function upload(key: string): Promise<void> {
   } else {
     switch (outcome.kind) {
       case "rejected":
+        // 文件留在宿主里, 「重试」才有东西可传; 用户移除这一项时才释放 (removeItems)。
         commit(uploadRejected(board, key, outcome.message));
-        hostPort.release([item.file.id]);
         emitOutcome({ type: "rejected", fileId: item.file.id, message: outcome.message });
         break;
       case "queue-full":

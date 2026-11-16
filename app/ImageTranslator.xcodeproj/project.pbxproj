@@ -39,6 +39,8 @@
 		030000000000000000000053 /* HostInboxTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030000000000000000000052 /* HostInboxTests.swift */; };
 		030000000000000000000063 /* HostOpenURL.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030000000000000000000062 /* HostOpenURL.swift */; };
 		030000000000000000000061 /* HostOpenURLTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030000000000000000000060 /* HostOpenURLTests.swift */; };
+		030000000000000000000071 /* HostImages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030000000000000000000070 /* HostImages.swift */; };
+		030000000000000000000073 /* HostImagesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030000000000000000000072 /* HostImagesTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -118,6 +120,8 @@
 		030000000000000000000052 /* HostInboxTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostInboxTests.swift; sourceTree = "<group>"; };
 		030000000000000000000062 /* HostOpenURL.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostOpenURL.swift; sourceTree = "<group>"; };
 		030000000000000000000060 /* HostOpenURLTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostOpenURLTests.swift; sourceTree = "<group>"; };
+		030000000000000000000070 /* HostImages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostImages.swift; sourceTree = "<group>"; };
+		030000000000000000000072 /* HostImagesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostImagesTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -177,6 +181,7 @@
 				000000000000000000000133 /* EndpointTests.swift */,
 				000000000000000000000139 /* WindowSettingsTests.swift */,
 				020000000000000000000011 /* HostFilesTests.swift */,
+				030000000000000000000072 /* HostImagesTests.swift */,
 				020000000000000000000013 /* HostUploadTests.swift */,
 				030000000000000000000041 /* ShareInboxTests.swift */,
 				030000000000000000000052 /* HostInboxTests.swift */,
@@ -223,6 +228,7 @@
 				020000000000000000000001 /* HostArtifact.swift */,
 				02000000000000000000001C /* HostDebugDrag.swift */,
 				020000000000000000000003 /* HostFiles.swift */,
+				030000000000000000000070 /* HostImages.swift */,
 				030000000000000000000050 /* HostInbox.swift */,
 				030000000000000000000062 /* HostOpenURL.swift */,
 				020000000000000000000005 /* HostIngest.swift */,
@@ -453,6 +459,7 @@
 				020000000000000000000002 /* HostArtifact.swift in Sources */,
 				02000000000000000000001D /* HostDebugDrag.swift in Sources */,
 				020000000000000000000004 /* HostFiles.swift in Sources */,
+				030000000000000000000071 /* HostImages.swift in Sources */,
 				030000000000000000000051 /* HostInbox.swift in Sources */,
 				030000000000000000000063 /* HostOpenURL.swift in Sources */,
 				020000000000000000000006 /* HostIngest.swift in Sources */,
@@ -473,6 +480,7 @@
 				000000000000000000000134 /* EndpointTests.swift in Sources */,
 				00000000000000000000013A /* WindowSettingsTests.swift in Sources */,
 				020000000000000000000012 /* HostFilesTests.swift in Sources */,
+				030000000000000000000073 /* HostImagesTests.swift in Sources */,
 				020000000000000000000014 /* HostUploadTests.swift in Sources */,
 				030000000000000000000040 /* ShareInboxTests.swift in Sources */,
 				030000000000000000000053 /* HostInboxTests.swift in Sources */,
