@@ -24,6 +24,10 @@ _Avoid_: task、request
 Client 已接收、尚未提交给 Daemon 的图片。Queue 满时图片停在这里,按顺序成为 Job。它不属于 Job 的生命周期,取消它不涉及 Daemon。
 _Avoid_: queued、draft
 
+**Inbox**:
+Client 的 Share Extension 放文件的地方 (App Group 里的一个目录)。App 在启动和每次回到前台时把它搬进自己的沙盒: 图片成为 Pending Upload, PDF 在 PDF Reader 里打开。扩展只放文件, 不解码、不上传。
+_Avoid_: 队列、草稿箱
+
 **Queue**:
 Job 的有界等待队列。Worker 全忙时 Job 排队,队列满时拒绝新 Job。
 _Avoid_: buffer、backlog

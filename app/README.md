@@ -63,6 +63,8 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | `-bundle FILE.js` | 加载这个 bundle 而不是内置的。字节码 (`.nshc`) 只能从 App 自己的资源加载, 外部文件要用 `bundle.js` |
 
 `ImageTranslatorUITests/NshHostUITests.swift` 需要一个在跑的测试 Daemon (Engine 要是 running, 翻译用例才会完成), 用环境变量 `TEST_RUNNER_HOST_DAEMON_HOST`、`TEST_RUNNER_HOST_DAEMON_PORT`、`TEST_RUNNER_HOST_DAEMON_KEY`、`TEST_RUNNER_HOST_PICK_FOLDER` 传进来; 阅读器、配置页和分区切换的用例还要 `TEST_RUNNER_HOST_TOKEN` (先 `POST /pair` 取得) 和 `TEST_RUNNER_HOST_PICK_PDF`。Daemon 上可能留着之前的 Job, 用例按增量数, 不假设列表是空的。Bonjour 那个用例要先在 Mac 上 `dns-sd -R <名字> _imagetranslator._tcp local <端口>` 公布一个实例, 并设 `TEST_RUNNER_HOST_BONJOUR=1`。测试 Daemon 一律用独立的 HOME、TMPDIR 和端口, 并加 `--no-bonjour`。
+
+不需要 Daemon 的用例 (导入菜单、粘贴、收件箱、打开方式) 配到 `127.0.0.1:1` 加一个假 Token (`offlinePairing`), 不用测试 Daemon 的端口: 假 Token 会收到 401, App 回到配对页。visionOS 上有两点不同: `typeKey` 只收 `XCUIKeyboardKey` (iOS 上这样发出的却不是 ⌘V, 要用字符串重载, 测试里按平台分开); `testDraggingFilesOntoTheWindowAddsThem` 在改动前的提交 (1b8ccea) 上也失败 (2026-11-16 实测, 78 秒后超时), 用 XCUITest 发起的拖放在 visionOS 模拟器里没有落进窗口, 原因没查。点过菜单项之后的第一个键盘事件到不了界面 (`paste` 用例里先按一次方向键), 原因也没查清。
 ## 分享扩展与收件箱
 
 扩展只管把文件放进 App Group 的 `inbox/`, 其余都在 App 里 (`Host/HostInbox.swift` 的 `InboxDrainer`):
@@ -71,8 +73,23 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 - **怎么搬:** 按条目名排序, 每个条目 `importSync(move: true)` 搬进沙盒 (同一个卷上是 rename), 图片走 `files.added` 进待上传并切到任务页, PDF 走 `pdf.added` 打开阅读器 (多个只开第一个, 其余宿主放掉并发 `host.notice`)。网页链接条目 (`link.weblink`) 走拖放链接的同一条下载路径。进程里只有一个 `InboxDrainer` (actor), 多个窗口不会同时搬同一个条目。
 - **幂等:** 条目只处理一次, 处理完或处理不了 (不是图片或 PDF) 整个目录都删。搬文件要么还在收件箱要么已在沙盒, 没有中间态; 搬完到删目录之间崩溃留下的是空目录, 下次直接删, 不会重复导入。`.staging/` 里超过一小时的是被杀掉的扩展留下的, 启动时删。
 - **没保证到的:** 进了沙盒的图片和拖放的一样, 待上传列表只在 TSX 的内存里, App 在上传前被系统杀掉, 这些图片就没了 (沙盒里的图片启动时清理)。所以「不丢」只到「从收件箱进沙盒」这一步。分享时还没配对也一样: 图片留在待上传, 配对后才上传。
+- **链接:** 激活规则只能按类型判断, 所以任何网页的分享面板里都会出现这个扩展; 扩展自己拦掉明显不是图片的链接 (空路径、`.html` 等, 并说明「没有可以加入的图片或 PDF」), 其余链接 (比如 `…/img?id=3`) 存成 `link.weblink`, 到 App 里下载后才知道是不是图片或 PDF, 不是就给一条「已忽略」的提示。
 - **HEIC:** 分享给扩展的照片里, 扩展优先挑 PNG、JPEG、WebP 这类 Daemon 认的表示; 照片库只给 HEIC 时, Daemon 会拒绝这张图 (在列表里标红), 目前没有在宿主里转码。
 - **测试:** `ShareInboxTests`、`InboxDrainerTests` 是单测; `NshHostUITests` 里用 `-inbox-dir` 测冷启动和回前台的导入; 整条链 (照片 App 分享, 扩展, 收件箱, 打开 App) 的两个用例要 `xcrun simctl addmedia` 给模拟器放照片并设 `TEST_RUNNER_HOST_PHOTOS_SHARE=1`, 因为照片 App 的界面随系统版本变。
+
+## 真机签名 (App Group)
+
+主 App 和扩展都用自动签名 (团队 2UPMU92PCA), 都带 App Group `group.com.wisdomworldworkshop.imagetranslator`。模拟器不受影响 (模拟器的签名把 entitlement 写进可执行文件, `xcrun simctl get_app_container … groups` 能看到容器)。真机构建 (`xcodebuild … -destination 'generic/platform=iOS' -allowProvisioningUpdates`, 2026-11-16 试过一次) 失败, 原因在开发者账号一侧:
+
+- `Unable to process request - PLA Update available: You currently don't have access to this membership resource. To resolve this issue, your team's Account Holder … must agree to the latest Program License Agreement.`
+- `Provisioning profile "iOS Team Provisioning Profile: *" doesn't include the App Groups capability.`、`… doesn't support the group.com.wisdomworldworkshop.imagetranslator App Group.`、`… doesn't include the com.apple.security.application-groups entitlement.` (主 App 和 ShareExtension 两个 target 各一遍)
+
+要在 developer.apple.com 做的事:
+
+1. 账号持有人登录, 同意最新的 Program License Agreement (同意之前自动签名什么都注册不了)。
+2. Certificates, Identifiers & Profiles → Identifiers → 右上角选 App Groups, 注册 `group.com.wisdomworldworkshop.imagetranslator`。
+3. Identifiers 里的 App ID `com.wisdomworldworkshop.imagetranslator` 和 `com.wisdomworldworkshop.imagetranslator.share` (没有就新建), 都打开 App Groups 能力, Configure 里勾选上面那个 group。
+4. 回到 Xcode 重新构建 (或重跑上面的 xcodebuild), 自动签名会重新生成两份描述文件。
 
 ## 旧功能对照
 
