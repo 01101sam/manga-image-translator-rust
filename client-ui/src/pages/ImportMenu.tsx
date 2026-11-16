@@ -7,7 +7,7 @@ import { Icon, type IconName } from "../ui";
 
 const desktop = platform.desktop;
 
-const icons: Record<ImportSource, IconName> = { photos: "image", files: "folder", pdf: "doc" };
+const icons: Record<ImportSource, IconName> = { photos: "image", files: "file", folder: "folder", pdf: "doc" };
 
 function MenuItem(props: { source: ImportSource }) {
   return (

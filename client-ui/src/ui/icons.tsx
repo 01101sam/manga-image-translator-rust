@@ -8,6 +8,7 @@ export type IconName =
   | "chevron-left"
   | "chevron-right"
   | "image"
+  | "file"
   | "folder"
   | "list"
   | "sliders"
@@ -36,6 +37,7 @@ const shapes: Record<IconName, readonly Shape[]> = {
   "chevron-left": [{ path: "M15 5l-7 7 7 7" }],
   "chevron-right": [{ path: "M9 5l7 7-7 7" }],
   image: [{ rect: [3, 4, 18, 16, 3] }, { circle: [9, 10, 1.6] }, { path: "M3.5 17l5-5 4 4 3-3 5 4.5" }],
+  file: [{ path: "M7 3h7l5 5v13H7z" }, { path: "M14 3v5h5" }],
   folder: [{ path: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" }],
   list: [{ path: "M4 7h16M4 12h16M4 17h10" }],
   sliders: [{ path: "M4 7h9M17 7h3M4 17h3M11 17h9" }, { circle: [15, 7, 2] }, { circle: [9, 17, 2] }],
