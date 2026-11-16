@@ -93,7 +93,42 @@ final class FileIngestor: @unchecked Sendable {
         if provider.hasItemConformingToTypeIdentifier(UTType.folder.identifier) {
             return await loadFolder(provider, allowing: kinds)
         }
+        if provider.canLoadObject(ofClass: URL.self) {
+            return await loadWebLink(provider, allowing: kinds)
+        }
         return IngestResult(ignored: 1)
+    }
+
+    /// 只带一个链接的拖放 (从网页拖一个指向图片或 PDF 的链接): 下载到临时文件, 按应答的类型或文件头判断是图片还是 PDF。
+    /// 文件和目录的拖放自己带文件表示, 走不到这里; 本地的 file: 链接也不处理。
+    private func loadWebLink(_ provider: NSItemProvider, allowing kinds: Set<HostFileKind>) async -> IngestResult {
+        let link: URL? = await withCheckedContinuation { continuation in
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in continuation.resume(returning: url) }
+        }
+        guard let link, link.scheme == "http" || link.scheme == "https" else { return IngestResult(ignored: 1) }
+        let downloaded: (URL, URLResponse)
+        do {
+            downloaded = try await URLSession.shared.download(from: link)
+        } catch {
+            return IngestResult(ignored: 1)
+        }
+        let (temporary, response) = downloaded
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        guard (response as? HTTPURLResponse)?.statusCode == 200,
+              let type = Self.webType(mimeType: response.mimeType, header: Self.firstBytes(of: temporary)),
+              let kind = Optional(type.conforms(to: .pdf) ? HostFileKind.pdf : .image), kinds.contains(kind)
+        else { return IngestResult(ignored: 1) }
+        let name = Self.linkFileName(link, type: type)
+        var result = IngestResult()
+        do {
+            switch kind {
+            case .pdf: result.pdfs = [try files.importPDF(from: temporary, name: name, move: false)]
+            case .image: result.images = [try files.adopt(temporary, name: name, move: false)]
+            }
+        } catch {
+            result.ignored = 1
+        }
+        return result
     }
 
     /// 系统给的临时文件在回调返回后就被删掉, 所以必须在回调里搬走。
@@ -151,6 +186,49 @@ final class FileIngestor: @unchecked Sendable {
     }
 
     // MARK: - 纯函数
+
+    /// 下载下来的东西是什么图片或 PDF: 先信应答的类型, 类型不明 (octet-stream、缺失) 时看文件头。都不是就返回 nil (比如 HTML 页面)。
+    /// 返回具体的类型而不只是 图片/PDF, 因为文件名的扩展名和上传时的 MIME 都靠它。
+    static func webType(mimeType: String?, header: Data) -> UTType? {
+        if let mimeType, let type = UTType(mimeType: mimeType), type.conforms(to: .pdf) || type.conforms(to: .image) {
+            return type
+        }
+        let bytes = [UInt8](header.prefix(12))
+        func starts(_ prefix: [UInt8], at offset: Int = 0) -> Bool {
+            bytes.count >= offset + prefix.count && Array(bytes[offset..<offset + prefix.count]) == prefix
+        }
+        if starts(Array("%PDF-".utf8)) { return .pdf }
+        if starts([0x89, 0x50, 0x4E, 0x47]) { return .png }
+        if starts([0xFF, 0xD8, 0xFF]) { return .jpeg }
+        if starts(Array("GIF8".utf8)) { return .gif }
+        if starts(Array("BM".utf8)) { return .bmp }
+        if starts([0x49, 0x49, 0x2A, 0x00]) || starts([0x4D, 0x4D, 0x00, 0x2A]) { return .tiff }
+        if starts(Array("RIFF".utf8)) && starts(Array("WEBP".utf8), at: 8) { return .webP }
+        if starts(Array("ftyp".utf8), at: 4) { return .heic }
+        return nil
+    }
+
+    static func firstBytes(of url: URL) -> Data {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return Data() }
+        defer { try? handle.close() }
+        return (try? handle.read(upToCount: 12)) ?? Data()
+    }
+
+    /// 链接路径的最后一段 (去掉百分号编码); 路径是空的就返回 nil。
+    static func linkName(_ link: URL) -> String? {
+        let last = link.lastPathComponent
+        return last.isEmpty || last == "/" ? nil : last
+    }
+
+    /// 下载下来的文件名: 链接最后一段, 扩展名和实际类型对不上 (或没有) 时补上类型的扩展名。临时文件的扩展名是 .tmp, 不能用。
+    static func linkFileName(_ link: URL, type: UTType) -> String {
+        let base = linkName(link) ?? "download"
+        if let current = UTType(filenameExtension: (base as NSString).pathExtension), current.conforms(to: type) || type.conforms(to: current) {
+            return base
+        }
+        guard let ext = type.preferredFilenameExtension else { return base }
+        return "\(base).\(ext)"
+    }
 
     static func isDirectory(_ url: URL) -> Bool {
         (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
