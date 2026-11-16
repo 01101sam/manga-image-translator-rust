@@ -10,6 +10,12 @@ import type { LocalFile } from "./types";
 export const SIMILAR_DISTANCE = 20;
 export const ASPECT_TOLERANCE = 0.03;
 
+/**
+ * 1 的个数不超过这个数的哈希谁也认不出: 它离全 0 的哈希不超过 10 位, 所以任意两个这样的哈希都落在 SIMILAR_DISTANCE 以内, 不管图里画的是什么。
+ * 空白页、纯色图、几乎没有明暗变化的图就是这样 (实测空白页的哈希是全 0 或只有一两位), 它们不参与比较, 照常加入。
+ */
+export const MIN_BITS = SIMILAR_DISTANCE / 2;
+
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 
 /** 一张图的指纹: 256 位拆成 8 个 32 位整数 (比较时按字处理, 不逐位), 加上宽高比 (没有时不参与判断)。 */
@@ -18,6 +24,13 @@ export interface Fingerprint {
   readonly aspect?: number;
 }
 
+const popcount = (value: number): number => {
+  let x = value - ((value >>> 1) & 0x55555555);
+  x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
+  x = (x + (x >>> 4)) & 0x0f0f0f0f;
+  return Math.imul(x, 0x01010101) >>> 24;
+};
+
 export function parseHash(hash: unknown): readonly number[] | undefined {
   if (typeof hash !== "string" || !HASH_PATTERN.test(hash)) return undefined;
   return Array.from({ length: 8 }, (_, index) => parseInt(hash.slice(index * 8, index * 8 + 8), 16) | 0);
@@ -25,16 +38,9 @@ export function parseHash(hash: unknown): readonly number[] | undefined {
 
 export function fingerprintOf(hash: unknown, aspect: number | undefined): Fingerprint | undefined {
   const words = parseHash(hash);
-  if (words === undefined) return undefined;
+  if (words === undefined || words.reduce((sum, word) => sum + popcount(word), 0) <= MIN_BITS) return undefined;
   return aspect !== undefined && Number.isFinite(aspect) && aspect > 0 ? { words, aspect } : { words };
 }
-
-const popcount = (value: number): number => {
-  let x = value - ((value >>> 1) & 0x55555555);
-  x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
-  x = (x + (x >>> 4)) & 0x0f0f0f0f;
-  return Math.imul(x, 0x01010101) >>> 24;
-};
 
 /** 两个指纹相差的位数; 超过 limit 就提前停 (大多数不同的图一两个字就超了), 返回值此时大于 limit。 */
 export function distance(a: Fingerprint, b: Fingerprint, limit: number = 256): number {
@@ -56,7 +62,7 @@ export const isSimilar = (a: Fingerprint, b: Fingerprint): boolean =>
   distance(a, b, SIMILAR_DISTANCE) <= SIMILAR_DISTANCE && aspectDifference(a, b) < ASPECT_TOLERANCE;
 
 export interface Split {
-  /** 照常加入的。没有指纹的 (宿主没算出来、格式解不开) 也在这里: 认不出就不拦。 */
+  /** 照常加入的。没有指纹的 (宿主没算出来、格式解不开、图太空白认不出) 也在这里: 认不出就不拦。 */
   readonly fresh: LocalFile[];
   /** 和已有的、或同一批里更早的相似的图。 */
   readonly skipped: LocalFile[];

@@ -190,7 +190,7 @@ final class NshHostUITests: XCTestCase {
         XCTAssertTrue(add.exists, "the Jobs page should still be there after closing the menu")
     }
 
-    /// 粘贴: -seed-pasteboard 让 App 自己把图片放进系统剪贴板 (自己写的, 读的时候不弹「允许粘贴」), 再从导入菜单和 ⌘V 各粘一次。不需要 Daemon。
+    /// 粘贴: -seed-pasteboard 让 App 自己把图片放进系统剪贴板 (自己写的, 读的时候不弹「允许粘贴」), 再从导入菜单和 ⌘V 各粘一次 (第二次是同样的图, 算重复, 提示后要按「仍然添加」才进列表)。不需要 Daemon。
     func testPasteFromTheMenuAndWithCommandVAddsTheClipboard() throws {
         let names = try FileManager.default.contentsOfDirectory(atPath: folder)
         let expected = names.filter { ["png", "jpg", "jpeg"].contains(($0 as NSString).pathExtension.lowercased()) }.count
@@ -217,9 +217,14 @@ final class NshHostUITests: XCTestCase {
         #else
         app.typeKey("v", modifierFlags: .command)
         #endif
+        // 第二次粘的是同样的图: 被当成重复跳过, 提示出现; 按「仍然添加」之后它们才进列表
+        let toast = element(app, "toast")
+        XCTAssertTrue(toast.waitForExistence(timeout: 30), "the second paste of the same images was not announced as duplicates")
+        XCTAssertTrue(toast.label.contains("已跳过"), toast.label)
+        shot(app, "pasted-with-command-v")
+        element(app, "toast-action").tap()
         expectation(for: NSPredicate(format: "label CONTAINS %@", "共 \(before + 2 * expected) 张"), evaluatedWith: summary)
         waitForExpectations(timeout: 30)
-        shot(app, "pasted-with-command-v")
     }
 
     /// 在系统「照片」里分享第一张照片给本 App 的分享扩展, 等到它显示确认。照片 App 的界面随系统版本变: 第一张照片靠坐标点,

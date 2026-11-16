@@ -1,6 +1,6 @@
 import { describe, expect, test } from "nsh/test";
 import { addFiles, emptyBoard, fingerprintsOf, removeKeys, startUpload, uploadSucceeded } from "../src/domain/board";
-import { ASPECT_TOLERANCE, aspectDifference, distance, fingerprintOf, isSimilar, parseHash, SIMILAR_DISTANCE, splitDuplicates } from "../src/domain/similar";
+import { ASPECT_TOLERANCE, aspectDifference, distance, fingerprintOf, isSimilar, MIN_BITS, parseHash, SIMILAR_DISTANCE, splitDuplicates } from "../src/domain/similar";
 import type { LocalFile } from "../src/domain/types";
 import { flipBits, hashFor } from "./harness";
 
@@ -24,7 +24,18 @@ describe("fingerprints", () => {
   test("the distance counts the differing bits, whatever their position", () => {
     const base = hashFor(7);
     for (const bits of [0, 1, 7, 24, 25, 100, 256]) expect(distance(print(base), print(flipBits(base, bits)))).toBe(bits);
-    expect(distance(print("0".repeat(64)), print("f".repeat(64)))).toBe(256);
+    expect(distance({ words: parseHash("0".repeat(64))! }, print("f".repeat(64)))).toBe(256);
+  });
+
+  test("a hash with almost no bits set (a blank or flat picture) is not a fingerprint, because it is near every other such hash", () => {
+    const sparse = (bits: number) => flipBits("0".repeat(64), bits);
+    expect(fingerprintOf("0".repeat(64), 0.7)).toBeUndefined();
+    expect(fingerprintOf(sparse(MIN_BITS), 0.7)).toBeUndefined();
+    expect(fingerprintOf(sparse(MIN_BITS + 1), 0.7)).toBeDefined();
+    // 画的完全不同, 距离也在阈值以内, 所以认不出才是对的
+    const left = "ff80" + "0".repeat(60);
+    const right = "0".repeat(60) + "01ff";
+    expect(distance({ words: parseHash(left)! }, { words: parseHash(right)! })).toBeLessThanOrEqual(SIMILAR_DISTANCE);
   });
 
   test("a distance over the limit stops early but is still over the limit", () => {
@@ -54,6 +65,13 @@ describe("splitting a batch", () => {
     const { fresh, skipped } = splitDuplicates(batch, known);
     expect(fresh.map((f) => f.id)).toEqual(["b", "c", "d"]);
     expect(skipped.map((f) => f.id)).toEqual(["a"]);
+  });
+
+  test("blank pictures are never skipped, however alike they look", () => {
+    const blank = "0".repeat(64);
+    const { fresh, skipped } = splitDuplicates([file("w1", blank, 0.7), file("w2", blank, 0.7)], [{ words: parseHash(blank)! }]);
+    expect(fresh.map((f) => f.id)).toEqual(["w1", "w2"]);
+    expect(skipped).toEqual([]);
   });
 
   test("inside one batch only the first of a group of look-alikes goes in", () => {
