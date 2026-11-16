@@ -65,3 +65,23 @@ export type Launched = Awaited<ReturnType<typeof launchPaired>>;
 
 export const hostFiles = (n: number, prefix = "p", extra: Partial<HostFileRef> = {}): HostFileRef[] =>
   Array.from({ length: n }, (_, i) => ({ id: prefix + i, name: prefix + i + ".png", size: 1000 + i, type: "image/png", ...extra }));
+/** 确定性的 64 位十六进制「指纹」: 同一个 seed 同一个值, 不同 seed 之间差大约一半的位。 */
+export function hashFor(seed: number): string {
+  let state = (seed * 2654435761) >>> 0;
+  let out = "";
+  for (let i = 0; i < 8; i++) {
+    state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+    out += state.toString(16).padStart(8, "0");
+  }
+  return out;
+}
+
+/** 翻转 hash 里的 count 个位 (均匀地选), 得到汉明距离恰好是 count 的另一个哈希。 */
+export function flipBits(hash: string, count: number): string {
+  const nibbles = hash.split("").map((c) => parseInt(c, 16));
+  for (let i = 0; i < count; i++) {
+    const bit = (i * 37) % 256;
+    nibbles[bit >> 2] = nibbles[bit >> 2]! ^ (8 >> (bit & 3));
+  }
+  return nibbles.map((n) => n.toString(16)).join("");
+}

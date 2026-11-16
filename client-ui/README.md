@@ -22,14 +22,15 @@ src/domain/        纯函数与状态机, 不依赖 nsh; tests/ 里逐个测
   arrange.ts       一次性排序 (名称自然序、日期、大小, 缺值排末尾) 与单项移动, 只改 displayOrder
   natural.ts       文件名的自然序比较: 数字段按数值, 不依赖 Intl.Collator (嵌入 App 的引擎里没有)
   reorder.ts       拖动重排的几何: 每个单元格的位置、落点、指示线、边缘自动滚动的速度
-  saved.ts         随列表保存的行的读写: Job (id、名字、大小、修改时间) 和还没上传的文件 (`local:<fileId>`, 另存 type 和被拒绝的原因)
+  saved.ts         随列表保存的行的读写: Job (id、名字、大小、修改时间) 和还没上传的文件 (`local:<fileId>`, 另存 type 和被拒绝的原因); 有指纹的行另存指纹和宽高比
+  similar.ts       相似图片: 256 位 dHash 的汉明距离 ≤ 20 且宽高比相差不到 3%; 一批文件对列表里已有的 (不分状态) 分出「照常加入」和「重复跳过」
   nav.ts           键盘高亮与查看器的移动
   reader.ts        PDF 阅读器每页的状态机 (移植自旧 Client 的 PageMachine) 与翻页、渲染节奏的纯函数; 看译文还是原文是整个文档的偏好 (store 的 `viewing`), 不在页上
   config.ts        Config 表单的字段表、校验、整份文档的改写
   media.ts         降采样图片 URL (w=256 列表, w=2048 查看器)
 src/api/           Daemon 的 HTTP 客户端; 外部 JSON 在 parse.ts 一次性解析
 src/ports/host.ts  宿主协议的类型化封装; ports/pdf.ts 是其中 PDF 的部分
-src/store/         signal: 每个 Item 一个 signal, 轮询只写变化的项; reorder.ts 是拖动重排的状态 (影子、指示线、自动滚动), menu.ts 是任务页上盖着的菜单 (导入、排序、条目)
+src/store/         signal: 每个 Item 一个 signal, 轮询只写变化的项; importer.ts 是用户导入图片的入口 (选择、粘贴、拖放都经过它, 跳过重复的图片并提供「仍然添加」); reorder.ts 是拖动重排的状态 (影子、指示线、自动滚动), menu.ts 是任务页上盖着的菜单 (导入、排序、条目)
 src/ui/            应用自己的组件层 (见 DESIGN.md)
 src/pages/         页面
 tests/             nsh test: 领域单测 + 整个界面的无头流程测试

@@ -26,6 +26,10 @@ export interface LocalFile {
   readonly modifiedAt?: number;
   /** 宿主在导入时生成的小缩略图 (data:image/jpeg;base64,...)。还没上传的条目没有别的图可显示, 上传成为 Job 之后换用 Daemon 的预览并丢掉它。 */
   readonly thumb?: string;
+  /** 相似图片的指纹: 256 位 dHash, 64 个小写十六进制字符。宿主没算出来时缺省。 */
+  readonly hash?: string;
+  /** 宽高比 (宽 / 高, 方向已修正), 配合指纹判断相似; 没有时不参与判断。 */
+  readonly aspect?: number;
 }
 
 export const isActive = (state: JobState): boolean => state === "queued" || state === "running";

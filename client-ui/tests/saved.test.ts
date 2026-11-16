@@ -41,6 +41,20 @@ describe("saved jobs", () => {
     ]);
   });
 
+  test("the fingerprint and aspect ratio ride along, on Job rows too, and a damaged fingerprint is dropped", () => {
+    const hash = "ab".repeat(32);
+    const rows = [{ id: "job-1", name: "a.png", size: 5, hash, aspect: 0.7 }, { id: "local:F", name: "b.png", type: "image/png", hash }];
+    expect(JSON.parse(encodeSaved(rows))).toEqual([
+      ["job-1", "a.png", 5, null, null, null, hash, 0.7],
+      ["local:F", "b.png", null, null, "image/png", null, hash, null],
+    ]);
+    expect(decodeSaved(encodeSaved(rows))).toEqual([
+      { id: "job-1", name: "a.png", size: 5, modifiedAt: undefined, hash, aspect: 0.7 },
+      { id: "local:F", name: "b.png", size: undefined, modifiedAt: undefined, type: "image/png", hash },
+    ]);
+    expect(decodeSaved(JSON.stringify([["x", null, null, null, null, null, "not a hash", 0.7]]))).toEqual([{ id: "x", name: undefined, size: undefined, modifiedAt: undefined }]);
+  });
+
   test("older saves still load: bare ids and [id, name] pairs", () => {
     expect(decodeSaved(JSON.stringify(["a", ["b", "b.png"], ["c", null]]))).toEqual([
       { id: "a" },

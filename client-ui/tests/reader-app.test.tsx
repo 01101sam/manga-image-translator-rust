@@ -217,6 +217,18 @@ describe("PDF reader on the web (pdf.js overlay)", () => {
     expect(status(app)).toBe("第 1/7 页 · 未翻译");
   });
 
+  test("a PDF the host recognises as the one already open changes nothing, and only says so", async () => {
+    const { app } = await launch({ daemon: createFakeDaemon() });
+    await openPdf(app);
+    await app.keyboard.press("right");
+    await app.keyboard.press("space");
+    await app.waitFor("text:/已翻译/", { timeout: 30_000 });
+    await app.host.send("pdf.added", [pdfFile(5)]);
+    await app.waitFor("text:这个 PDF 已经打开了");
+    expect(status(app)).toBe("第 2/5 页 · 已翻译 · 译文");
+    expect(posts(app, "pdf.release")).toEqual([]);
+  });
+
   test("closing the PDF releases it on the host and shows the empty state", async () => {
     const { app } = await launch({ daemon: createFakeDaemon() });
     await openPdf(app);

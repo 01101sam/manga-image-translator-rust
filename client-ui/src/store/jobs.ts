@@ -30,7 +30,6 @@ import {
 import { moveItem, moveToBack, moveToFront, sortBoard, type SortChoice } from "../domain/arrange";
 import { adjacentDone, moveHighlight } from "../domain/nav";
 import { decodeSaved, encodeSaved, type SavedJob } from "../domain/saved";
-import type { PickSource } from "../domain/import";
 import type { LocalFile } from "../domain/types";
 import { engineAcceptsJobs, engineState, queueCapacity, refreshEngine } from "./engine";
 import { overrides } from "./overrides";
@@ -147,14 +146,6 @@ function schedulePersist() {
 export function addLocalFiles(files: readonly LocalFile[]) {
   commit(addFiles(board, files));
   pump();
-}
-
-export async function pickAndAdd(source: PickSource): Promise<void> {
-  try {
-    addLocalFiles(await hostPort.pickFiles(200, source));
-  } catch (error) {
-    showToast(`无法选择文件: ${error instanceof Error ? error.message : String(error)}`, "error");
-  }
 }
 
 export function removeItems(keys: readonly string[]) {
@@ -396,7 +387,7 @@ async function restoreLocals(saved: readonly SavedJob[]): Promise<void> {
   const rows = saved.filter((row) => isLocal(row) && board.items[row.id] === undefined);
   if (rows.length === 0) return;
   const { board: restored, lost } = restoreBoard(rows, [], await hostedFiles(rows));
-  if (lost > 0) showToast(`有 ${lost} 张还没上传的图片找不到了 (文件已被清理, 网页版刷新页面也会丢), 请重新添加`, "error", LONG_MS);
+  if (lost > 0) showToast(`有 ${lost} 张还没上传的图片找不到了 (文件已被清理, 网页版刷新页面也会丢), 请重新添加`, "error", { ms: LONG_MS });
   restoreInto(restored, saved.map((row) => row.id));
 }
 

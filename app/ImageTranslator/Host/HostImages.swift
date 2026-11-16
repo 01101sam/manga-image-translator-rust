@@ -53,15 +53,18 @@ enum ImagePrep {
     /// 缩略图 data URI 的字符数上限。它随文件引用进 JS 堆 (上限 256 MB), 一次导入几千张时每张都占这么多, 所以压到 16 KB 以内; 排版很密的漫画页压到这个大小也还能认出是哪一页。
     static let thumbnailBudget = 16_000
 
-    /// 对放进沙盒的图片读到的东西: 方向修正后的像素宽高, 和列表用的小缩略图。
+    /// 对放进沙盒的图片读到的东西: 方向修正后的像素宽高、列表用的小缩略图和相似图片的指纹。
     struct Inspection: Equatable {
         var width: Int
         var height: Int
         /// data:image/jpeg;base64,... 读不出来 (文件损坏、ImageIO 解不开) 时为 nil: 条目照常显示名字和状态, 只是没有缩略图。
         var thumb: String?
+        /// 256 位 dHash, 64 个十六进制字符 (见 ImageFingerprint)。解不出来为 nil: 这张图不参与去重, 照常导入。
+        var hash: String?
     }
 
-    /// 一次打开文件, 取尺寸和缩略图。ImageIO 的缩略图解码对 JPEG 用 DCT 缩放、对 PNG 逐行缩小, 不会为了 256 像素把整张图解进内存。
+    /// 一次打开文件, 取尺寸、缩略图和指纹。ImageIO 的缩略图解码对 JPEG 用 DCT 缩放、对 PNG 逐行缩小, 不会为了 256 像素把整张图解进内存;
+    /// 缩略图和指纹用同一次解码出来的 256 像素的图 (指纹是格子平均, 不在乎这一步用什么滤波), 不为去重再解码一遍。
     static func inspect(at url: URL) -> Inspection? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               CGImageSourceGetCount(source) > 0,
@@ -71,18 +74,30 @@ enum ImagePrep {
         else { return nil }
         // EXIF 方向 5 到 8 是转 90 度: 显示出来的宽高互换。
         let turned = (5...8).contains(properties[kCGImagePropertyOrientation] as? Int ?? 1)
-        return Inspection(width: turned ? height : width, height: turned ? width : height, thumb: thumbnailURI(from: source))
+        let reduced = reducedImage(from: source, edge: thumbnailEdge)
+        return Inspection(
+            width: turned ? height : width, height: turned ? width : height,
+            thumb: reduced.flatMap { thumbnailURI(first: $0, from: source) }, hash: reduced.flatMap(ImageFingerprint.hash(of:))
+        )
     }
 
-    /// 先试 256 像素, 压不进预算就依次缩到 192、128; 每个尺寸试几档质量。
-    static func thumbnailURI(from source: CGImageSource) -> String? {
+    static func reducedImage(from source: CGImageSource, edge: Int) -> CGImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: edge,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    /// 先试 256 像素 (first 是已经解好的那一幅), 压不进预算就依次缩到 192、128; 每个尺寸试几档质量。
+    static func thumbnailURI(first: CGImage, from source: CGImageSource) -> String? {
+        var image = first
         for edge in [thumbnailEdge, 192, 128] {
-            let options: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: edge,
-            ]
-            guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+            if edge != thumbnailEdge {
+                guard let smaller = reducedImage(from: source, edge: edge) else { return nil }
+                image = smaller
+            }
             for quality in [0.7, 0.5, 0.35] {
                 guard let data = jpegData(image, quality: quality) else { continue }
                 let uri = "data:image/jpeg;base64," + data.base64EncodedString()

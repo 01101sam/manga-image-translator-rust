@@ -1,5 +1,6 @@
 import { batch, signal } from "nsh";
-import { addLocalFiles, resetBoard } from "./jobs";
+import { importFiles, discardSkipped } from "./importer";
+import { resetBoard } from "./jobs";
 import { engineState } from "./engine";
 import { loadOverrides } from "./overrides";
 import { resetReader, startReader } from "./reader";
@@ -20,11 +21,11 @@ export function startApp(): void {
     dragging.set(false);
     if (files.length > 0) {
       section.set("jobs");
-      addLocalFiles(files);
+      importFiles(files);
     }
   });
   hostPort.onDragState((active) => dragging.set(active));
-  hostPort.onNotice((text) => showToast(text, "error", LONG_MS));
+  hostPort.onNotice((text) => showToast(text, "error", { ms: LONG_MS }));
   void loadOverrides();
   void startSession();
   startReader();
@@ -38,6 +39,7 @@ export function changeDaemon(): void {
     engineState.set("unknown");
   });
   resetBoard();
+  discardSkipped();
   resetReader();
   forgetDaemon();
 }

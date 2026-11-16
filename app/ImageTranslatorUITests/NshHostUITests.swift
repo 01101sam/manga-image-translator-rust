@@ -431,6 +431,83 @@ final class NshHostUITests: XCTestCase {
         }
     }
 
+    /// 一幅由几块色块组成的「页」, 宽高不同但版式一样的两份是同一张图的两种分辨率。
+    private func writePage(_ name: String, width: Int, height: Int, blocks: [(CGFloat, CGFloat, CGFloat, CGFloat, CGFloat)], into folder: URL) throws {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let image = UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            for (x, y, w, h, shade) in blocks {
+                UIColor(white: shade, alpha: 1).setFill()
+                context.fill(CGRect(x: x * CGFloat(width), y: y * CGFloat(height), width: w * CGFloat(width), height: h * CGFloat(height)))
+            }
+        }
+        try XCTUnwrap(image.pngData()).write(to: folder.appendingPathComponent(name))
+    }
+
+    /// 同一张图换了分辨率再导入: 同批里和列表里已有的相似图片不加入, 提示「已跳过 N 张重复图片」并带「仍然添加」。不需要 Daemon。
+    func testTheSamePictureAtAnotherSizeIsSkippedAndTheButtonAddsItAnyway() throws {
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("it-dedupe-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: scratch) }
+        let layoutA: [(CGFloat, CGFloat, CGFloat, CGFloat, CGFloat)] = [(0.1, 0.6, 0.5, 0.3, 0.1), (0.55, 0.1, 0.35, 0.4, 0.1), (0.1, 0.1, 0.3, 0.4, 0.6)]
+        let layoutB: [(CGFloat, CGFloat, CGFloat, CGFloat, CGFloat)] = [(0.5, 0.1, 0.4, 0.8, 0.1), (0.1, 0.3, 0.3, 0.2, 0.5)]
+        try writePage("a.png", width: 800, height: 1100, blocks: layoutA, into: scratch)
+        try writePage("b.png", width: 320, height: 440, blocks: layoutA, into: scratch)
+        try writePage("c.png", width: 800, height: 1100, blocks: layoutB, into: scratch)
+        let app = launch(offlinePairing + ["-pick-folder", scratch.path], seed: false)
+        XCTAssertTrue(element(app, "add-images").waitForExistence(timeout: 30))
+        func importAll() {
+            element(app, "add-images").tap()
+            XCTAssertTrue(element(app, "import-files").waitForExistence(timeout: 10))
+            element(app, "import-files").tap()
+        }
+        importAll()
+        let toast = element(app, "toast")
+        XCTAssertTrue(toast.waitForExistence(timeout: 30), "the duplicate should be announced")
+        XCTAssertTrue(toast.label.contains("已跳过 1 张重复图片"), toast.label)
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "共 2 张"), evaluatedWith: element(app, "jobs-summary"))
+        waitForExpectations(timeout: 10)
+        shot(app, "duplicate-skipped")
+        element(app, "toast-action").tap()
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "共 3 张"), evaluatedWith: element(app, "jobs-summary"))
+        waitForExpectations(timeout: 10)
+        // 三张都在列表里了: 再导入一次, 三张全是重复的, 列表不变
+        importAll()
+        let again = element(app, "toast")
+        XCTAssertTrue(again.waitForExistence(timeout: 30))
+        XCTAssertTrue(again.label.contains("已跳过 3 张重复图片"), again.label)
+        XCTAssertTrue(element(app, "jobs-summary").label.contains("共 3 张"))
+    }
+
+    /// 同一个 PDF (内容一样) 再打开: 宿主交回已有的那份, 现在开着的就是它, 所以什么都不动, 只提示一句。不需要 Daemon。
+    func testOpeningTheSamePDFAgainKeepsTheOpenOneAndSaysSo() throws {
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("it-pdf-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: scratch) }
+        let pdf = scratch.appendingPathComponent("book.pdf")
+        try UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 300, height: 400)).writePDF(to: pdf) { context in
+            context.beginPage()
+            context.beginPage()
+        }
+        let app = launch(offlinePairing + ["-section", "reader", "-pick-pdf", pdf.path], seed: false)
+        XCTAssertTrue(element(app, "reader-open").waitForExistence(timeout: 30))
+        element(app, "reader-open").tap()
+        let status = element(app, "reader-status")
+        XCTAssertTrue(status.waitForExistence(timeout: 30))
+        element(app, "reader-next").tap()
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "第 2/2 页"), evaluatedWith: status)
+        waitForExpectations(timeout: 10)
+        element(app, "reader-open").tap()
+        let toast = element(app, "toast")
+        XCTAssertTrue(toast.waitForExistence(timeout: 30))
+        XCTAssertTrue(toast.label.contains("这个 PDF 已经打开了"), toast.label)
+        XCTAssertTrue(status.label.contains("第 2/2 页"), "the open document must keep its page: \(status.label)")
+        shot(app, "same-pdf-again")
+    }
+
     /// 收件箱里有两个 PDF: 只打开第一个, 另一个被放掉并给一条提示。
     func testSharedPDFsOpenTheReaderOnlyOnceAndSayWhatWasIgnored() throws {
         let inbox = try makeInbox()

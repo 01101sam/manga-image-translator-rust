@@ -1,5 +1,6 @@
 import { jobFromEntry, reduceJob, type JobEvent, type JobRow } from "./job";
 import type { SavedJob } from "./saved";
+import { fingerprintOf, type Fingerprint } from "./similar";
 import { isActive, type JobEntry, type LocalFile } from "./types";
 
 /** 本地 Item 的三态: 还没交给 Daemon、正在上传、已成为 Job。 */
@@ -25,17 +26,35 @@ export interface JobItem extends FileFacts {
   readonly row: JobRow;
 }
 
-/** 排序和显示用的三项文件信息, 导入时由宿主给出。缺失的值 (宿主没读到、旧版本存档里没有) 排在末尾。 */
+/**
+ * 排序和显示用的三项文件信息, 导入时由宿主给出。缺失的值 (宿主没读到、旧版本存档里没有) 排在末尾。
+ * hash 和 aspect 是相似图片的指纹 (见 domain/similar.ts): 随条目一直带着、一起存档, 条目成为 Job 之后新导入的图还要和它比。
+ */
 export interface FileFacts {
   readonly name?: string;
   readonly size?: number;
   readonly modifiedAt?: number;
+  readonly hash?: string;
+  readonly aspect?: number;
 }
 
 export function factsOf(item: Item): FileFacts {
-  if (item.kind === "job") return { name: item.name, size: item.size, modifiedAt: item.modifiedAt };
-  const { name, size, modifiedAt } = item.file;
-  return { name, size: size > 0 ? size : undefined, modifiedAt };
+  if (item.kind === "job") return { name: item.name, size: item.size, modifiedAt: item.modifiedAt, hash: item.hash, aspect: item.aspect };
+  const { name, size, modifiedAt, hash, aspect } = item.file;
+  return { name, size: size > 0 ? size : undefined, modifiedAt, hash, aspect };
+}
+
+/** 列表里所有条目 (不分状态) 的指纹; 已移除的不在列表里, 所以不算。 */
+export function fingerprintsOf(board: Board): Fingerprint[] {
+  const prints: Fingerprint[] = [];
+  for (const key of board.submitOrder) {
+    const item = board.items[key];
+    if (item === undefined) continue;
+    const { hash, aspect } = factsOf(item);
+    const print = fingerprintOf(hash, aspect);
+    if (print !== undefined) prints.push(print);
+  }
+  return prints;
 }
 
 /**
@@ -246,7 +265,7 @@ export function restoreBoard(saved: readonly SavedJob[], entries: readonly JobEn
   const order: string[] = [];
   const items: Record<string, Item> = {};
   let lost = 0;
-  for (const { id, name, size, modifiedAt, type, rejected } of saved) {
+  for (const { id, name, size, modifiedAt, type, rejected, hash, aspect } of saved) {
     if (items[id] !== undefined) continue;
     const fileId = fileIdOfKey(id);
     if (fileId !== undefined) {
@@ -261,6 +280,8 @@ export function restoreBoard(saved: readonly SavedJob[], entries: readonly JobEn
         size: size ?? hosted.size,
         type: type ?? hosted.type,
         ...(modifiedAt === undefined ? {} : { modifiedAt }),
+        ...(hash === undefined ? {} : { hash }),
+        ...(aspect === undefined ? {} : { aspect }),
       };
       order.push(id);
       items[id] = { kind: "pending", key: id, file, ...(rejected === undefined ? {} : { rejected }) };
@@ -269,7 +290,7 @@ export function restoreBoard(saved: readonly SavedJob[], entries: readonly JobEn
     const entry = byId.get(id);
     if (!entry) continue;
     order.push(id);
-    items[id] = { kind: "job", key: id, name, size, modifiedAt, row: jobFromEntry(entry) };
+    items[id] = { kind: "job", key: id, name, size, modifiedAt, hash, aspect, row: jobFromEntry(entry) };
   }
   return { board: { submitOrder: order, displayOrder: order, items }, lost };
 }
@@ -285,8 +306,8 @@ export function savedItems(board: Board): SavedJob[] {
   return board.displayOrder.flatMap((key): SavedJob[] => {
     const item = board.items[key];
     if (item === undefined) return [];
-    if (item.kind === "job") return [{ id: key, name: item.name, size: item.size, modifiedAt: item.modifiedAt }];
-    const { name, size, modifiedAt, type } = item.file;
+    if (item.kind === "job") return [{ id: key, name: item.name, size: item.size, modifiedAt: item.modifiedAt, hash: item.hash, aspect: item.aspect }];
+    const { name, size, modifiedAt, type, hash, aspect } = item.file;
     return [
       {
         id: key,
@@ -294,6 +315,8 @@ export function savedItems(board: Board): SavedJob[] {
         size: size > 0 ? size : undefined,
         modifiedAt,
         type,
+        hash,
+        aspect,
         ...(item.kind === "pending" && item.rejected !== undefined ? { rejected: item.rejected } : {}),
       },
     ];

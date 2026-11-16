@@ -54,6 +54,53 @@ async function convertToJpeg(file) {
   }
 }
 
+// ---- 相似图片的指纹: 256 位 dHash, 与 App 的 ImageFingerprint.swift 逐行对应 (算法说明在那里), 全部整数运算 ----
+
+const FP_COLUMNS = 17;
+const FP_ROWS = 16;
+/** 左边比右边亮多少灰度级才记 1; 与 ImageFingerprint.margin 一致。 */
+const FP_MARGIN = 3;
+
+/** RGBA8 (不透明, 4 字节一个像素) 缩成 17x16 的灰度格子。 */
+export function fingerprintGrid(rgba, width, height) {
+  const grid = new Uint8Array(FP_COLUMNS * FP_ROWS);
+  if (!(width > 0 && height > 0) || rgba.length < width * height * 4) return grid;
+  for (let cy = 0; cy < FP_ROWS; cy++) {
+    const y0 = Math.min(Math.floor((cy * height) / FP_ROWS), height - 1);
+    const y1 = Math.max(Math.floor(((cy + 1) * height) / FP_ROWS), y0 + 1);
+    for (let cx = 0; cx < FP_COLUMNS; cx++) {
+      const x0 = Math.min(Math.floor((cx * width) / FP_COLUMNS), width - 1);
+      const x1 = Math.max(Math.floor(((cx + 1) * width) / FP_COLUMNS), x0 + 1);
+      let sum = 0;
+      for (let y = y0; y < y1; y++) {
+        let index = (y * width + x0) * 4;
+        for (let x = x0; x < x1; x++) {
+          sum += (77 * rgba[index] + 150 * rgba[index + 1] + 29 * rgba[index + 2] + 128) >> 8;
+          index += 4;
+        }
+      }
+      const count = (y1 - y0) * (x1 - x0);
+      grid[cy * FP_COLUMNS + cx] = Math.floor((sum + Math.floor(count / 2)) / count);
+    }
+  }
+  return grid;
+}
+
+/** 17x16 灰度的 256 位差分哈希, 64 个小写十六进制字符。 */
+export function fingerprintHash(grid) {
+  const bytes = new Uint8Array(((FP_COLUMNS - 1) * FP_ROWS) / 8);
+  let position = 0;
+  for (let row = 0; row < FP_ROWS; row++) {
+    for (let column = 0; column < FP_COLUMNS - 1; column++) {
+      if (grid[row * FP_COLUMNS + column] > grid[row * FP_COLUMNS + column + 1] + FP_MARGIN) bytes[position >> 3] |= 0x80 >> (position & 7);
+      position++;
+    }
+  }
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export const fingerprintHex = (rgba, width, height) => fingerprintHash(fingerprintGrid(rgba, width, height));
+
 const THUMB_EDGE = 256;
 /** data URI 的字符数上限, 与 App 的 ImagePrep.thumbnailBudget 一样: 它随文件引用进 NSH 的 JS 堆。 */
 const THUMB_BUDGET = 16_000;
@@ -89,22 +136,50 @@ function thumbFrom(source, width, height) {
   return undefined;
 }
 
+/** 指纹: 把图像源缩到长边不超过 THUMB_EDGE 的 canvas, 白底合成, 读出像素算 dHash。位图已经是这个大小时就是 1:1。 */
+function hashOf(source, width, height) {
+  const scale = Math.min(1, THUMB_EDGE / Math.max(width, height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  try {
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.imageSmoothingQuality = "medium";
+    context.drawImage(source, 0, 0, canvas.width, canvas.height);
+    return fingerprintHex(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
+  } finally {
+    canvas.width = canvas.height = 0;
+  }
+}
+
+/** 一个解码好的图像源 (位图或 canvas) 的缩略图、指纹和宽高 (宽高只用来比宽高比); 任何一项失败只是没有那一项。 */
+function analyzeSource(source, width, height) {
+  const analysis = { width, height };
+  try {
+    analysis.thumb = thumbFrom(source, width, height);
+  } catch {}
+  try {
+    analysis.hash = hashOf(source, width, height);
+  } catch {}
+  return analysis;
+}
+
 /**
- * 列表用的小缩略图: 还没上传的条目只能显示它 (NSH 的 Image 不读 File)。createImageBitmap 带 resizeWidth, 浏览器解码时就缩小;
- * 浏览器解不了 (比如 HEIC) 返回 undefined, 条目照常显示名字和状态。
+ * 列表用的小缩略图和相似图片的指纹: 还没上传的条目只能显示缩略图 (NSH 的 Image 不读 File), 指纹让 TSX 跳过重复的图。
+ * 两者用同一次解码: createImageBitmap 带 resizeWidth, 浏览器解码时就缩小。浏览器解不了 (比如 HEIC) 返回空对象, 条目照常显示名字和状态。
  */
-async function makeThumb(file) {
-  if (typeof createImageBitmap !== "function") return undefined;
+async function analyze(file) {
+  if (typeof createImageBitmap !== "function") return {};
   let bitmap;
   try {
     bitmap = await createImageBitmap(file, { resizeWidth: THUMB_EDGE, resizeQuality: "medium" });
   } catch {
-    return undefined;
+    return {};
   }
   try {
-    return thumbFrom(bitmap, bitmap.width, bitmap.height);
-  } catch {
-    return undefined;
+    return analyzeSource(bitmap, bitmap.width, bitmap.height);
   } finally {
     bitmap.close();
   }
@@ -112,9 +187,9 @@ async function makeThumb(file) {
 
 /**
  * 登记一批文件, 一次只处理一个 (解码要占内存)。`dated` 为假时不带修改时间: PDF 渲染出来的页是刚生成的, `lastModified` 只是渲染的那一刻,
- * 不是用户的文件日期。`prepare` 为假时不转码也不自己生成缩略图 (渲染出来的 PNG 页), 缩略图由调用方用 `thumb` 给。
+ * 不是用户的文件日期。`prepare` 为假时不转码也不自己分析 (渲染出来的 PNG 页), 缩略图和指纹由调用方用 `analysis` 给。
  */
-async function register(list, { dated = true, prepare = true, thumb: given } = {}) {
+async function register(list, { dated = true, prepare = true, analysis: given } = {}) {
   const refs = [];
   for (const original of list) {
     const file = prepare && hasDom && needsConversion(original) ? await convertToJpeg(original) : original;
@@ -122,8 +197,13 @@ async function register(list, { dated = true, prepare = true, thumb: given } = {
     files.set(id, file);
     const ref = { id, name: file.name, size: file.size, type: file.type };
     if (dated && file.lastModified > 0) ref.modifiedAt = file.lastModified;
-    const thumb = given ?? (prepare && hasDom ? await makeThumb(file) : undefined);
-    if (thumb) ref.thumb = thumb;
+    const analysis = given ?? (prepare && hasDom ? await analyze(file) : {});
+    if (analysis.thumb) ref.thumb = analysis.thumb;
+    if (analysis.hash) ref.hash = analysis.hash;
+    if (analysis.width > 0 && analysis.height > 0) {
+      ref.width = analysis.width;
+      ref.height = analysis.height;
+    }
     refs.push(ref);
   }
   return refs;
@@ -229,10 +309,109 @@ async function saveArtifact({ url, filename }) {
   return null;
 }
 
+// ---- SHA-256: 同一个 PDF 再导入时认出来。http 的局域网页面不是安全上下文, 没有 crypto.subtle, 所以自己算; 按块读文件, 不整个读进内存 ----
+
+const SHA_K = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+  0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+  0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+  0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+class Sha256 {
+  constructor() {
+    this.state = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    this.block = new Uint8Array(64);
+    this.used = 0;
+    this.bytes = 0;
+    this.schedule = new Int32Array(64);
+  }
+
+  update(data) {
+    this.bytes += data.length;
+    let index = 0;
+    if (this.used > 0) {
+      const take = Math.min(64 - this.used, data.length);
+      this.block.set(data.subarray(0, take), this.used);
+      this.used += take;
+      index = take;
+      if (this.used < 64) return;
+      this.compress(this.block, 0);
+      this.used = 0;
+    }
+    for (; index + 64 <= data.length; index += 64) this.compress(data, index);
+    if (index < data.length) {
+      this.block.set(data.subarray(index), 0);
+      this.used = data.length - index;
+    }
+  }
+
+  compress(data, offset) {
+    const w = this.schedule;
+    for (let t = 0; t < 16; t++) {
+      const i = offset + t * 4;
+      w[t] = (data[i] << 24) | (data[i + 1] << 16) | (data[i + 2] << 8) | data[i + 3];
+    }
+    for (let t = 16; t < 64; t++) {
+      const x = w[t - 15];
+      const y = w[t - 2];
+      const s0 = ((x >>> 7) | (x << 25)) ^ ((x >>> 18) | (x << 14)) ^ (x >>> 3);
+      const s1 = ((y >>> 17) | (y << 15)) ^ ((y >>> 19) | (y << 13)) ^ (y >>> 10);
+      w[t] = (w[t - 16] + s0 + w[t - 7] + s1) | 0;
+    }
+    let [a, b, c, d, e, f, g, h] = this.state;
+    for (let t = 0; t < 64; t++) {
+      const s1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+      const t1 = (h + s1 + ((e & f) ^ (~e & g)) + SHA_K[t] + w[t]) | 0;
+      const s0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+      const t2 = (s0 + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+      h = g;
+      g = f;
+      f = e;
+      e = (d + t1) | 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (t1 + t2) | 0;
+    }
+    const next = [a, b, c, d, e, f, g, h];
+    for (let i = 0; i < 8; i++) this.state[i] = (this.state[i] + next[i]) | 0;
+  }
+
+  hex() {
+    const bits = this.bytes * 8;
+    const padding = new Uint8Array((this.used < 56 ? 56 - this.used : 120 - this.used) + 8);
+    padding[0] = 0x80;
+    const view = new DataView(padding.buffer);
+    view.setUint32(padding.length - 8, Math.floor(bits / 2 ** 32));
+    view.setUint32(padding.length - 4, bits >>> 0);
+    this.update(padding);
+    return this.state.map((word) => (word >>> 0).toString(16).padStart(8, "0")).join("");
+  }
+}
+
+export function sha256Hex(bytes) {
+  const hash = new Sha256();
+  hash.update(bytes);
+  return hash.hex();
+}
+
+const SHA_CHUNK = 4 * 1024 * 1024;
+
+async function fileSha256(file) {
+  const hash = new Sha256();
+  for (let offset = 0; offset < file.size; offset += SHA_CHUNK) {
+    hash.update(new Uint8Array(await file.slice(offset, offset + SHA_CHUNK).arrayBuffer()));
+  }
+  return hash.hex();
+}
+
 // ---- PDF: pdf.js 覆盖层与页图渲染 (契约见 HOST_PROTOCOL.md 的「PDF 阅读器」) ----
 
 /**
- * 宿主持有的 PDF: id -> { id, file, url, task, doc, users, idle }。url 是 object URL; task 是 pdf.js 的加载任务, doc 是它的文档 (Promise),
+ * 宿主持有的 PDF: id -> { id, file, sha, ref, url, task, doc, users, idle }。sha 是内容的 SHA-256 (去重用), ref 是交给 TSX 的文件引用。url 是 object URL; task 是 pdf.js 的加载任务, doc 是它的文档 (Promise),
  * 第一次需要时才打开。打开的文档连同它的 worker 和已读入的数据可以占到几百 MB, 所以只在有人用着、或覆盖层正显示它时留着。
  */
 const pdfs = new Map();
@@ -323,11 +502,16 @@ function scheduleRelease(entry) {
 
 /** 登记一个 PDF 并读出页数; 打不开就撤销登记并 reject 一句人读得懂的话。 */
 async function adoptPdf(file) {
+  // 同一个 PDF (内容一样, 不管叫什么) 再导入: 不登记第二份, 返回已有的那份, TSX 于是打开已有的。
+  const sha = await fileSha256(file);
+  for (const entry of pdfs.values()) if (entry.sha === sha && entry.ref) return entry.ref;
   const id = "pdf" + ++seq + "-" + Math.random().toString(36).slice(2, 8);
-  pdfs.set(id, { id, file, url: URL.createObjectURL(file), task: null, doc: null, users: 0, idle: 0 });
+  pdfs.set(id, { id, file, sha, ref: null, url: URL.createObjectURL(file), task: null, doc: null, users: 0, idle: 0 });
   try {
     const pageCount = await withDoc(id, (doc) => doc.numPages);
-    return { id, name: file.name, size: file.size, type: "application/pdf", pageCount };
+    const ref = { id, name: file.name, size: file.size, type: "application/pdf", pageCount };
+    pdfs.get(id).ref = ref;
+    return ref;
   } catch (error) {
     closePdf(id);
     throw new Error("无法读取这个 PDF: " + messageOf(error));
@@ -371,8 +555,12 @@ async function renderPageToFile({ fileId, page, longEdge }) {
       );
       const stem = pdfs.get(fileId).file.name.replace(/\.pdf$/i, "") || "page";
       const name = stem + "-p" + String(page + 1).padStart(3, "0") + ".png";
-      // 页图本来就在 canvas 里, 缩略图直接从它缩, 不用再解码一遍 PNG。
-      const [fileRef] = await register([new File([blob], name, { type: "image/png" })], { dated: false, prepare: false, thumb: thumbFrom(canvas, canvas.width, canvas.height) });
+      // 页图本来就在 canvas 里, 缩略图和指纹直接从它来, 不用再解码一遍 PNG。
+      const [fileRef] = await register([new File([blob], name, { type: "image/png" })], {
+        dated: false,
+        prepare: false,
+        analysis: analyzeSource(canvas, canvas.width, canvas.height),
+      });
       return { fileRef };
     } finally {
       canvas.width = canvas.height = 0;

@@ -46,6 +46,12 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 - 拖放摄入一次只读一个 provider。iPad 模拟器里用进程内 `NSItemProvider(contentsOf:)` 读 30 张 8000x12000 的 PNG (每张 37 MB): 并发 2 或 4 时 RSS 峰值 1.37 GB (4 次实测 1364 到 1374 MB), 并发 1 时 332、366、357 MB (3 次); 文件选择器的 URL 路径 (`FileManager.copyItem`, APFS 克隆) 是 295 MB。三种情况的 phys_footprint 都是 23 到 24 MB, 所以 jetsam 看的内存没变。并发 2 时用 `vmmap` 看, 多出来的常驻内存在只读的系统库区域 (`__LINKEDIT` 约 778 MB、`__TEXT` 约 493 MB), 不在文件映射里 (`mapped file` 只有 11 MB 常驻), 所以机制没查清, 也只在模拟器里见过; `HostFilesTests.testProviderIngestOfBigFilesKeepsResidentMemoryNearOneFile` 断言的就是这个模拟器里的 RSS 现象。`loadInPlaceFileRepresentation` 在并发 4 和 1 时的峰值与 `loadFileRepresentation` 一样, 没有采用。200 张 1.7 MB 的 JPEG 并发 1 和 4 的耗时都是 0.9 秒。真实跨应用拖放走系统的进程间拷贝, 没有测过, 并发 1 在那条路径上会不会慢是推测。限流要罩住整个 `load`, 连类型判断也在内 (只限住读文件那一步时, 同样的测试 RSS 又涨回 240 MB); 所以网页链接的下载也占这一个名额, 一个慢链接会拖住后面的拖放和选择, 这是已知的限制。
 - PDF 导出 (`pdf.export`) 的内存随被拷贝的原页数线性增长, 没有上限。实测 (iPad 模拟器, 单元测试进程): 100 页、131 MB 的图片 PDF 换 10 页译文, 5 秒, 峰值 footprint 364 MB (起点 40 MB, 约每页 3 MB), 输出 118 MB; 24 页每页一张不同的 2400x3200 噪声译文图时 RSS +101 MB。CoreGraphics 的 PDF 上下文在 `closePDF` 之前一直持有已写页的资源。试过两种替代, 都没有更好, 所以保留最简单的写法: 每 20 页换一个上下文再用 PDFKit 合并, 写的时候 footprint 在 60 到 130 MB, 合并时峰值 429 MB; 用 PDFKit 整本换页, 峰值 350 MB。几百页以上的大图片 PDF 导出可能占到 GB 级, 这是已知的限制。手动复现: 设 `TEST_RUNNER_HOST_MANGA_PDF` 跑 `HostFilesTests.testExportOfARealImagePDFReportsItsMemory`。
 
+## 相似图片的指纹
+
+导入时 `ImagePrep.inspect` 用解码出的 256 像素的图算一个 256 位的 dHash (`ImageFingerprint.swift`), 随文件引用的 `hash`、`width`、`height` 交给 TSX, TSX 据此跳过同一张图的其他分辨率 (算法、阈值 20 和实测见 client-ui/DESIGN.md「重复的图片」)。算法全是整数运算, `web/host.js` 有逐行对应的 JS 实现; `ImageFingerprintTests` 与 `client-ui/tests/fingerprint.test.ts` 用同样的 6 组像素和同样的期望哈希, 两边都过就是位级一致。`scripts/fingerprint-study/` 是量阈值的工具 (连同 App 的 Swift 源码一起编译), 换了算法或想用更多真实页重新定阈值时重跑。
+
+PDF 按内容的 SHA-256 去重 (`ManagedFiles.importPDF`, `sha256(of:)` 每次读 1 MB): 摘要存在 `pdfs/<uuid>.sha256`, 旧版本留下的 PDF 第一次比较时补算; 内容一样的再导入时删掉刚拷进来的, 返回已有的那份。
+
 ## 图片格式
 
 Daemon 的 `image` crate 只带 PNG、JPEG、GIF、WebP、TIFF、BMP、ICO、PNM、TGA (无魔数, 按内容猜不到)、QOI、DDS、EXR、HDR 的解码, 没有 HEIC、HEIF (没有 libheif) 和 AVIF (默认特性只有编码)。2026-11-16 用 `sips` 生成同一张图的各种格式 POST 给测试 Daemon (测得): PNG、JPEG、TIFF、BMP、GIF 返回 200; HEIC 返回 400 `无法识别图片: 不是支持的图片格式`, AVIF 返回 400 `The image format Avif is not supported`, JPEG 2000、PSD、TGA、PDF 同为 400。

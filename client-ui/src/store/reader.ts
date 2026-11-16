@@ -110,16 +110,25 @@ export function closePdf() {
   });
 }
 
+/**
+ * 打开宿主交来的 PDF, 并把人带到阅读器 (从任务页的导入菜单或拖放打开时)。宿主认出内容一样的 PDF 时交回已有的那份 (见 pdf.added);
+ * 它正是现在开着的这份, 就什么都不动 (页码、各页的翻译进度都留着), 只说一声。
+ */
+function showPdf(file: PdfFile) {
+  section.set("reader");
+  if (pdf()?.id === file.id) {
+    showToast("这个 PDF 已经打开了");
+    return;
+  }
+  openDocument(file);
+}
+
 export async function pickPdf(): Promise<void> {
   if (opening()) return;
   opening.set(true);
   try {
     const file = await pdfPort.pick();
-    if (file !== null) {
-      // 从任务页的导入菜单打开时, 要把人带到阅读器。
-      section.set("reader");
-      openDocument(file);
-    }
+    if (file !== null) showPdf(file);
   } catch (error) {
     showToast(`无法打开 PDF: ${error instanceof Error ? error.message : String(error)}`, "error");
   } finally {
@@ -371,8 +380,7 @@ export function startReader(): void {
   pdfPort.onAdded((files) => {
     const [first, ...extra] = files;
     if (first === undefined) return;
-    section.set("reader");
-    openDocument(first);
+    showPdf(first);
     if (extra.length > 0) showToast(`一次只打开一个 PDF, 已忽略另外 ${extra.length} 个`);
   });
   onFileOutcome((outcome) => {

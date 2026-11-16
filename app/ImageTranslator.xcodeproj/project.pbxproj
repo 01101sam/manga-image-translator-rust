@@ -41,6 +41,8 @@
 		030000000000000000000061 /* HostOpenURLTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030000000000000000000060 /* HostOpenURLTests.swift */; };
 		030000000000000000000071 /* HostImages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030000000000000000000070 /* HostImages.swift */; };
 		030000000000000000000073 /* HostImagesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030000000000000000000072 /* HostImagesTests.swift */; };
+		030000000000000000000075 /* ImageFingerprint.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030000000000000000000074 /* ImageFingerprint.swift */; };
+		030000000000000000000077 /* ImageFingerprintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030000000000000000000076 /* ImageFingerprintTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -122,6 +124,8 @@
 		030000000000000000000060 /* HostOpenURLTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostOpenURLTests.swift; sourceTree = "<group>"; };
 		030000000000000000000070 /* HostImages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostImages.swift; sourceTree = "<group>"; };
 		030000000000000000000072 /* HostImagesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostImagesTests.swift; sourceTree = "<group>"; };
+		030000000000000000000074 /* ImageFingerprint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageFingerprint.swift; sourceTree = "<group>"; };
+		030000000000000000000076 /* ImageFingerprintTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageFingerprintTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -181,6 +185,7 @@
 				000000000000000000000133 /* EndpointTests.swift */,
 				000000000000000000000139 /* WindowSettingsTests.swift */,
 				020000000000000000000011 /* HostFilesTests.swift */,
+				030000000000000000000076 /* ImageFingerprintTests.swift */,
 				030000000000000000000072 /* HostImagesTests.swift */,
 				020000000000000000000013 /* HostUploadTests.swift */,
 				030000000000000000000041 /* ShareInboxTests.swift */,
@@ -228,6 +233,7 @@
 				020000000000000000000001 /* HostArtifact.swift */,
 				02000000000000000000001C /* HostDebugDrag.swift */,
 				020000000000000000000003 /* HostFiles.swift */,
+				030000000000000000000074 /* ImageFingerprint.swift */,
 				030000000000000000000070 /* HostImages.swift */,
 				030000000000000000000050 /* HostInbox.swift */,
 				030000000000000000000062 /* HostOpenURL.swift */,
@@ -459,6 +465,7 @@
 				020000000000000000000002 /* HostArtifact.swift in Sources */,
 				02000000000000000000001D /* HostDebugDrag.swift in Sources */,
 				020000000000000000000004 /* HostFiles.swift in Sources */,
+				030000000000000000000075 /* ImageFingerprint.swift in Sources */,
 				030000000000000000000071 /* HostImages.swift in Sources */,
 				030000000000000000000051 /* HostInbox.swift in Sources */,
 				030000000000000000000063 /* HostOpenURL.swift in Sources */,
@@ -480,6 +487,7 @@
 				000000000000000000000134 /* EndpointTests.swift in Sources */,
 				00000000000000000000013A /* WindowSettingsTests.swift in Sources */,
 				020000000000000000000012 /* HostFilesTests.swift in Sources */,
+				030000000000000000000077 /* ImageFingerprintTests.swift in Sources */,
 				030000000000000000000073 /* HostImagesTests.swift in Sources */,
 				020000000000000000000014 /* HostUploadTests.swift in Sources */,
 				030000000000000000000040 /* ShareInboxTests.swift in Sources */,

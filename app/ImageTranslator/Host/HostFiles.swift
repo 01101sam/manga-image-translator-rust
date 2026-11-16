@@ -1,4 +1,5 @@
 import CoreGraphics
+import CryptoKit
 import Foundation
 import UniformTypeIdentifiers
 
@@ -13,12 +14,19 @@ struct FileRef: Equatable, Sendable {
     var modifiedAt: Double?
     /// 列表缩略图, data:image/jpeg;base64, 开头, 不超过 ImagePrep.thumbnailBudget 个字符。还没上传的条目只能显示它 (TSX 读不了本地文件)。
     var thumb: String?
+    /// 相似图片的指纹: 256 位 dHash, 64 个十六进制字符 (ImageFingerprint)。TSX 用它跳过「同一张图换了分辨率或重新压缩」。
+    var hash: String?
+    /// 方向修正后的像素宽高 (只用来比宽高比)。
+    var width: Int?
+    var height: Int?
 
     var json: [String: Any] {
         var value: [String: Any] = ["id": id, "name": name, "size": size, "type": type]
         if let pageCount { value["pageCount"] = pageCount }
         if let modifiedAt { value["modifiedAt"] = modifiedAt }
         if let thumb { value["thumb"] = thumb }
+        if let hash { value["hash"] = hash }
+        if let width, let height { value["width"] = width; value["height"] = height }
         return value
     }
 }
@@ -167,9 +175,12 @@ final class ManagedFiles: @unchecked Sendable {
         lock.lock()
         registry[id] = stored
         lock.unlock()
-        let thumb = prepare ? ImagePrep.inspect(at: stored)?.thumb : nil
-        if let thumb { try? Data(thumb.utf8).write(to: directory.appendingPathComponent(Self.thumbName)) }
-        return FileRef(id: id, name: stored.lastPathComponent, size: Self.size(of: stored), type: Self.mimeType(of: stored), modifiedAt: modifiedAt, thumb: thumb)
+        let inspection = prepare ? ImagePrep.inspect(at: stored) : nil
+        if let thumb = inspection?.thumb { try? Data(thumb.utf8).write(to: directory.appendingPathComponent(Self.thumbName)) }
+        return FileRef(
+            id: id, name: stored.lastPathComponent, size: Self.size(of: stored), type: Self.mimeType(of: stored), modifiedAt: modifiedAt,
+            thumb: inspection?.thumb, hash: inspection?.hash, width: inspection?.width, height: inspection?.height
+        )
     }
 
     /// 重启后内存里的登记表是空的, 凭 id 到磁盘上找: 条目目录 images/<uuid>/ 里的第一个非隐藏文件。
@@ -229,10 +240,18 @@ final class ManagedFiles: @unchecked Sendable {
 
     // MARK: - PDF
 
+    /// 同一个 PDF (内容的 SHA-256 一样) 再导入一次, 不留第二份: 删掉刚拷进来的, 返回已有的那份 (刷新它的修改时间), TSX 于是打开已有的。
     func importPDF(from source: URL, name: String? = nil, move: Bool) throws -> FileRef {
         let id = UUID().uuidString
         let destination = pdfRoot.appendingPathComponent("\(id).pdf")
         try place(source, at: destination, move: move)
+        if let digest = Self.sha256(of: destination) {
+            if let existing = existingPDF(withDigest: digest, excluding: id), let ref = pdfRef(for: existing) {
+                try? fileManager.removeItem(at: destination)
+                return ref
+            }
+            try? Data(digest.utf8).write(to: digestFile(id))
+        }
         let fileName = Self.safeFileName(name ?? source.lastPathComponent, fallback: "document.pdf")
         try? Data(fileName.utf8).write(to: nameFile(id))
         return FileRef(
@@ -268,10 +287,45 @@ final class ManagedFiles: @unchecked Sendable {
         guard UUID(uuidString: id) != nil else { return }
         try? fileManager.removeItem(at: pdfRoot.appendingPathComponent("\(id).pdf"))
         try? fileManager.removeItem(at: nameFile(id))
+        try? fileManager.removeItem(at: digestFile(id))
     }
 
     private func nameFile(_ id: String) -> URL {
         pdfRoot.appendingPathComponent("\(id).name")
+    }
+
+    private func digestFile(_ id: String) -> URL {
+        pdfRoot.appendingPathComponent("\(id).sha256")
+    }
+
+    /// pdfRoot 里内容摘要相同的另一个 PDF 的 id。旧版本留下的 PDF 没有摘要文件, 第一次比较时补算并存下 (读一遍文件, 只此一次)。
+    private func existingPDF(withDigest digest: String, excluding id: String) -> String? {
+        let names = (try? fileManager.contentsOfDirectory(atPath: pdfRoot.path)) ?? []
+        for name in names where name.hasSuffix(".pdf") {
+            let other = String(name.dropLast(4))
+            guard other != id, UUID(uuidString: other) != nil else { continue }
+            let stored = (try? String(contentsOf: digestFile(other), encoding: .utf8)).flatMap { $0.isEmpty ? nil : $0 }
+            let known = stored ?? Self.sha256(of: pdfRoot.appendingPathComponent(name))
+            if stored == nil, let known { try? Data(known.utf8).write(to: digestFile(other)) }
+            if known == digest { return other }
+        }
+        return nil
+    }
+
+    /// 文件内容的 SHA-256 (小写十六进制), 每次读 1 MB, 不把文件整个读进内存。读不了返回 nil。
+    static func sha256(of url: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while true {
+            let finished: Bool = autoreleasepool {
+                guard let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty else { return true }
+                hasher.update(data: chunk)
+                return false
+            }
+            if finished { break }
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - 纯函数

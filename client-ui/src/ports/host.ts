@@ -1,5 +1,6 @@
 import { host } from "nsh";
 import { parseImportSources, type ImportSource, type PickSource } from "../domain/import";
+import { parseHash } from "../domain/similar";
 import type { DaemonRef, JobOverrides, LocalFile } from "../domain/types";
 
 /**
@@ -61,12 +62,20 @@ export const MAX_THUMB_CHARS = 24_000;
 const asThumb = (value: unknown): string | undefined =>
   typeof value === "string" && value.startsWith("data:image/") && value.length <= MAX_THUMB_CHARS ? value : undefined;
 
+/** 宽高比, 四位小数; 宽或高不是正数返回 undefined。 */
+const aspectOf = (width: unknown, height: unknown): number | undefined =>
+  typeof width === "number" && typeof height === "number" && width > 0 && height > 0 && Number.isFinite(width / height)
+    ? Math.round((width / height) * 10_000) / 10_000
+    : undefined;
+
 export function parseFiles(value: unknown): LocalFile[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((raw) => {
     if (!isRecord(raw) || typeof raw.id !== "string" || typeof raw.name !== "string") return [];
     const modifiedAt = typeof raw.modifiedAt === "number" && raw.modifiedAt > 0 && Number.isFinite(raw.modifiedAt) ? raw.modifiedAt : undefined;
     const thumb = asThumb(raw.thumb);
+    const hash = parseHash(raw.hash) === undefined ? undefined : (raw.hash as string);
+    const aspect = aspectOf(raw.width, raw.height);
     return [
       {
         id: raw.id,
@@ -75,6 +84,8 @@ export function parseFiles(value: unknown): LocalFile[] {
         type: typeof raw.type === "string" ? raw.type : "",
         ...(modifiedAt === undefined ? {} : { modifiedAt }),
         ...(thumb === undefined ? {} : { thumb }),
+        ...(hash === undefined ? {} : { hash }),
+        ...(hash === undefined || aspect === undefined ? {} : { aspect }),
       },
     ];
   });

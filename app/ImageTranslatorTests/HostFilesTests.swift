@@ -211,6 +211,40 @@ final class HostFilesTests: XCTestCase {
         XCTAssertNil(after.url(for: ref.id))
     }
 
+    func testTheSamePDFImportedAgainKeepsOneCopyAndHandsBackTheExistingOne() throws {
+        let files = makeFiles()
+        let original = try makePDF(pages: 2)
+        let first = try files.importPDF(from: original, name: "book.pdf", move: false)
+        let again = try files.importPDF(from: original, name: "renamed copy.pdf", move: false)
+        XCTAssertEqual(again.id, first.id)
+        XCTAssertEqual(again.name, "book.pdf", "the document that is already there keeps its name")
+        XCTAssertEqual(again.pageCount, 2)
+        let stored = try FileManager.default.contentsOfDirectory(atPath: directory.appendingPathComponent("pdfs").path).filter { $0.hasSuffix(".pdf") }
+        XCTAssertEqual(stored.count, 1)
+        let other = try files.importPDF(from: try makePDF(pages: 3), name: "other.pdf", move: false)
+        XCTAssertNotEqual(other.id, first.id)
+        files.releasePDF(first.id)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.appendingPathComponent("pdfs").path).filter { $0.contains(first.id) }.isEmpty, "release removes the digest too")
+    }
+
+    func testAPDFFromAnOlderVersionWithoutADigestIsStillRecognised() throws {
+        let files = makeFiles()
+        let original = try makePDF(pages: 1)
+        let first = try files.importPDF(from: original, name: "old.pdf", move: false)
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("pdfs").appendingPathComponent("\(first.id).sha256"))
+        XCTAssertEqual(try files.importPDF(from: original, move: false).id, first.id)
+    }
+
+    func testSHA256StreamsAFileAndMatchesTheKnownDigest() throws {
+        let url = try write("abc.txt", bytes: 0)
+        try Data("abc".utf8).write(to: url)
+        XCTAssertEqual(ManagedFiles.sha256(of: url), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        let big = directory.appendingPathComponent("big.bin")
+        try Data(repeating: 0x61, count: 3 * (1 << 20) + 17).write(to: big)
+        XCTAssertEqual(ManagedFiles.sha256(of: big)?.count, 64)
+        XCTAssertNil(ManagedFiles.sha256(of: directory.appendingPathComponent("missing")))
+    }
+
     func testSharedFileKeepsTheCleanNameInItsOwnDirectory() {
         let files = makeFiles()
         let first = files.sharedFile(named: "vol01-translated.pdf")
