@@ -10,7 +10,7 @@ import { Badge, Button, Icon, IconButton, type BadgeTone } from "../ui";
 
 const desktop = platform.desktop;
 
-const toneOf = (item: Item): BadgeTone => {
+export const toneOf = (item: Item): BadgeTone => {
   if (item.kind !== "job") return item.kind === "pending" && item.rejected !== undefined ? "destructive" : "neutral";
   switch (item.row.state) {
     case "running":
@@ -24,9 +24,9 @@ const toneOf = (item: Item): BadgeTone => {
   }
 };
 
-const titleOf = (item: Item): string => (item.kind === "job" ? (item.name ?? shortJobId(item.row.jobId)) : item.file.name);
+export const titleOf = (item: Item): string => (item.kind === "job" ? (item.name ?? shortJobId(item.row.jobId)) : item.file.name);
 
-const statusOf = (item: Item): string => {
+export const statusOf = (item: Item): string => {
   switch (item.kind) {
     case "pending":
       return item.rejected ?? "等待上传";
@@ -37,12 +37,12 @@ const statusOf = (item: Item): string => {
   }
 };
 
-/** 缩略图的 URL。始终是小尺寸 (w=256), 原图字节不会进入 JS, 也不会被整张解码。 */
-function thumbUrl(item: Item): string {
+/** 缩略图的 URL。始终是降采样的小图 (列表 w=256, 网格按格宽 256 或 512), 原图字节不会进入 JS, 也不会被整张解码。 */
+export function thumbUrl(item: Item, width: number = THUMB_WIDTH): string {
   const s = session();
   if (item.kind !== "job" || s.kind !== "paired") return "";
   const kind = item.row.state === "done" ? "artifact" : "source";
-  return mediaUrl(s.daemon.url, item.row.jobId, kind, THUMB_WIDTH, s.token);
+  return mediaUrl(s.daemon.url, item.row.jobId, kind, width, s.token);
 }
 
 /**
@@ -95,7 +95,8 @@ export function JobRow(props: { itemKey: () => string }) {
   );
 }
 
-function RowActions(props: { item: Item; itemKey: string }) {
+/** 取消、重试、移除; 列表里已完成的行在最右边多一个箭头, 网格的单元格没有。 */
+export function RowActions(props: { item: Item; itemKey: string; chevron?: boolean }) {
   const cancellable = () => props.item.kind === "pending" ? props.item.rejected === undefined : props.item.kind === "job" && props.item.row.state === "queued";
   // 还在排队的项显示「取消」, 已结束的才显示移除。
   const removable = () => isRemovable(props.item) && !cancellable();
@@ -117,7 +118,7 @@ function RowActions(props: { item: Item; itemKey: string }) {
       <If when={removable()}>
         <IconButton label="移除" icon="x" tone="muted-foreground" onPress={() => removeItems([props.itemKey])} />
       </If>
-      <If when={props.item.kind === "job" && props.item.row.state === "done" && desktop}>
+      <If when={(props.chevron ?? true) && props.item.kind === "job" && props.item.row.state === "done" && desktop}>
         <Icon name="chevron-right" size={16} tone="muted-foreground" />
       </If>
     </View>

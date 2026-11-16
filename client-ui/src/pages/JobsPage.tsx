@@ -1,6 +1,8 @@
-import { keymap, List, platform, signal, Text, View, type ListRef } from "nsh";
+import { keymap, List, platform, signal, Text, View, windowSize, type ListRef } from "nsh";
 import { LANGUAGES } from "../domain/config";
 import { canOpenJob } from "../domain/job";
+import { GRID_GAP, gridColumns, thumbWidthFor, tileWidth } from "../domain/grid";
+import { gridStep, type Arrow } from "../domain/nav";
 import type { Counts } from "../domain/board";
 import { dragging } from "../store/app";
 import { engineState, runEngineAction } from "../store/engine";
@@ -19,6 +21,7 @@ import { overrides, setOverride } from "../store/overrides";
 import { openViewer, viewerKey } from "../store/route";
 import { Banner, Button, Card, Empty, Icon, Meter, SelectField } from "../ui";
 import { JobRow } from "./JobRow";
+import { JobTile } from "./JobTile";
 
 const desktop = platform.desktop;
 const optionsOpen = signal(false);
@@ -39,6 +42,11 @@ export function JobsPage() {
   let list: ListRef | undefined;
   // 当前屏幕上可见的行范围, 键盘高亮移出范围时才滚动, 否则列表原地不动。
   let visible = { first: 0, last: 0 };
+  // 列表区域的宽度 (点), 布局之后由 onLayout 更新; 起始值取窗口宽度, 第一帧就接近对。
+  const listWidth = signal(windowSize().width);
+  // iPad、visionOS 和桌面浏览器的宽窗口排成网格, 手机保持一行一项。
+  const columns = () => gridColumns(listWidth(), Math.min(windowSize().width, windowSize().height));
+  const thumbWidth = () => thumbWidthFor(tileWidth(listWidth(), columns()));
 
   const select = (delta: number) => {
     if (viewerKey() !== null) return;
@@ -53,8 +61,14 @@ export function JobsPage() {
     const item = currentBoard().items[key];
     if (item?.kind === "job" && canOpenJob(item.row.state)) openViewer(key);
   };
-  keymap.bind("up", () => select(-1), { repeat: true });
-  keymap.bind("down", () => select(1), { repeat: true });
+  const arrow = (which: Arrow) => {
+    const step = gridStep(which, columns());
+    if (step !== null) select(step);
+  };
+  keymap.bind("up", () => arrow("up"), { repeat: true });
+  keymap.bind("down", () => arrow("down"), { repeat: true });
+  keymap.bind("left", () => arrow("left"), { repeat: true });
+  keymap.bind("right", () => arrow("right"), { repeat: true });
   keymap.bind("enter", openHighlighted);
   keymap.bind("space", openHighlighted);
   // Mac 键盘上的「删除」键是 backspace。
@@ -128,7 +142,7 @@ export function JobsPage() {
         />
       </If>
       <If when={notice()}>{(text) => <Banner testID="net-banner" tone="destructive" text={text()} />}</If>
-      <View class="flex-1">
+      <View class="flex-1" onLayout={(event) => listWidth.set(event.bounds.size.width)}>
         <If
           when={order().length > 0}
           else={
@@ -142,18 +156,24 @@ export function JobsPage() {
           }
         >
           <List
-            testID="job-list"
+            testID={columns() > 1 ? "job-grid" : "job-list"}
             ref={(node) => (list = node)}
             each={order()}
             keyExtractor={(key) => key}
-            estimatedItemSize={72}
+            numColumns={columns()}
+            estimatedItemSize={columns() > 1 ? tileWidth(listWidth(), columns()) / 0.72 + 80 : 72}
+            contentStyle={columns() > 1 ? { padding: GRID_GAP, gap: GRID_GAP } : {}}
             onViewableItemsChange={({ viewableItems }) => {
               const indexes = viewableItems.filter((t) => t.isViewable).map((t) => t.index);
               if (indexes.length > 0) visible = { first: Math.min(...indexes), last: Math.max(...indexes) };
             }}
             class="flex-1"
           >
-            {(key) => <JobRow itemKey={key} />}
+            {(key) => (
+              <If when={columns() > 1} else={<JobRow itemKey={key} />}>
+                <JobTile itemKey={key} thumbWidth={thumbWidth} />
+              </If>
+            )}
           </List>
         </If>
         <If when={dragging()}>

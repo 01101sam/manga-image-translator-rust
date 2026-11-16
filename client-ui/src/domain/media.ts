@@ -6,6 +6,7 @@ export type MediaKind = "source" | "artifact";
 
 /** Daemon 允许的 `w` 取值, 见 `preview::WIDTHS`。列表缩略图永远用小的, 查看器用大的。 */
 export const THUMB_WIDTH = 256;
+export const LARGE_THUMB_WIDTH = 512;
 export const VIEW_WIDTH = 2048;
 
 export function mediaUrl(baseUrl: string, jobId: string, kind: MediaKind, width: number, token: string): string {

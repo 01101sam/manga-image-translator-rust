@@ -18,6 +18,14 @@ function boardOf(...states: [string, JobState][]): Board {
 }
 
 describe("navigation", () => {
+  test("a grid row step from no highlight also starts at the edge, then moves a row and clamps", () => {
+    expect(moveHighlight(10, null, 4)).toBe(0);
+    expect(moveHighlight(10, null, -4)).toBe(9);
+    expect(moveHighlight(10, 3, 4)).toBe(7);
+    expect(moveHighlight(10, 8, 4)).toBe(9);
+    expect(moveHighlight(10, 1, -4)).toBe(0);
+  });
+
   test("highlight starts at the edge and clamps", () => {
     expect(moveHighlight(3, null, 1)).toBe(0);
     expect(moveHighlight(3, null, -1)).toBe(2);

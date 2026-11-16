@@ -1,11 +1,11 @@
 import type { Board } from "./board";
 import { canOpenJob } from "./job";
 
-/** 高亮项移动并夹在 [0, count-1]; 从无高亮出发时, 向下选第一个, 向上选最后一个。 */
+/** 高亮项移动并夹在 [0, count-1]; 从无高亮出发时, 向下选第一个, 向上选最后一个 (网格里一步是一整行, 也一样从头尾开始)。 */
 export function moveHighlight(count: number, current: number | null, delta: number): number | null {
   if (count <= 0) return null;
-  const base = current ?? (delta > 0 ? -1 : count);
-  return Math.min(Math.max(base + delta, 0), count - 1);
+  if (current === null) return delta > 0 ? 0 : count - 1;
+  return Math.min(Math.max(current + delta, 0), count - 1);
 }
 
 export type Arrow = "up" | "down" | "left" | "right";
@@ -21,6 +21,20 @@ export function arrowDelta(arrow: Arrow, viewerOpen: boolean): number | null {
       return viewerOpen ? -1 : null;
     case "right":
       return viewerOpen ? 1 : null;
+  }
+}
+
+/** 列表页的方向键移动多少项: 单列时上下各一项、左右不抢键; 网格里上下是一整行、左右是一项。 */
+export function gridStep(arrow: Arrow, columns: number): number | null {
+  switch (arrow) {
+    case "up":
+      return -columns;
+    case "down":
+      return columns;
+    case "left":
+      return columns > 1 ? -1 : null;
+    case "right":
+      return columns > 1 ? 1 : null;
   }
 }
 
