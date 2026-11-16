@@ -17,6 +17,7 @@ import {
   pickPdf,
   pressSpace,
   retranslateCurrent,
+  saveCurrentPage,
   step,
   surfaceAttached,
   syncJobStates,
@@ -167,6 +168,9 @@ export function ReaderPage() {
                   <Text class="text-xs text-muted-foreground">← → 翻页 · 空格 翻译本页 / 切换原文与译文</Text>
                 </If>
               </View>
+              <If when={page()?.translation === "done"}>
+                <IconButton label="保存译图" icon="download" testID="reader-save" onPress={() => void saveCurrentPage()} />
+              </If>
               <If when={page()}>
                 {(p) => <Button label={spaceLabel(p())} size="sm" variant="secondary" testID="reader-space" disabled={!canPressSpace(p())} onPress={pressSpace} />}
               </If>
