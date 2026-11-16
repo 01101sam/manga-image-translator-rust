@@ -8,6 +8,9 @@ final class NshHostUITests: XCTestCase {
     private var key: String { ProcessInfo.processInfo.environment["HOST_DAEMON_KEY"] ?? "sam01101" }
     private var folder: String { ProcessInfo.processInfo.environment["HOST_PICK_FOLDER"] ?? "/tmp/nsh-ui-work/imgs" }
 
+    /// 不需要 Daemon 的用例配到这个地址 (127.0.0.1:1, 没有人听): 配到测试 Daemon 的端口会因为假 Token 收到 401, 回到配对页。
+    private let offlinePairing = ["-paired-test", "127.0.0.1", "1", "unused-token"]
+
     override func setUp() {
         continueAfterFailure = false
     }
@@ -156,7 +159,7 @@ final class NshHostUITests: XCTestCase {
 
     /// 导入菜单是自己画的 (嵌入运行时没有 Menu、Popover、Sheet), 要在真实的 iOS 运行时里确认: 能打开、列出宿主声明的来源、点卡片外收起。不需要 Daemon。
     func testImportMenuOpensListsTheHostsSourcesAndClosesOnATapOutside() {
-        let app = launch(["-paired-test", host, port, "unused-token"], seed: false)
+        let app = launch(offlinePairing, seed: false)
         let add = element(app, "add-images")
         XCTAssertTrue(add.waitForExistence(timeout: 30))
         add.tap()
@@ -164,7 +167,8 @@ final class NshHostUITests: XCTestCase {
             XCTAssertTrue(element(app, id).waitForExistence(timeout: 5), "\(id) is missing from the import menu")
         }
         shot(app, "import-menu")
-        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.04)).tap()
+        // 点遮罩的上沿正中: 在卡片外面。按遮罩自己的坐标算, 不按窗口算 (visionOS 的窗口坐标点不到)。
+        element(app, "import-backdrop").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)).tap()
         let gone = NSPredicate(format: "exists == false")
         expectation(for: gone, evaluatedWith: element(app, "import-menu"))
         waitForExpectations(timeout: 5)
@@ -176,7 +180,7 @@ final class NshHostUITests: XCTestCase {
         let names = try FileManager.default.contentsOfDirectory(atPath: folder)
         let expected = names.filter { ["png", "jpg", "jpeg"].contains(($0 as NSString).pathExtension.lowercased()) }.count
         XCTAssertGreaterThan(expected, 0, "the pick folder has no images")
-        let app = launch(["-paired-test", host, port, "unused-token", "-seed-pasteboard", folder], seed: false)
+        let app = launch(offlinePairing + ["-seed-pasteboard", folder], seed: false)
         let add = element(app, "add-images")
         XCTAssertTrue(add.waitForExistence(timeout: 30))
         let summary = element(app, "jobs-summary")
@@ -189,7 +193,15 @@ final class NshHostUITests: XCTestCase {
         expectation(for: NSPredicate(format: "label CONTAINS %@", "共 \(before + expected) 张"), evaluatedWith: summary)
         waitForExpectations(timeout: 30)
         shot(app, "pasted-from-menu")
+        // 点过菜单项之后的第一个键盘事件到不了界面 (实测: 日志里 files.paste 少一次, 先按一次方向键就好了; 原因没查清, 也不知道真键盘上会不会这样)。
+        // 方向键只动列表的高亮, 没有别的作用。
+        app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
+        // visionOS 的 typeKey 只收 XCUIKeyboardKey; iOS 上用 XCUIKeyboardKey("v") 发出的却不是 ⌘V (实测: 粘贴没有发生), 要用字符串那个重载。
+        #if os(visionOS)
+        app.typeKey(XCUIKeyboardKey(rawValue: "v"), modifierFlags: .command)
+        #else
         app.typeKey("v", modifierFlags: .command)
+        #endif
         expectation(for: NSPredicate(format: "label CONTAINS %@", "共 \(before + 2 * expected) 张"), evaluatedWith: summary)
         waitForExpectations(timeout: 30)
         shot(app, "pasted-with-command-v")
@@ -228,7 +240,7 @@ final class NshHostUITests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: scratch) }
         let pdf = scratch.appendingPathComponent("opened.pdf")
         try UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 300, height: 400)).writePDF(to: pdf) { $0.beginPage() }
-        let app = launch(["-paired-test", host, port, "unused-token"], seed: false)
+        let app = launch(offlinePairing, seed: false)
         XCTAssertTrue(element(app, "add-images").waitForExistence(timeout: 30))
         app.open(pdf)
         XCTAssertTrue(element(app, "reader-status").waitForExistence(timeout: 30), "onOpenURL did not reach the reader")
@@ -244,11 +256,11 @@ final class NshHostUITests: XCTestCase {
     func testAPhotoSharedFromPhotosShowsUpInTheAppAsAPendingUpload() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["HOST_PHOTOS_SHARE"] == "1", "needs a simulator with photos (xcrun simctl addmedia)")
         // 先起一次 App, 把以前留在真收件箱里的条目搬掉, 之后的数才是这一次分享的。
-        let cleaner = launch(["-paired-test", host, port, "unused-token"], seed: false)
+        let cleaner = launch(offlinePairing, seed: false)
         XCTAssertTrue(element(cleaner, "add-images").waitForExistence(timeout: 30))
         cleaner.terminate()
         try sharePhotoWithTheExtension()
-        let app = launch(["-paired-test", host, port, "unused-token"], seed: false)
+        let app = launch(offlinePairing, seed: false)
         let summary = element(app, "jobs-summary")
         XCTAssertTrue(summary.waitForExistence(timeout: 30))
         expectation(for: NSPredicate(format: "label CONTAINS %@", "共 1 张"), evaluatedWith: summary)
@@ -283,7 +295,7 @@ final class NshHostUITests: XCTestCase {
         let inbox = try makeInbox()
         try deposit(images[0], as: "0000000000001-0000-aaaaaaaa", into: inbox)
         try deposit(images[1], as: "0000000000001-0001-bbbbbbbb", into: inbox)
-        let app = launch(["-paired-test", host, port, "unused-token", "-inbox-dir", inbox.path], seed: false)
+        let app = launch(offlinePairing + ["-inbox-dir", inbox.path], seed: false)
         let summary = element(app, "jobs-summary")
         XCTAssertTrue(summary.waitForExistence(timeout: 30))
         expectation(for: NSPredicate(format: "label CONTAINS %@", "共 2 张"), evaluatedWith: summary)
@@ -309,10 +321,12 @@ final class NshHostUITests: XCTestCase {
             try UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 300, height: 400)).writePDF(to: url) { $0.beginPage() }
             try deposit(url, as: "000000000000\(index)-0000-aaaaaaaa", into: inbox)
         }
-        let app = launch(["-paired-test", host, port, "unused-token", "-inbox-dir", inbox.path], seed: false)
+        let app = launch(offlinePairing + ["-inbox-dir", inbox.path], seed: false)
+        // 提示 3.5 秒就消失, 要先等它; 阅读器是常驻的, 晚一点也在。
+        let toast = element(app, "toast")
+        XCTAssertTrue(toast.waitForExistence(timeout: 30), "the ignored PDF should be announced")
+        XCTAssertTrue(toast.label.contains("一次只打开一个 PDF"), "unexpected notice: \(toast.label)")
         XCTAssertTrue(element(app, "reader-status").waitForExistence(timeout: 30), "a shared PDF should open the reader")
-        let notice = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "一次只打开一个 PDF")).firstMatch
-        XCTAssertTrue(notice.waitForExistence(timeout: 10), "the ignored PDF should be announced")
         shot(app, "inbox-pdfs")
     }
 
