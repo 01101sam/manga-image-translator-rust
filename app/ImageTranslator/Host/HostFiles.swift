@@ -61,7 +61,7 @@ final class ManagedFiles: @unchecked Sendable {
     static let pdfMaxAge: TimeInterval = 30 * 24 * 3600
 
     private let root: URL
-    private let inbox: URL
+    private let images: URL
     private let scratch: URL
     private let pdfRoot: URL
     private let lock = NSLock()
@@ -70,7 +70,7 @@ final class ManagedFiles: @unchecked Sendable {
 
     init(root: URL, pdfRoot: URL) {
         self.root = root
-        self.inbox = root.appendingPathComponent("inbox", isDirectory: true)
+        self.images = root.appendingPathComponent("images", isDirectory: true)
         self.scratch = root.appendingPathComponent("scratch", isDirectory: true)
         self.pdfRoot = pdfRoot
         prepareDirectories()
@@ -86,7 +86,7 @@ final class ManagedFiles: @unchecked Sendable {
     }
 
     private func prepareDirectories() {
-        for directory in [inbox, scratch, pdfRoot] {
+        for directory in [images, scratch, pdfRoot] {
             try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
     }
@@ -112,7 +112,7 @@ final class ManagedFiles: @unchecked Sendable {
     /// 把一个文件收进沙盒并登记。move 为真时搬走原文件 (拖放给的临时文件在回调返回后就会被系统删掉), 失败退回拷贝。
     func adopt(_ source: URL, name: String? = nil, move: Bool) throws -> FileRef {
         let id = UUID().uuidString
-        let directory = inbox.appendingPathComponent(id, isDirectory: true)
+        let directory = images.appendingPathComponent(id, isDirectory: true)
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         let fileName = Self.safeFileName(name ?? source.lastPathComponent, fallback: "image")
         let destination = directory.appendingPathComponent(fileName)
