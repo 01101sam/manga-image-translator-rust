@@ -15,6 +15,7 @@ export function runImport(source: ImportSource): void {
   switch (source) {
     case "photos":
     case "files":
+    case "folder":
       void pickAndAdd(source);
       return;
     case "pdf":

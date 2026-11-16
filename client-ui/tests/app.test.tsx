@@ -205,8 +205,20 @@ describe("jobs", () => {
 });
 
 describe("import menu", () => {
-  const LABELS = ["从相册", "从文件", "打开 PDF"];
+  const LABELS = ["从相册", "从文件", "选择文件夹", "打开 PDF"];
   const shownLabels = (app: Launched) => app.texts().filter((t) => LABELS.includes(t));
+
+  test("the folder item is a files.pick with source folder", async () => {
+    const daemon = createFakeDaemon({ finishPerPoll: 1000 });
+    const app = await launch({ daemon, saved: true, picks: [files(3)], imports: ["files", "folder", "pdf"] }, { platform: "web" });
+    await app.waitFor("id:add-images");
+    await app.press("id:add-images");
+    await app.waitFor("id:import-folder");
+    expect(shownLabels(app)).toEqual(["从文件", "选择文件夹", "打开 PDF"]);
+    await app.press("id:import-folder");
+    await app.waitFor("p0.png");
+    expect(calls(app, "files.pick")).toEqual([{ name: "files.pick", data: { limit: 200, source: "folder" } }]);
+  });
 
   async function openMenu(app: Launched) {
     await app.waitFor("id:add-images");
@@ -215,7 +227,7 @@ describe("import menu", () => {
   }
 
   test("lists what the host declares, always in the same order", async () => {
-    const app = await launch({ daemon: createFakeDaemon(), saved: true, imports: ["pdf", "photos", "files"] }, { platform: "ios" });
+    const app = await launch({ daemon: createFakeDaemon(), saved: true, imports: ["pdf", "folder", "photos", "files"] }, { platform: "ios" });
     await openMenu(app);
     expect(shownLabels(app)).toEqual(LABELS);
   });
@@ -270,7 +282,7 @@ describe("import menu", () => {
     await app.waitFor("id:empty-import");
     await app.press("id:empty-import");
     await app.waitFor("id:import-menu");
-    expect(shownLabels(app)).toEqual(LABELS);
+    expect(shownLabels(app)).toEqual(["从相册", "从文件", "打开 PDF"]);
   });
 
   test("opening a PDF from the menu asks the host for a PDF and shows the reader", async () => {

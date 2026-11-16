@@ -29,11 +29,11 @@
 {
   "daemons": [{ "name": "studio", "url": "http://192.168.1.5:8080" }],   // 此刻发现的 Daemon, url 不带结尾斜杠
   "paired": { "daemon": { "name": "studio", "url": "http://192.168.1.5:8080" }, "token": "…" }, // 已保存的配对; 没有则 null
-  "imports": ["photos", "files", "pdf"]                                                        // 宿主支持的导入入口
+  "imports": ["photos", "files", "folder", "pdf"]                                              // 宿主支持的导入入口
 }
 ```
 
-- `imports`: 导入菜单只显示宿主声明的入口, 顺序固定为 `photos` (从相册, `files.pick` 的 `source: "photos"`)、`files` (从文件, `source: "files"`)、`pdf` (打开 PDF, `pdf.pick`)。没有这个字段 (老宿主) 当作 `["files", "pdf"]`。App 声明 `photos`、`files`、`pdf`, Web 声明 `files`、`pdf`。
+- `imports`: 导入菜单只显示宿主声明的入口, 顺序固定为 `photos` (从相册, `files.pick` 的 `source: "photos"`)、`files` (从文件, `source: "files"`)、`folder` (选择文件夹, `source: "folder"`)、`pdf` (打开 PDF, `pdf.pick`)。没有这个字段 (老宿主) 当作 `["files", "pdf"]`。App 声明 `photos`、`files`、`pdf` (文件夹含在「从文件」的文档选择器里); Web 声明 `files`、`pdf`, 浏览器支持选目录 (`webkitdirectory`) 时再加 `folder`。
 
 - App: `daemons` 来自 Bonjour (`BonjourBrowser`), `paired` 来自 Keychain。`paired` 的 Daemon 当前没被发现也照样返回 (Token 永久有效, 不依赖 Bonjour 在线)。url 里的 IPv6 zone (`%en0`) 要先去掉。
 - Web: `daemons` 只有一项, 就是页面自己的来源 `{ "name": location.host, "url": location.origin }`; `paired` 恒为 `null`, Token 由 TSX 存在 NSH `Storage` (浏览器 localStorage), 键 `session.token:<url>`。
@@ -59,12 +59,12 @@
 
 ```jsonc
 // 参数
-{ "limit": 200, "source": "photos" }   // limit: 最多返回多少个; source: "photos" | "files", 缺省 "files"
+{ "limit": 200, "source": "photos" }   // limit: 最多返回多少个; source: "photos" | "files" | "folder", 缺省 "files"
 // 返回 (用户取消则 files 为空数组)
 { "files": [{ "id": "…", "name": "page01.png", "size": 123456, "type": "image/png" }] }
 ```
 
-- `source`: `photos` 是相册 (App: PHPicker, 只出图片); `files` 是文件选择器 (App: 文档选择器, 图片、PDF 和文件夹都能选, 文件夹递归并按自然序; Web: 浏览器的文件对话框)。
+- `source`: `photos` 是相册 (App: PHPicker, 只出图片); `files` 是文件选择器 (App: 文档选择器, 图片、PDF 和文件夹都能选, 文件夹递归并按自然序; Web: 浏览器的文件对话框); `folder` 只有 Web 声明, 弹浏览器的目录选择 (`<input webkitdirectory>`), 取出里面的图片和 PDF 并按相对路径自然序排 (page2 在 page10 前, 与 App 的文件夹导入一致)。
 - 选出来的 **PDF 不放进 `files`**, 与拖放一致走事件 `pdf.added`: 只取第一个, 其余宿主立刻放掉并发一条 `host.notice`。
 
 - `id` 由宿主生成, 只在宿主进程内有意义。宿主把 `id` 映射到文件引用 (App: 沙盒内的临时副本或安全作用域 URL; Web: `File` 对象)。**不要把文件读进内存再回传。**
@@ -126,7 +126,7 @@
 | 事件 | 载荷 | 说明 |
 |---|---|---|
 | `session.daemons` | `[{ name, url }]` | Bonjour 发现的 Daemon 列表变化 (全量, 不是增量) |
-| `files.added` | `[{ id, name, size, type }]` | 用户拖放、粘贴或从分享入口带进来的图片, 与 `files.pick` 同样的文件引用 |
+| `files.added` | `[{ id, name, size, type }]` | 用户拖放、粘贴或从分享入口带进来的图片, 与 `files.pick` 同样的文件引用。Web 的 ⌘V / Ctrl+V 由 `web/host.js` 监听浏览器的 `paste` 事件 (取 `clipboardData.files`), 走这个事件; 拖入的文件夹同样按自然序 |
 | `files.dragState` | `{ "active": true \| false }` | 拖拽进入 / 离开窗口, TSX 据此显示「松开以添加」。Web 发; App 可选 |
 | `host.notice` | `{ "text": "…" }` | 一条给用户看的提示 (比如「已忽略 3 个不是图片的文件」), TSX 用 toast 显示 |
 

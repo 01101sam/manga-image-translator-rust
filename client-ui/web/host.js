@@ -19,11 +19,14 @@ function register(list) {
   });
 }
 
-/** 递归读取目录条目里的图片。dataTransfer 的条目必须在 drop 事件同步阶段取出, 之后才可以异步遍历。 */
+/** 页序靠名字里的数字: page2 排在 page10 前 (与 App 的文件夹导入一致)。 */
+const naturalCompare = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+
+/** 递归读取目录条目里的文件, 带上相对路径。dataTransfer 的条目必须在 drop 事件同步阶段取出, 之后才可以异步遍历。 */
 async function walk(entry, out) {
   if (entry.isFile) {
     const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
-    out.push(file);
+    out.push({ path: entry.fullPath, file });
     return;
   }
   if (!entry.isDirectory) return;
@@ -42,17 +45,18 @@ async function filesFromTransfer(items, plainFiles) {
     if (entry) entries.push(entry);
   }
   if (entries.length === 0) return [...plainFiles];
-  const out = [];
-  for (const entry of entries) await walk(entry, out);
-  return out;
+  const found = [];
+  for (const entry of entries) await walk(entry, found);
+  return found.sort((a, b) => naturalCompare(a.path, b.path)).map((item) => item.file);
 }
 
-function chooseFiles(accept, multiple) {
+function chooseFiles(accept, multiple, directory = false) {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
     input.multiple = multiple;
     input.accept = accept;
+    input.webkitdirectory = directory;
     input.style.display = "none";
     const finish = (list) => {
       input.remove();
@@ -441,8 +445,12 @@ export async function createHost(player) {
     await announce(sorted);
   };
   /** files.pick: 图片放在返回值里, PDF 与拖放一样走 pdf.added。 */
-  const pick = async (limit) => {
-    const sorted = sortFiles(await chooseFiles("image/*,application/pdf,.pdf", true));
+  const pick = async (limit, source) => {
+    const chosen =
+      source === "folder"
+        ? (await chooseFiles("", true, true)).sort((a, b) => naturalCompare(a.webkitRelativePath || a.name, b.webkitRelativePath || b.name))
+        : await chooseFiles("image/*,application/pdf,.pdf", true);
+    const sorted = sortFiles(chosen);
     await announce(sorted);
     return { files: register(sorted.images.slice(0, limit)) };
   };
@@ -488,15 +496,15 @@ export async function createHost(player) {
           return {
             daemons: hasDom ? [{ name: location.host, url: location.origin }] : [],
             paired: null,
-            // 网页没有相册; 文件对话框里图片和 PDF 都能选。
-            imports: ["files", "pdf"],
+            // 网页没有相册; 文件对话框里图片和 PDF 都能选, 能选目录的浏览器多一项「选择文件夹」。
+            imports: hasDom && "webkitdirectory" in document.createElement("input") ? ["files", "folder", "pdf"] : ["files", "pdf"],
           };
         case "session.saveToken":
         case "session.clearToken":
           // Web 的 Token 由 TSX 存进 NSH Storage, 宿主不参与。
           return null;
         case "files.pick":
-          return hasDom ? pick(Math.min(args?.limit ?? MAX_PICK, MAX_PICK)) : { files: [] };
+          return hasDom ? pick(Math.min(args?.limit ?? MAX_PICK, MAX_PICK), args?.source) : { files: [] };
         case "upload.start":
           return upload(args);
         case "artifact.save":
