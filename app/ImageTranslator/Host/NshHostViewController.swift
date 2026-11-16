@@ -31,8 +31,11 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
     private var heldEvents: [HostEvent] = []
     private var debugDragSource: DebugDragSource?
 
-    init(hooks: TestHooks) {
+    private let openRouter: OpenURLRouter
+
+    init(hooks: TestHooks, openRouter: OpenURLRouter) {
         self.hooks = hooks
+        self.openRouter = openRouter
         self.ingestor = FileIngestor(files: ManagedFiles.shared)
         self.uploads = UploadClient(files: ManagedFiles.shared)
         let tokens: TokenStoring = hooks.isolatesSession ? MemoryTokenStore(value: hooks.paired) : KeychainTokenStore()
@@ -48,6 +51,7 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.addInteraction(UIDropInteraction(delegate: self))
+        openRouter.handler = { [weak self] urls in self?.openExternally(urls) }
         NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
         if let path = hooks.seedPasteboard { Self.seedPasteboard(from: URL(fileURLWithPath: path)) }
         session.onDaemonsChanged = { [weak self] daemons in self?.appView?.send("session.daemons", daemons) }
@@ -147,6 +151,23 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
         Task {
             deliver(await InboxDrainer.shared.drain(using: ingestor))
         }
+    }
+
+    /// 「打开方式」: Info.plist 里 LSSupportsOpeningDocumentsInPlace 是 NO, 系统先把文件拷进 App 自己的 Documents/Inbox 再交给我们,
+    /// 这份副本搬进沙盒就不再占两份。不在自己容器里的 URL 只拷不搬, 免得动了用户的原文件。
+    private func openExternally(_ urls: [URL]) {
+        let own = Self.isInOwnContainer
+        Task {
+            var result = await ingestor.ingest(urls: urls.filter(own), move: true, allowing: [.image, .pdf])
+            result.merge(await ingestor.ingest(urls: urls.filter { !own($0) }, move: false, allowing: [.image, .pdf]))
+            urls.filter(own).forEach { try? FileManager.default.removeItem(at: $0) }
+            deliver(result)
+        }
+    }
+
+    static func isInOwnContainer(_ url: URL) -> Bool {
+        let home = URL(fileURLWithPath: NSHomeDirectory()).resolvingSymlinksInPath().path
+        return url.resolvingSymlinksInPath().path.hasPrefix(home + "/")
     }
 
     private func emit(_ events: [HostEvent]) {
@@ -513,9 +534,10 @@ private final class PeakSampler: @unchecked Sendable {
 
 struct NshHostView: UIViewControllerRepresentable {
     let hooks: TestHooks
+    let openRouter: OpenURLRouter
 
     func makeUIViewController(context: Context) -> NshHostViewController {
-        NshHostViewController(hooks: hooks)
+        NshHostViewController(hooks: hooks, openRouter: openRouter)
     }
 
     func updateUIViewController(_ uiViewController: NshHostViewController, context: Context) {}
