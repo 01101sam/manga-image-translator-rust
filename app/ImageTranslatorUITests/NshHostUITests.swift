@@ -23,6 +23,12 @@ final class NshHostUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: id).firstMatch
     }
 
+    /// 摘要里的任务数: "还没有任务" 是 0, "共 N 张 · ..." 是 N。
+    private static func jobCount(_ summary: String) -> Int {
+        guard let range = summary.range(of: #"共 (\d+) 张"#, options: .regularExpression) else { return 0 }
+        return Int(summary[range].filter(\.isNumber)) ?? 0
+    }
+
     private func shot(_ app: XCUIApplication, _ name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name
@@ -79,11 +85,12 @@ final class NshHostUITests: XCTestCase {
         XCTAssertTrue(source.waitForExistence(timeout: 10))
         let summary = element(app, "jobs-summary")
         XCTAssertTrue(summary.waitForExistence(timeout: 10))
-        XCTAssertEqual(summary.label, "还没有任务")
+        // Daemon 上可能还留着之前的 Job, 所以数增量。
+        let before = Self.jobCount(summary.label)
         let target = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 1.5, thenDragTo: target)
         shot(app, "after-drop")
-        let added = NSPredicate(format: "label CONTAINS %@", "共 3 张")
+        let added = NSPredicate(format: "label CONTAINS %@", "共 \(before + 3) 张")
         expectation(for: added, evaluatedWith: summary)
         waitForExpectations(timeout: 60)
     }
@@ -137,5 +144,33 @@ final class NshHostUITests: XCTestCase {
         row.tap()
         sleep(3)
         shot(app, "viewer")
+        element(app, "viewer-close").tap()
+        XCTAssertTrue(element(app, "add-images").waitForExistence(timeout: 10), "closing the viewer should show the Jobs list again")
+        XCTAssertFalse(element(app, "viewer-close").exists)
+    }
+
+    /// 配置页: 从 Daemon 读出配置并显示 (Pairing Key 在其中), Engine 状态也在。保存条只在有修改时才出现。
+    func testConfigPageShowsTheDaemonSettings() throws {
+        let token = try XCTUnwrap(ProcessInfo.processInfo.environment["HOST_TOKEN"], "needs HOST_TOKEN")
+        let app = launch(["-paired-test", host, port, token, "-section", "config"], seed: false)
+        XCTAssertTrue(element(app, "cfg-pairing_key").waitForExistence(timeout: 30), "the Config page did not load the settings")
+        XCTAssertTrue(element(app, "engine-state").exists)
+        XCTAssertFalse(element(app, "config-error").exists)
+        shot(app, "config")
+    }
+
+    /// 在三个分区之间来回切 30 圈: 每次切换后都能看到目标分区的内容, 没有卡死。
+    func testSwitchingSectionsRepeatedlyStaysResponsive() throws {
+        let token = try XCTUnwrap(ProcessInfo.processInfo.environment["HOST_TOKEN"], "needs HOST_TOKEN")
+        let app = launch(["-paired-test", host, port, token], seed: false)
+        XCTAssertTrue(element(app, "add-images").waitForExistence(timeout: 30))
+        let sections = [("tab-jobs", "add-images"), ("tab-reader", "reader-open"), ("tab-config", "engine-state")]
+        for cycle in 1...30 {
+            for (tab, marker) in sections {
+                element(app, tab).tap()
+                XCTAssertTrue(element(app, marker).waitForExistence(timeout: 5), "\(tab) did not show \(marker) at cycle \(cycle)")
+            }
+        }
+        shot(app, "sections-after-30-cycles")
     }
 }
