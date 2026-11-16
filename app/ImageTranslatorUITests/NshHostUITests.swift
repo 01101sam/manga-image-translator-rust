@@ -133,6 +133,10 @@ final class NshHostUITests: XCTestCase {
         let app = launch(["-forget-pairing", "-pick-folder", folder])
         pair(app)
         element(app, "add-images").tap()
+        let files = element(app, "import-files")
+        XCTAssertTrue(files.waitForExistence(timeout: 10), "the import menu did not open")
+        shot(app, "import-menu")
+        files.tap()
         let summary = element(app, "jobs-summary")
         XCTAssertTrue(summary.waitForExistence(timeout: 30))
         let finished = NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "共", "全部完成")
@@ -147,6 +151,23 @@ final class NshHostUITests: XCTestCase {
         element(app, "viewer-close").tap()
         XCTAssertTrue(element(app, "add-images").waitForExistence(timeout: 10), "closing the viewer should show the Jobs list again")
         XCTAssertFalse(element(app, "viewer-close").exists)
+    }
+
+    /// 导入菜单是自己画的 (嵌入运行时没有 Menu、Popover、Sheet), 要在真实的 iOS 运行时里确认: 能打开、列出宿主声明的来源、点卡片外收起。不需要 Daemon。
+    func testImportMenuOpensListsTheHostsSourcesAndClosesOnATapOutside() {
+        let app = launch(["-paired-test", host, port, "unused-token"], seed: false)
+        let add = element(app, "add-images")
+        XCTAssertTrue(add.waitForExistence(timeout: 30))
+        add.tap()
+        for id in ["import-photos", "import-files", "import-pdf"] {
+            XCTAssertTrue(element(app, id).waitForExistence(timeout: 5), "\(id) is missing from the import menu")
+        }
+        shot(app, "import-menu")
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.04)).tap()
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: element(app, "import-menu"))
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(add.exists, "the Jobs page should still be there after closing the menu")
     }
 
     /// 配置页: 从 Daemon 读出配置并显示 (Pairing Key 在其中), Engine 状态也在。保存条只在有修改时才出现。

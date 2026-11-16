@@ -27,7 +27,7 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | `Host/HostSession.swift` | `session.*`: Bonjour 发现的 Daemon 加 Keychain 里的 Token, Token 永久保存 |
 | `Host/HostFiles.swift` | `ManagedFiles`: 文件 id 到沙盒文件。图片在 tmp, 启动时整个清掉; PDF 在 Application Support, id 是文件名里的 uuid, 超过 30 天没打开才在启动时清掉 (`pdf.open` 凭上次的 id 找回); 交给分享面板的文件放在各自的子目录里, 面板上显示的是干净的文件名 |
 | `Host/HostIngest.swift` | 拖放和选择的文件进沙盒。每个 `NSItemProvider` 只读一种表示, 一次只读一个, 目录递归并按自然序排; 只带一个网页链接的拖放会下载, 按应答类型或文件头判断是图片还是 PDF (`Info.plist` 只开了 `NSAllowsLocalNetworking`, 所以 http 链接只有局域网地址能下载, https 不受限) |
-| `Host/HostPickers.swift` | 照片 (PHPicker)、文件、文件夹三种选择器, iPad 与 visionOS 用居中的 popover |
+| `Host/HostPickers.swift` | 照片 (PHPicker) 和文档选择器 (图片、PDF、文件夹)。选哪个由 TSX 的导入菜单决定 (`files.pick` 的 `source`), 宿主不再弹自己的选择菜单 |
 | `Host/HostUpload.swift` | `upload.start`: multipart 先分块写进临时文件, 再 `URLSession.upload(fromFile:)`, 字节不进 JS 也不在内存里拼 `Data` |
 | `Host/HostArtifact.swift` | `artifact.save`: 下载到临时文件, 弹系统分享面板 |
 | `Host/HostPdf.swift` | 原生组件 `it.pdf` (PDFView, 单页, 只渲染当前页)、`pdf.renderPage` (CGContext 画到长边, 直接写 PNG 文件) 和 `pdf.export` (译文页换进原 PDF, 逐页下载逐页写) |
@@ -68,7 +68,7 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | 6 位配对码 (`pairing-code`) | 不再需要: Pairing Key 固定 (默认 sam01101, 存在 Config), 一次成功永久保存 Token, 见 `docs/adr/0002-pairing-key.md` | `app.test.tsx` 的 pairing、`session.test.ts` (旧 `PairingMachineTests` 的选择、确认、重试、401 都对应在这里) |
 | Token 跨重启 (Keychain) | `TokenStore.swift` 保留, `HostSession` 读写; Web 存 NSH Storage | `NshHostUITests.testPairingIsRememberedAcrossRelaunch`、`HostUploadTests.testTokenRoundTripsThroughSaveAndSnapshot` |
 | 更换 Daemon、401 清 Token | 配置页「取消配对」(`changeDaemon`)、401 触发 `session.clearToken` | `app.test.tsx` 的 "a revoked Token…" 和 "forgetting the Daemon…" |
-| 添加图片: 相册、文件、文件夹 | `Host/HostPickers.swift` + `files.pick`, 文件夹递归并按自然序 | `HostFilesTests.testFolderIngest…`、`NshHostUITests.testPickedImagesUploadFinishAndOpenInViewer` (旧的 `testFolderBatchImport` 也并在这里) |
+| 添加图片: 相册、文件、文件夹 | TSX 的导入菜单 (`ImportMenu`) + `files.pick` 的 `source` + `Host/HostPickers.swift`; 文件夹含在「从文件」里, 递归并按自然序 | `HostFilesTests.testFolderIngest…`、`NshHostUITests.testPickedImagesUploadFinishAndOpenInViewer` (旧的 `testFolderBatchImport` 也并在这里)、`testImportMenuOpensListsTheHostsSourcesAndClosesOnATapOutside` |
 | 拖放文件、照片、PDF | `Host/HostIngest.swift`, 每个 provider 只读一种表示, 一次只读一个 | `HostFilesTests` 的 provider 摄入、类型过滤、限流用例、`NshHostUITests.testDraggingFilesOntoTheWindowAddsThem` (旧 `DropRoutingTests` 的路由判断随之换成 provider 的类型判断) |
 | 拖放网页链接 (`testWebURLToImage`、`testWebURLToPDF`) | 已补: `HostIngest.loadWebLink` 下载后按应答类型或文件头分图片和 PDF | `HostFilesTests.testDroppedWebLinksAreDownloadedAndRoutedByWhatTheyAre`、`testWebType…` |
 | 导入结果横幅 | `host.notice` 事件, TSX 用 toast 显示「已忽略 N 个不是图片或 PDF 的文件」; 不再列出无法识别的类型标识 | `HostFilesTests.testProviderIngestIgnoresKindsTheCallerDidNotAllow` |

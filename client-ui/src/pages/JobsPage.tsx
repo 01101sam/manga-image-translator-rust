@@ -14,12 +14,13 @@ import {
   moveSelection,
   notice,
   order,
-  pickAndAdd,
   removeItems,
 } from "../store/jobs";
+import { importMenuOpen, openImportMenu } from "../store/importer";
 import { overrides, setOverride } from "../store/overrides";
 import { openViewer, viewerKey } from "../store/route";
 import { Banner, Button, Card, Empty, Icon, Meter, SelectField } from "../ui";
+import { ImportMenu } from "./ImportMenu";
 import { JobRow } from "./JobRow";
 import { JobTile } from "./JobTile";
 
@@ -48,8 +49,10 @@ export function JobsPage() {
   const columns = () => gridColumns(listWidth(), Math.min(windowSize().width, windowSize().height));
   const thumbWidth = () => thumbWidthFor(tileWidth(listWidth(), columns()));
 
+  // 查看器和导入菜单盖在列表上时, 键盘不动列表。
+  const covered = () => viewerKey() !== null || importMenuOpen();
   const select = (delta: number) => {
-    if (viewerKey() !== null) return;
+    if (covered()) return;
     const index = moveSelection(delta);
     if (index === null || !list) return;
     if (index < visible.first) list.scrollToIndex({ index, viewPosition: 0, animated: false });
@@ -57,7 +60,7 @@ export function JobsPage() {
   };
   const openHighlighted = () => {
     const key = highlight();
-    if (viewerKey() !== null || key === null) return;
+    if (covered() || key === null) return;
     const item = currentBoard().items[key];
     if (item?.kind === "job" && canOpenJob(item.row.state)) openViewer(key);
   };
@@ -74,7 +77,7 @@ export function JobsPage() {
   // Mac 键盘上的「删除」键是 backspace。
   const removeHighlighted = () => {
     const key = highlight();
-    if (viewerKey() === null && key !== null) removeItems([key]);
+    if (!covered() && key !== null) removeItems([key]);
   };
   keymap.bind("delete", removeHighlighted);
   keymap.bind("backspace", removeHighlighted);
@@ -93,7 +96,7 @@ export function JobsPage() {
           <If when={counts().done + counts().failed + counts().cancelled > 0}>
             <Button label="清除已结束" size="sm" variant="secondary" testID="clear-finished" onPress={clearFinished} />
           </If>
-          <Button label="添加图片" size="sm" icon="plus" testID="add-images" onPress={() => void pickAndAdd()} />
+          <Button label="导入" size="sm" icon="plus" testID="add-images" onPress={openImportMenu} />
         </View>
         <If when={counts().total > 0}>
           <Meter value={progressOf(counts())} testID="jobs-progress" />
@@ -148,10 +151,11 @@ export function JobsPage() {
           else={
             <Empty
               icon="image"
-              title="拖入图片, 或点击添加"
+              title="拖入图片, 或点击导入"
               description={desktop ? "支持 PNG、JPEG、WebP、BMP。可以一次拖入很多张, 会按顺序提交。" : "可以一次选很多张, 会按顺序提交。"}
-              actionLabel="添加图片"
-              onAction={() => void pickAndAdd()}
+              actionLabel="导入"
+              actionTestID="empty-import"
+              onAction={openImportMenu}
             />
           }
         >
@@ -183,6 +187,9 @@ export function JobsPage() {
           </View>
         </If>
       </View>
+      <If when={importMenuOpen()}>
+        <ImportMenu />
+      </If>
     </View>
   );
 }

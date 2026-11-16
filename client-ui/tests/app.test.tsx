@@ -6,15 +6,18 @@ interface Scenario {
   readonly picks?: ReturnType<typeof files>[];
   /** 宿主已保存的配对, 模拟 Keychain 里有 Token。 */
   readonly saved?: boolean;
+  /** 宿主在 session.snapshot 里声明的导入入口; 缺省表示老宿主没有声明。 */
+  readonly imports?: readonly string[];
 }
 
 /** 打开应用: 宿主 (Swift / host.js) 由 handlers 扮演, Daemon 由 fake 扮演。 */
-async function launch({ daemon, picks = [], saved = false }: Scenario, extra: { platform?: "ios" | "web"; width?: number; height?: number } = {}) {
+async function launch({ daemon, picks = [], saved = false, imports }: Scenario, extra: { platform?: "ios" | "web"; width?: number; height?: number } = {}) {
   const queue = [...picks];
   const handlers = {
     "session.snapshot": () => ({
       daemons: [{ name: "studio", url: BASE }],
       paired: saved ? { daemon: { name: "studio", url: BASE }, token: daemon.token() } : null,
+      ...(imports ? { imports } : {}),
     }),
     "session.saveToken": null,
     "session.clearToken": null,
@@ -22,12 +25,26 @@ async function launch({ daemon, picks = [], saved = false }: Scenario, extra: { 
     "upload.start": () => daemon.submit(),
     "artifact.save": null,
     "files.release": null,
+    "pdf.pick": () => ({ file: { id: "pdf-1", name: "vol01.pdf", size: 5000, type: "application/pdf", pageCount: 3 } }),
+    "pdf.release": null,
+    "pdf.show": () => ({ pageCount: 3 }),
+    "pdf.dispose": null,
+    "pdf.open": () => ({ file: null }),
   };
   const app = await open("../App.tsx", { clock: {}, network: daemon.network, host: { handlers }, ...extra });
   return app;
 }
 
-const calls = (app: Awaited<ReturnType<typeof launch>>, name: string) => app.host.calls().filter((c) => c.name === name);
+type Launched = Awaited<ReturnType<typeof launch>>;
+
+const calls = (app: Launched, name: string) => app.host.calls().filter((c) => c.name === name);
+
+/** 点「导入」打开菜单, 再点其中一项。 */
+async function importFrom(app: Launched, source: "photos" | "files" | "pdf" = "files") {
+  await app.press("id:add-images");
+  await app.waitFor("id:import-" + source);
+  await app.press("id:import-" + source);
+}
 
 describe("pairing", () => {
   test("the default key is prefilled and one tap pairs; the Token goes to the host exactly once", async () => {
@@ -85,7 +102,7 @@ describe("jobs", () => {
     const daemon = createFakeDaemon({ finishPerPoll: 1 });
     const app = await launch({ daemon, saved: true, picks: [files(3)] });
     await app.waitFor("id:add-images");
-    await app.press("id:add-images");
+    await importFrom(app);
     await app.waitFor("p0.png");
     await app.waitFor("text:/共 3 张/");
     await app.waitFor("text:/全部完成/", { timeout: 30_000 });
@@ -97,7 +114,7 @@ describe("jobs", () => {
     const daemon = createFakeDaemon({ capacity: 64, finishPerPoll: 10 });
     const app = await launch({ daemon, saved: true, picks: [files(150)] });
     await app.waitFor("id:add-images");
-    await app.press("id:add-images");
+    await importFrom(app);
     await app.waitFor("text:/全部完成/", { timeout: 120_000 });
     expect(daemon.log.submitted).toBe(150);
     expect(daemon.log.rejected429).toBe(0);
@@ -108,7 +125,7 @@ describe("jobs", () => {
     const daemon = createFakeDaemon({ capacity: 64, finishPerPoll: 40 });
     const app = await launch({ daemon, saved: true, picks: [files(2000)] });
     await app.waitFor("id:add-images");
-    await app.press("id:add-images");
+    await importFrom(app);
     await app.waitFor("text:/共 2000 张/");
     expect(app.count("id:job-row")).toBeLessThan(40);
     await app.waitFor("text:/全部完成/", { timeout: 600_000 });
@@ -121,7 +138,7 @@ describe("jobs", () => {
     const daemon = createFakeDaemon({ capacity: 2, finishPerPoll: 1 });
     const app = await launch({ daemon, saved: true, picks: [files(6)] });
     await app.waitFor("id:add-images");
-    await app.press("id:add-images");
+    await importFrom(app);
     await app.waitFor("text:/全部完成/", { timeout: 60_000 });
     expect(daemon.log.submitted).toBe(6);
     expect(daemon.log.rejected429).toBe(0);
@@ -132,7 +149,7 @@ describe("jobs", () => {
     const daemon = createFakeDaemon({ capacity: 2, reportedCapacity: 64, finishPerPoll: 1 });
     const app = await launch({ daemon, saved: true, picks: [files(6)] });
     await app.waitFor("id:add-images");
-    await app.press("id:add-images");
+    await importFrom(app);
     await app.waitFor("text:/全部完成/", { timeout: 60_000 });
     expect(daemon.log.submitted).toBe(6);
     expect(daemon.log.rejected429).toBeGreaterThan(0);
@@ -142,7 +159,7 @@ describe("jobs", () => {
     const daemon = createFakeDaemon({ engine: "stopped", finishPerPoll: 5 });
     const app = await launch({ daemon, saved: true, picks: [files(2)] });
     await app.waitFor("id:engine-banner");
-    await app.press("id:add-images");
+    await importFrom(app);
     await app.waitFor("p0.png");
     await app.wait(3000);
     expect(daemon.log.submitted).toBe(0);
@@ -157,7 +174,7 @@ describe("jobs", () => {
     const daemon = createFakeDaemon({ finishPerPoll: 0 });
     const app = await launch({ daemon, saved: true, picks: [files(1)] });
     await app.waitFor("id:add-images");
-    await app.press("id:add-images");
+    await importFrom(app);
     await app.waitFor("id:job-cancel");
     await app.press("id:job-cancel");
     await app.waitFor("text:已取消");
@@ -170,7 +187,7 @@ describe("jobs", () => {
     const daemon = createFakeDaemon({ finishPerPoll: 1000 });
     const first = await launch({ daemon, saved: true, picks: [files(2)] });
     await first.waitFor("id:add-images");
-    await first.press("id:add-images");
+    await importFrom(first);
     await first.waitFor("text:/全部完成/", { timeout: 30_000 });
     const stored = first.storage();
     const second = await open("../App.tsx", {
@@ -187,12 +204,90 @@ describe("jobs", () => {
   });
 });
 
+describe("import menu", () => {
+  const LABELS = ["从相册", "从文件", "打开 PDF"];
+  const shownLabels = (app: Launched) => app.texts().filter((t) => LABELS.includes(t));
+
+  async function openMenu(app: Launched) {
+    await app.waitFor("id:add-images");
+    await app.press("id:add-images");
+    await app.waitFor("id:import-menu");
+  }
+
+  test("lists what the host declares, always in the same order", async () => {
+    const app = await launch({ daemon: createFakeDaemon(), saved: true, imports: ["pdf", "photos", "files"] }, { platform: "ios" });
+    await openMenu(app);
+    expect(shownLabels(app)).toEqual(LABELS);
+  });
+
+  test("a web host without a photo library gets no photo item, and a host that declares nothing gets the safe two", async () => {
+    const web = await launch({ daemon: createFakeDaemon(), saved: true, imports: ["files", "pdf"] }, { platform: "web" });
+    await openMenu(web);
+    expect(shownLabels(web)).toEqual(["从文件", "打开 PDF"]);
+    expect(web.shows("id:import-photos")).toBe(false);
+    const old = await launch({ daemon: createFakeDaemon(), saved: true });
+    await openMenu(old);
+    expect(shownLabels(old)).toEqual(["从文件", "打开 PDF"]);
+  });
+
+  test("choosing photos asks the host for the photo library, adds the files and has already closed the menu", async () => {
+    const daemon = createFakeDaemon({ finishPerPoll: 1000 });
+    const app = await launch({ daemon, saved: true, picks: [files(2)], imports: ["photos", "files", "pdf"] });
+    await importFrom(app, "photos");
+    await app.waitFor("p0.png");
+    expect(calls(app, "files.pick")).toEqual([{ name: "files.pick", data: { limit: 200, source: "photos" } }]);
+    expect(app.shows("id:import-menu")).toBe(false);
+  });
+
+  test("Escape and a tap outside close the menu without asking the host for anything", async () => {
+    const app = await launch({ daemon: createFakeDaemon(), saved: true });
+    await openMenu(app);
+    await app.keyboard.press("escape");
+    await app.waitFor("id:import-menu", { state: "gone" });
+    await openMenu(app);
+    await app.press("id:import-backdrop");
+    await app.waitFor("id:import-menu", { state: "gone" });
+    expect(calls(app, "files.pick").length).toBe(0);
+    expect(calls(app, "pdf.pick").length).toBe(0);
+  });
+
+  test("keys belong to the menu while it is open: Backspace does not remove the highlighted job", async () => {
+    const daemon = createFakeDaemon({ finishPerPoll: 1000 });
+    const app = await launch({ daemon, saved: true, picks: [files(2)] });
+    await importFrom(app);
+    await app.waitFor("text:/全部完成/", { timeout: 30_000 });
+    await app.keyboard.press("down");
+    await app.press("id:add-images");
+    await app.waitFor("id:import-menu");
+    await app.keyboard.press("backspace");
+    await app.keyboard.press("escape");
+    await app.waitFor("id:import-menu", { state: "gone" });
+    expect(app.texts().some((t) => t.includes("共 2 张"))).toBe(true);
+  });
+
+  test("the empty state offers the same menu", async () => {
+    const app = await launch({ daemon: createFakeDaemon(), saved: true, imports: ["photos", "files", "pdf"] }, { platform: "ios" });
+    await app.waitFor("id:empty-import");
+    await app.press("id:empty-import");
+    await app.waitFor("id:import-menu");
+    expect(shownLabels(app)).toEqual(LABELS);
+  });
+
+  test("opening a PDF from the menu asks the host for a PDF and shows the reader", async () => {
+    const app = await launch({ daemon: createFakeDaemon(), saved: true }, { platform: "web" });
+    await importFrom(app, "pdf");
+    await app.waitFor("id:reader-status");
+    expect(calls(app, "pdf.pick").length).toBe(1);
+    expect(calls(app, "files.pick").length).toBe(0);
+  });
+});
+
 describe("viewer and keyboard", () => {
   async function withDoneJobs(n: number) {
     const daemon = createFakeDaemon({ finishPerPoll: 1000 });
     const app = await launch({ daemon, saved: true, picks: [files(n)] });
     await app.waitFor("id:add-images");
-    await app.press("id:add-images");
+    await importFrom(app);
     await app.waitFor("text:/全部完成/", { timeout: 30_000 });
     return { daemon, app };
   }
@@ -250,7 +345,7 @@ describe("viewer and keyboard", () => {
     const daemon = createFakeDaemon({ finishPerPoll: 0 });
     const app = await launch({ daemon, saved: true, picks: [files(2)] });
     await app.waitFor("id:add-images");
-    await app.press("id:add-images");
+    await importFrom(app);
     await app.waitFor("text:/共 2 张/");
     await app.keyboard.press("down");
     await app.keyboard.press("backspace");
@@ -345,7 +440,7 @@ describe("grid on wide screens", () => {
     const daemon = createFakeDaemon({ finishPerPoll: 1000 });
     const app = await launch({ daemon, saved: true, picks: [files(n)] }, { platform: "ios", ...size });
     await app.waitFor("id:add-images");
-    await app.press("id:add-images");
+    await importFrom(app);
     await app.waitFor("text:/全部完成/", { timeout: 30_000 });
     return app;
   }

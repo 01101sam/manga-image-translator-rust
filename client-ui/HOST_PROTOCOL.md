@@ -28,9 +28,12 @@
 // 返回:
 {
   "daemons": [{ "name": "studio", "url": "http://192.168.1.5:8080" }],   // 此刻发现的 Daemon, url 不带结尾斜杠
-  "paired": { "daemon": { "name": "studio", "url": "http://192.168.1.5:8080" }, "token": "…" } // 已保存的配对; 没有则 null
+  "paired": { "daemon": { "name": "studio", "url": "http://192.168.1.5:8080" }, "token": "…" }, // 已保存的配对; 没有则 null
+  "imports": ["photos", "files", "pdf"]                                                        // 宿主支持的导入入口
 }
 ```
+
+- `imports`: 导入菜单只显示宿主声明的入口, 顺序固定为 `photos` (从相册, `files.pick` 的 `source: "photos"`)、`files` (从文件, `source: "files"`)、`pdf` (打开 PDF, `pdf.pick`)。没有这个字段 (老宿主) 当作 `["files", "pdf"]`。App 声明 `photos`、`files`、`pdf`, Web 声明 `files`、`pdf`。
 
 - App: `daemons` 来自 Bonjour (`BonjourBrowser`), `paired` 来自 Keychain。`paired` 的 Daemon 当前没被发现也照样返回 (Token 永久有效, 不依赖 Bonjour 在线)。url 里的 IPv6 zone (`%en0`) 要先去掉。
 - Web: `daemons` 只有一项, 就是页面自己的来源 `{ "name": location.host, "url": location.origin }`; `paired` 恒为 `null`, Token 由 TSX 存在 NSH `Storage` (浏览器 localStorage), 键 `session.token:<url>`。
@@ -52,18 +55,20 @@
 
 ### `files.pick`
 
-打开系统的文件选择器让用户选图片。
+打开系统的选择器让用户选图片, 由导入菜单的「从相册」「从文件」触发。
 
 ```jsonc
 // 参数
-{ "limit": 200 }                 // 最多返回多少个
+{ "limit": 200, "source": "photos" }   // limit: 最多返回多少个; source: "photos" | "files", 缺省 "files"
 // 返回 (用户取消则 files 为空数组)
 { "files": [{ "id": "…", "name": "page01.png", "size": 123456, "type": "image/png" }] }
 ```
 
+- `source`: `photos` 是相册 (App: PHPicker, 只出图片); `files` 是文件选择器 (App: 文档选择器, 图片、PDF 和文件夹都能选, 文件夹递归并按自然序; Web: 浏览器的文件对话框)。
+- 选出来的 **PDF 不放进 `files`**, 与拖放一致走事件 `pdf.added`: 只取第一个, 其余宿主立刻放掉并发一条 `host.notice`。
+
 - `id` 由宿主生成, 只在宿主进程内有意义。宿主把 `id` 映射到文件引用 (App: 沙盒内的临时副本或安全作用域 URL; Web: `File` 对象)。**不要把文件读进内存再回传。**
-- App 用 PhotosPicker 和 fileImporter 两种来源, 文件夹要递归展开成图片文件。
-- 非图片文件不要返回。
+- 非图片、非 PDF 的文件不要返回, 数一下发一条 `host.notice`。
 
 ### `files.release` (post, 无返回)
 

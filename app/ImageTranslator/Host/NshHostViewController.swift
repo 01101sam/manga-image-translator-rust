@@ -126,7 +126,9 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
         app.handle("session.snapshot") { [weak self] _ -> Any? in
             guard let self else { return NSNull() }
             scheduleAutoHooks()
-            return session.snapshot()
+            var snapshot = session.snapshot()
+            snapshot["imports"] = Self.imports
+            return snapshot
         }
         app.handle("session.saveToken") { [weak self] data -> Any? in
             try self?.session.saveToken(data)
@@ -138,8 +140,9 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
         }
         app.handle("files.pick") { [weak self] data -> Any? in
             guard let self else { return ["files": [Any]()] }
-            let limit = hostInt((data as? [String: Any])?["limit"]) ?? 200
-            return ["files": try await pickImages(limit: limit).map(\.json)]
+            let args = data as? [String: Any]
+            let limit = hostInt(args?["limit"]) ?? 200
+            return ["files": try await pickFiles(limit: limit, source: (args?["source"] as? String) ?? "files").map(\.json)]
         }
         app.handle("files.release") { [weak self] data, _ in
             let ids = ((data as? [String: Any])?["ids"] as? [Any])?.compactMap { $0 as? String } ?? []
@@ -198,19 +201,27 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
 
     // MARK: - 选择
 
-    private func pickImages(limit: Int) async throws -> [FileRef] {
-        if let folder = hooks.pickFolder {
-            return take(limit, from: await ingestor.ingest(urls: [URL(fileURLWithPath: folder)], allowing: [.image]))
-        }
-        guard !pickers.isBusy else { throw HostCallError("已经有一个选择器打开了") }
-        guard let source = await pickers.chooseImageSource() else { return [] }
+    /// 宿主声明的导入入口, TSX 的导入菜单只显示这些 (HOST_PROTOCOL.md 的 session.snapshot)。
+    private static let imports = ["photos", "files", "pdf"]
+
+    /// photos 只出图片; files 里图片、PDF 和文件夹都行 (文件夹递归, 按自然序)。选出来的 PDF 不放进返回值, 走 pdf.added,
+    /// 与拖放一样由 TSX 打开阅读器。
+    private func pickFiles(limit: Int, source: String) async throws -> [FileRef] {
         let outcome: PickerOutcome
-        switch source {
-        case .photos: outcome = await pickers.pickPhotos(limit: limit)
-        case .files: outcome = await pickers.pickDocuments(types: [.image], multiple: true)
-        case .folder: outcome = await pickers.pickDocuments(types: [.folder], multiple: false)
+        if let folder = hooks.pickFolder {
+            outcome = .urls([URL(fileURLWithPath: folder)])
+        } else {
+            guard !pickers.isBusy else { throw HostCallError("已经有一个选择器打开了") }
+            switch source {
+            case "photos": outcome = await pickers.pickPhotos(limit: limit)
+            case "files": outcome = await pickers.pickDocuments(types: [.image, .pdf, .folder], multiple: true)
+            default: throw HostCallError("不支持的导入来源: \(source)")
+            }
         }
-        return take(limit, from: await ingest(outcome, allowing: [.image]))
+        let result = await ingest(outcome, allowing: [.image, .pdf])
+        let delivery = ImportDelivery(result)
+        send(delivery)
+        return trim(result.images, to: limit)
     }
 
     private func pickPDF() async throws -> FileRef? {
@@ -231,15 +242,16 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
     }
 
     /// 超出 limit 的文件已经拷进沙盒了, 立刻释放, 不留孤儿。
-    private func take(_ limit: Int, from result: IngestResult) -> [FileRef] {
-        notifyIgnored(result.ignored)
-        guard limit > 0, result.images.count > limit else { return result.images }
-        files.release(result.images[limit...].map(\.id))
-        return Array(result.images[..<limit])
+    private func trim(_ images: [FileRef], to limit: Int) -> [FileRef] {
+        guard limit > 0, images.count > limit else { return images }
+        files.release(images[limit...].map(\.id))
+        return Array(images[..<limit])
     }
 
-    private func notifyIgnored(_ count: Int) {
-        if count > 0 { appView?.send("host.notice", ["text": "已忽略 \(count) 个不是图片的文件"]) }
+    /// 发 PDF 和提示; 图片走返回值 (files.pick) 或 deliver (其余入口)。多出来的 PDF 在这里放掉。
+    private func send(_ delivery: ImportDelivery, includeImages: Bool = false) {
+        delivery.droppedPDFs.forEach { files.releasePDF($0.id) }
+        for event in delivery.events(includeImages: includeImages) { appView?.send(event.name, event.payload) }
     }
 
     // MARK: - PDF
@@ -335,11 +347,8 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
         }
     }
 
-    /// 图片走 files.added, PDF 走 pdf.added, 其余给一条提示。
     private func deliver(_ result: IngestResult) {
-        if !result.images.isEmpty { appView?.send("files.added", result.images.map(\.json)) }
-        if !result.pdfs.isEmpty { appView?.send("pdf.added", result.pdfs.map(\.json)) }
-        notifyIgnored(result.ignored)
+        send(ImportDelivery(result), includeImages: true)
     }
 
     // MARK: - 测试钩子

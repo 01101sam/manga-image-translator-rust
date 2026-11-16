@@ -104,7 +104,11 @@ export async function pickPdf(): Promise<void> {
   opening.set(true);
   try {
     const file = await pdfPort.pick();
-    if (file !== null) openDocument(file);
+    if (file !== null) {
+      // 从任务页的导入菜单打开时, 要把人带到阅读器。
+      section.set("reader");
+      openDocument(file);
+    }
   } catch (error) {
     showToast(`无法打开 PDF: ${error instanceof Error ? error.message : String(error)}`, "error");
   } finally {

@@ -1,4 +1,5 @@
 import { host } from "nsh";
+import { parseImportSources, type ImportSource, type PickSource } from "../domain/import";
 import type { DaemonRef, JobOverrides, LocalFile } from "../domain/types";
 
 /**
@@ -10,6 +11,8 @@ export interface HostSnapshot {
   readonly daemons: readonly DaemonRef[];
   /** 宿主已保存的配对 (Keychain)。Web 为 null, Token 由 TSX 存 NSH Storage。 */
   readonly paired: { readonly daemon: DaemonRef; readonly token: string } | null;
+  /** 宿主支持的导入入口, 导入菜单据此决定显示哪些项。 */
+  readonly imports: readonly ImportSource[];
 }
 
 export type UploadOutcome =
@@ -27,7 +30,7 @@ export interface HostPort {
   snapshot(): Promise<HostSnapshot>;
   saveToken(daemon: DaemonRef, token: string): Promise<void>;
   clearToken(daemon: DaemonRef): Promise<void>;
-  pickFiles(limit: number): Promise<LocalFile[]>;
+  pickFiles(limit: number, source: PickSource): Promise<LocalFile[]>;
   release(ids: readonly string[]): void;
   upload(request: UploadRequest): Promise<UploadOutcome>;
   saveArtifact(url: string, filename: string): Promise<void>;
@@ -59,12 +62,13 @@ export function parseFiles(value: unknown): LocalFile[] {
 
 function parseSnapshot(value: unknown): HostSnapshot {
   const daemons = isRecord(value) ? parseDaemons(value.daemons) : [];
+  const imports = parseImportSources(isRecord(value) ? value.imports : undefined);
   const rawPaired = isRecord(value) ? value.paired : null;
   if (isRecord(rawPaired) && typeof rawPaired.token === "string") {
     const [daemon] = parseDaemons([rawPaired.daemon]);
-    if (daemon) return { daemons, paired: { daemon, token: rawPaired.token } };
+    if (daemon) return { daemons, paired: { daemon, token: rawPaired.token }, imports };
   }
-  return { daemons, paired: null };
+  return { daemons, paired: null, imports };
 }
 
 const UPLOAD_KINDS = ["queue-full", "engine-stopped", "unauthorized", "rejected", "network"] as const;
@@ -90,9 +94,9 @@ export function createHostPort(): HostPort {
     clearToken: async (daemon) => {
       await host.call("session.clearToken", { daemon });
     },
-    pickFiles: async (limit) => {
+    pickFiles: async (limit, source) => {
       // 用户可能在选择器里停很久, 不设超时。
-      const answer = await host.call("files.pick", { limit }, NO_TIMEOUT);
+      const answer = await host.call("files.pick", { limit, source }, NO_TIMEOUT);
       return parseFiles(isRecord(answer) ? answer.files : []);
     },
     release: (ids) => {
