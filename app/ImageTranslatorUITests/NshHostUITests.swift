@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// 薄宿主 + NSH 界面的端到端测试。需要一个在跑的测试 Daemon: 环境变量 TEST_RUNNER_HOST_DAEMON_HOST / _PORT / _KEY 传进来。
@@ -194,16 +195,17 @@ final class NshHostUITests: XCTestCase {
         shot(app, "pasted-with-command-v")
     }
 
-    /// 从系统「照片」分享到本 App 的分享扩展: 分享面板里有它, 点了显示确认。要先用 xcrun simctl addmedia 给模拟器放几张照片, 并设
-    /// TEST_RUNNER_HOST_PHOTOS_SHARE=1 才跑 (照片 App 的界面随系统版本变: 第一张照片靠坐标点, 分享按钮的标识 PUOneUpBarButtonItemIdentifierShare 是实测的)。
-    func testSharingAPhotoFromPhotosShowsTheExtensionAndItConfirms() throws {
+    /// 在系统「照片」里分享第一张照片给本 App 的分享扩展, 等到它显示确认。照片 App 的界面随系统版本变: 第一张照片靠坐标点,
+    /// 分享按钮的标识 PUOneUpBarButtonItemIdentifierShare 是实测的。要先用 xcrun simctl addmedia 给模拟器放几张照片, 并设 TEST_RUNNER_HOST_PHOTOS_SHARE=1。
+    private func sharePhotoWithTheExtension() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["HOST_PHOTOS_SHARE"] == "1", "needs a simulator with photos (xcrun simctl addmedia)")
         let photos = XCUIApplication(bundleIdentifier: "com.apple.mobileslideshow")
         photos.launch()
         let proceed = photos.buttons.matching(NSPredicate(format: "label IN %@", ["繼續", "继续", "Continue"])).firstMatch
         if proceed.waitForExistence(timeout: 3) { proceed.tap() }
-        photos.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.15)).tap()
+        // 上一次留下的照片详情页会在重启后恢复: 已经有分享按钮就不再点第一张。
         let share = photos.buttons["PUOneUpBarButtonItemIdentifierShare"]
+        if !share.waitForExistence(timeout: 3) { photos.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.15)).tap() }
         XCTAssertTrue(share.waitForExistence(timeout: 10), "Photos did not open a photo with a share button")
         share.tap()
         let entry = photos.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "图片翻译")).firstMatch
@@ -213,6 +215,89 @@ final class NshHostUITests: XCTestCase {
         let message = photos.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "已加入")).firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: 15), "the extension did not confirm")
         shot(photos, "extension-confirmation")
+        // 扩展自己 1.2 秒后收起; 等它收起再回 App, 免得下一步在收起动画里点错
+        sleep(3)
+        photos.terminate()
+    }
+
+    func testSharingAPhotoFromPhotosShowsTheExtensionAndItConfirms() throws {
+        try sharePhotoWithTheExtension()
+    }
+
+    /// 整条链: 照片 App 分享 -> 扩展放进真正的 App Group 收件箱 -> 打开 App 后这张照片进待上传。不需要 Daemon。
+    func testAPhotoSharedFromPhotosShowsUpInTheAppAsAPendingUpload() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["HOST_PHOTOS_SHARE"] == "1", "needs a simulator with photos (xcrun simctl addmedia)")
+        // 先起一次 App, 把以前留在真收件箱里的条目搬掉, 之后的数才是这一次分享的。
+        let cleaner = launch(["-paired-test", host, port, "unused-token"], seed: false)
+        XCTAssertTrue(element(cleaner, "add-images").waitForExistence(timeout: 30))
+        cleaner.terminate()
+        try sharePhotoWithTheExtension()
+        let app = launch(["-paired-test", host, port, "unused-token"], seed: false)
+        let summary = element(app, "jobs-summary")
+        XCTAssertTrue(summary.waitForExistence(timeout: 30))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "共 1 张"), evaluatedWith: summary)
+        waitForExpectations(timeout: 30)
+        shot(app, "shared-photo-pending")
+    }
+
+    /// 一个临时的收件箱目录 (-inbox-dir), 里面按分享扩展的格式放条目; UI 测试以此代替真正的 App Group 容器。
+    private func makeInbox() throws -> URL {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("it-inbox-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return url
+    }
+
+    private func deposit(_ source: URL, as entry: String, into inbox: URL) throws {
+        let directory = inbox.appendingPathComponent(entry, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: source, to: directory.appendingPathComponent(source.lastPathComponent))
+    }
+
+    private func pickFolderImages() throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(atPath: folder).sorted()
+            .filter { ["png", "jpg", "jpeg"].contains(($0 as NSString).pathExtension.lowercased()) }
+            .map { URL(fileURLWithPath: folder).appendingPathComponent($0) }
+    }
+
+    /// 分享扩展放进收件箱的图片: 冷启动时 TSX 还没挂好监听, 宿主要先攒着事件; 回到前台时再搬一次。不需要 Daemon。
+    func testSharedImagesInTheInboxAreImportedAtLaunchAndAgainWhenTheAppComesBack() throws {
+        let images = try pickFolderImages()
+        XCTAssertGreaterThanOrEqual(images.count, 3, "the pick folder needs three images")
+        let inbox = try makeInbox()
+        try deposit(images[0], as: "0000000000001-0000-aaaaaaaa", into: inbox)
+        try deposit(images[1], as: "0000000000001-0001-bbbbbbbb", into: inbox)
+        let app = launch(["-paired-test", host, port, "unused-token", "-inbox-dir", inbox.path], seed: false)
+        let summary = element(app, "jobs-summary")
+        XCTAssertTrue(summary.waitForExistence(timeout: 30))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "共 2 张"), evaluatedWith: summary)
+        waitForExpectations(timeout: 30)
+        shot(app, "inbox-imported-at-launch")
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: inbox.path).filter { !$0.hasPrefix(".") }.isEmpty, "the inbox must be emptied")
+        try deposit(images[2], as: "0000000000002-0000-cccccccc", into: inbox)
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "共 3 张"), evaluatedWith: element(app, "jobs-summary"))
+        waitForExpectations(timeout: 30)
+        shot(app, "inbox-imported-on-return")
+    }
+
+    /// 收件箱里有两个 PDF: 只打开第一个, 另一个被放掉并给一条提示。
+    func testSharedPDFsOpenTheReaderOnlyOnceAndSayWhatWasIgnored() throws {
+        let inbox = try makeInbox()
+        let scratch = inbox.deletingLastPathComponent().appendingPathComponent("pdfs-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: scratch) }
+        for (index, name) in ["one.pdf", "two.pdf"].enumerated() {
+            let url = scratch.appendingPathComponent(name)
+            try UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 300, height: 400)).writePDF(to: url) { $0.beginPage() }
+            try deposit(url, as: "000000000000\(index)-0000-aaaaaaaa", into: inbox)
+        }
+        let app = launch(["-paired-test", host, port, "unused-token", "-inbox-dir", inbox.path], seed: false)
+        XCTAssertTrue(element(app, "reader-status").waitForExistence(timeout: 30), "a shared PDF should open the reader")
+        let notice = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "一次只打开一个 PDF")).firstMatch
+        XCTAssertTrue(notice.waitForExistence(timeout: 10), "the ignored PDF should be announced")
+        shot(app, "inbox-pdfs")
     }
 
     /// 配置页: 从 Daemon 读出配置并显示 (Pairing Key 在其中), Engine 状态也在。保存条只在有修改时才出现。

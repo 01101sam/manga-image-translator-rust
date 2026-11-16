@@ -119,9 +119,14 @@ final class FileIngestor: @unchecked Sendable {
         pasteboard.hasImages || pasteboard.hasURLs || pasteboard.contains(pasteboardTypes: [UTType.pdf.identifier])
     }
 
-    /// 文件选择器和测试钩子给的 URL: 文件或目录 (递归), 拷贝进沙盒。
-    func ingest(urls: [URL], allowing kinds: Set<HostFileKind>) async -> IngestResult {
-        await limiter.run { importSync(urls: urls, move: false, allowing: kinds) }
+    /// 文件选择器和测试钩子给的 URL: 文件或目录 (递归), 拷贝进沙盒。move 为真时搬走原文件, 只用于 App 自己的目录 (收件箱、系统给的 Documents/Inbox 副本)。
+    func ingest(urls: [URL], move: Bool = false, allowing kinds: Set<HostFileKind>) async -> IngestResult {
+        await limiter.run { importSync(urls: urls, move: move, allowing: kinds) }
+    }
+
+    /// 分享扩展存下来的网页链接: 与拖放的链接走同一条下载路径, 占同一个并发名额。
+    func ingest(webLink link: URL, allowing kinds: Set<HostFileKind>) async -> IngestResult {
+        await limiter.run { await importWebLink(link, allowing: kinds) }
     }
 
     private func load(_ provider: NSItemProvider, allowing kinds: Set<HostFileKind>) async -> IngestResult {
@@ -156,6 +161,10 @@ final class FileIngestor: @unchecked Sendable {
             _ = provider.loadObject(ofClass: URL.self) { url, _ in continuation.resume(returning: url) }
         }
         guard let link else { return IngestResult(ignored: 1) }
+        return await importWebLink(link, allowing: kinds)
+    }
+
+    private func importWebLink(_ link: URL, allowing kinds: Set<HostFileKind>) async -> IngestResult {
         if link.isFileURL { return importSync(urls: [link], move: false, allowing: kinds) }
         guard link.scheme == "http" || link.scheme == "https" else { return IngestResult(ignored: 1) }
         let downloaded: (URL, URLResponse)
