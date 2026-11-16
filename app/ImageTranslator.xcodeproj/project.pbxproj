@@ -8,34 +8,15 @@
 
 /* Begin PBXBuildFile section */
 		000000000000000000000101 /* ImageTranslatorApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000100 /* ImageTranslatorApp.swift */; };
-		000000000000000000000103 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000102 /* RootView.swift */; };
 		000000000000000000000105 /* Domain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000104 /* Domain.swift */; };
-		000000000000000000000107 /* DaemonClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000106 /* DaemonClient.swift */; };
-		000000000000000000000109 /* MockURLProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000108 /* MockURLProtocol.swift */; };
 		00000000000000000000010B /* TokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000010A /* TokenStore.swift */; };
 		00000000000000000000010D /* BonjourBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000010C /* BonjourBrowser.swift */; };
-		00000000000000000000010F /* AppSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000010E /* AppSession.swift */; };
-		000000000000000000000111 /* JobListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000110 /* JobListView.swift */; };
-		000000000000000000000113 /* PlatformImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000112 /* PlatformImage.swift */; };
-		000000000000000000000115 /* PDFReaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000114 /* PDFReaderView.swift */; };
-		000000000000000000000117 /* ConfigWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000116 /* ConfigWebView.swift */; };
 		000000000000000000000138 /* WindowSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000137 /* WindowSettings.swift */; };
 		010000000000000000000072 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 010000000000000000000071 /* Assets.xcassets */; };
-		000000000000000000000119 /* PageMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000118 /* PageMachineTests.swift */; };
-		00000000000000000000011B /* PairingMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000011A /* PairingMachineTests.swift */; };
-		00000000000000000000011D /* JobMachineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000011C /* JobMachineTests.swift */; };
 		00000000000000000000011F /* TestHooks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000011E /* TestHooks.swift */; };
 		000000000000000000000128 /* TestHooksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000127 /* TestHooksTests.swift */; };
 		000000000000000000000134 /* EndpointTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000133 /* EndpointTests.swift */; };
-		000000000000000000000136 /* DropRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000135 /* DropRoutingTests.swift */; };
 		00000000000000000000013A /* WindowSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000139 /* WindowSettingsTests.swift */; };
-		000000000000000000000121 /* ImageTranslatorUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000120 /* ImageTranslatorUITests.swift */; };
-		000000000000000000000123 /* three-pages.pdf in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000122 /* three-pages.pdf */; };
-		000000000000000000000124 /* three-pages.pdf in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000122 /* three-pages.pdf */; };
-		000000000000000000000126 /* sample.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000125 /* sample.jpg */; };
-		000000000000000000000129 /* sample.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000125 /* sample.jpg */; };
-		000000000000000000000131 /* batch in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000130 /* batch */; };
-		000000000000000000000132 /* batch in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000130 /* batch */; };
 		020000000000000000000002 /* HostArtifact.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000001 /* HostArtifact.swift */; };
 		020000000000000000000004 /* HostFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000003 /* HostFiles.swift */; };
 		020000000000000000000006 /* HostIngest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000005 /* HostIngest.swift */; };
@@ -70,34 +51,18 @@
 
 /* Begin PBXFileReference section */
 		000000000000000000000100 /* ImageTranslatorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageTranslatorApp.swift; sourceTree = "<group>"; };
-		000000000000000000000102 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		000000000000000000000104 /* Domain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Domain.swift; sourceTree = "<group>"; };
-		000000000000000000000106 /* DaemonClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonClient.swift; sourceTree = "<group>"; };
-		000000000000000000000108 /* MockURLProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockURLProtocol.swift; sourceTree = "<group>"; };
 		00000000000000000000010A /* TokenStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenStore.swift; sourceTree = "<group>"; };
 		00000000000000000000010C /* BonjourBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourBrowser.swift; sourceTree = "<group>"; };
-		00000000000000000000010E /* AppSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSession.swift; sourceTree = "<group>"; };
-		000000000000000000000110 /* JobListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobListView.swift; sourceTree = "<group>"; };
-		000000000000000000000112 /* PlatformImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformImage.swift; sourceTree = "<group>"; };
-		000000000000000000000114 /* PDFReaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFReaderView.swift; sourceTree = "<group>"; };
-		000000000000000000000116 /* ConfigWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigWebView.swift; sourceTree = "<group>"; };
 		000000000000000000000137 /* WindowSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowSettings.swift; sourceTree = "<group>"; };
 		010000000000000000000070 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		010000000000000000000071 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		000000000000000000000118 /* PageMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageMachineTests.swift; sourceTree = "<group>"; };
-		00000000000000000000011A /* PairingMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingMachineTests.swift; sourceTree = "<group>"; };
-		00000000000000000000011C /* JobMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobMachineTests.swift; sourceTree = "<group>"; };
 		010000000000000000000010 /* ImageTranslator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ImageTranslator.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		010000000000000000000011 /* ImageTranslatorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ImageTranslatorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		00000000000000000000011E /* TestHooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestHooks.swift; sourceTree = "<group>"; };
 		000000000000000000000127 /* TestHooksTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestHooksTests.swift; sourceTree = "<group>"; };
 		000000000000000000000133 /* EndpointTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointTests.swift; sourceTree = "<group>"; };
-		000000000000000000000135 /* DropRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropRoutingTests.swift; sourceTree = "<group>"; };
 		000000000000000000000139 /* WindowSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowSettingsTests.swift; sourceTree = "<group>"; };
-		000000000000000000000120 /* ImageTranslatorUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageTranslatorUITests.swift; sourceTree = "<group>"; };
-		000000000000000000000122 /* three-pages.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; name = "three-pages.pdf"; path = Resources/three-pages.pdf; sourceTree = "<group>"; };
-		000000000000000000000125 /* sample.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = "sample.jpg"; path = Resources/sample.jpg; sourceTree = "<group>"; };
-		000000000000000000000130 /* batch */ = {isa = PBXFileReference; lastKnownFileType = folder; name = batch; path = Resources/batch; sourceTree = "<group>"; };
 		010000000000000000000012 /* ImageTranslatorUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ImageTranslatorUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		020000000000000000000001 /* HostArtifact.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostArtifact.swift; sourceTree = "<group>"; };
 		020000000000000000000003 /* HostFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostFiles.swift; sourceTree = "<group>"; };
@@ -144,17 +109,9 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000100 /* ImageTranslatorApp.swift */,
-				000000000000000000000102 /* RootView.swift */,
 				000000000000000000000104 /* Domain.swift */,
-				000000000000000000000106 /* DaemonClient.swift */,
-				000000000000000000000108 /* MockURLProtocol.swift */,
 				00000000000000000000010A /* TokenStore.swift */,
 				00000000000000000000010C /* BonjourBrowser.swift */,
-				00000000000000000000010E /* AppSession.swift */,
-				000000000000000000000110 /* JobListView.swift */,
-				000000000000000000000112 /* PlatformImage.swift */,
-				000000000000000000000114 /* PDFReaderView.swift */,
-				000000000000000000000116 /* ConfigWebView.swift */,
 				000000000000000000000137 /* WindowSettings.swift */,
 				00000000000000000000011E /* TestHooks.swift */,
 				020000000000000000000017 /* Host */,
@@ -167,12 +124,8 @@
 		010000000000000000000005 /* ImageTranslatorTests */ = {
 			isa = PBXGroup;
 			children = (
-				000000000000000000000118 /* PageMachineTests.swift */,
-				00000000000000000000011A /* PairingMachineTests.swift */,
-				00000000000000000000011C /* JobMachineTests.swift */,
 				000000000000000000000127 /* TestHooksTests.swift */,
 				000000000000000000000133 /* EndpointTests.swift */,
-				000000000000000000000135 /* DropRoutingTests.swift */,
 				000000000000000000000139 /* WindowSettingsTests.swift */,
 				020000000000000000000011 /* HostFilesTests.swift */,
 				020000000000000000000013 /* HostUploadTests.swift */,
@@ -183,11 +136,7 @@
 		010000000000000000000006 /* ImageTranslatorUITests */ = {
 			isa = PBXGroup;
 			children = (
-				000000000000000000000120 /* ImageTranslatorUITests.swift */,
 				02000000000000000000001A /* NshHostUITests.swift */,
-				000000000000000000000122 /* three-pages.pdf */,
-				000000000000000000000125 /* sample.jpg */,
-				000000000000000000000130 /* batch */,
 			);
 			path = ImageTranslatorUITests;
 			sourceTree = "<group>";
@@ -344,9 +293,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				010000000000000000000072 /* Assets.xcassets in Resources */,
-				000000000000000000000123 /* three-pages.pdf in Resources */,
-				000000000000000000000126 /* sample.jpg in Resources */,
-				000000000000000000000131 /* batch in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -361,9 +307,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				000000000000000000000124 /* three-pages.pdf in Resources */,
-				000000000000000000000129 /* sample.jpg in Resources */,
-				000000000000000000000132 /* batch in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -397,17 +340,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				000000000000000000000101 /* ImageTranslatorApp.swift in Sources */,
-				000000000000000000000103 /* RootView.swift in Sources */,
 				000000000000000000000105 /* Domain.swift in Sources */,
-				000000000000000000000107 /* DaemonClient.swift in Sources */,
-				000000000000000000000109 /* MockURLProtocol.swift in Sources */,
 				00000000000000000000010B /* TokenStore.swift in Sources */,
 				00000000000000000000010D /* BonjourBrowser.swift in Sources */,
-				00000000000000000000010F /* AppSession.swift in Sources */,
-				000000000000000000000111 /* JobListView.swift in Sources */,
-				000000000000000000000113 /* PlatformImage.swift in Sources */,
-				000000000000000000000115 /* PDFReaderView.swift in Sources */,
-				000000000000000000000117 /* ConfigWebView.swift in Sources */,
 				000000000000000000000138 /* WindowSettings.swift in Sources */,
 				00000000000000000000011F /* TestHooks.swift in Sources */,
 				020000000000000000000002 /* HostArtifact.swift in Sources */,
@@ -426,12 +361,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				000000000000000000000119 /* PageMachineTests.swift in Sources */,
-				00000000000000000000011B /* PairingMachineTests.swift in Sources */,
-				00000000000000000000011D /* JobMachineTests.swift in Sources */,
 				000000000000000000000128 /* TestHooksTests.swift in Sources */,
 				000000000000000000000134 /* EndpointTests.swift in Sources */,
-				000000000000000000000136 /* DropRoutingTests.swift in Sources */,
 				00000000000000000000013A /* WindowSettingsTests.swift in Sources */,
 				020000000000000000000012 /* HostFilesTests.swift in Sources */,
 				020000000000000000000014 /* HostUploadTests.swift in Sources */,
@@ -442,7 +373,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				000000000000000000000121 /* ImageTranslatorUITests.swift in Sources */,
 				02000000000000000000001B /* NshHostUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
