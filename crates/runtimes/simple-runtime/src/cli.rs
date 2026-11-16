@@ -18,7 +18,7 @@ pub struct Cli {
     #[arg(long, global = true, default_value_t = 2)]
     pub max_batch_size_upscaler: usize,
 
-    /// Choose a subcommand (cli, daemon, or ui)
+    /// Choose a subcommand (cli or daemon)
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -60,7 +60,4 @@ pub enum Commands {
         #[arg(long)]
         no_bonjour: bool,
     },
-
-    /// Run the UI
-    Ui,
 }
