@@ -42,9 +42,11 @@ struct ProviderBox: @unchecked Sendable {
 /// 把拖放 / 选择得到的东西变成沙盒里的文件。
 /// 每个 NSItemProvider 只读一种表示 (PDF 或图片, 不再试第二种), 并发读取不超过 limit 个。
 final class FileIngestor: @unchecked Sendable {
-    /// 一次只读一个。进程内 provider 两个以上同时读时, 读过的文件页会一直留在 RSS 里直到这一批结束: 模拟器里 30 张 37 MB 的 PNG,
-    /// 并发 2 和 4 的 RSS 峰值都是 1.37 GB, 并发 1 是 332 MB; 200 张 1.7 MB 的 JPEG 并发 1 和 4 都是 0.9 秒。
-    /// 两种都不改变 phys_footprint (24 MB), 并发 1 只是让 RSS 不虚高。
+    /// 一次只读一个。iPad 模拟器里进程内 provider 同时读两个以上时, RSS 涨到读过的总字节数左右: 30 张 37 MB 的 PNG, 并发 2 和 4 的 RSS 峰值都是
+    /// 1.37 GB, 并发 1 是 332 MB; 200 张 1.7 MB 的 JPEG 并发 1 和 4 的耗时都是 0.9 秒。phys_footprint 始终是 23 到 24 MB。
+    /// vmmap 显示多出来的常驻内存在只读的系统库区域 (__LINKEDIT、__TEXT), 不在文件映射里 (mapped file 只有 11 MB 常驻), 机制没查清, 也只在模拟器里量过。
+    /// 限流要罩住整个 load, 连 hasItemConformingToTypeIdentifier 这样的类型判断也在内: 只限住读文件的那一步, 同样的测试 RSS 又涨回 240 MB。
+    /// 代价是下载网页链接也占这一个名额, 一个慢链接会拖住后面的拖放和选择。
     static let concurrency = 1
 
     private let files: ManagedFiles

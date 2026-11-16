@@ -406,6 +406,28 @@ final class HostFilesTests: XCTestCase {
         XCTAssertTrue(onlyImages.pdfs.isEmpty)
     }
 
+    /// 手动测量用: 设 TEST_RUNNER_HOST_MANGA_PDF 指向一个很大的图片 PDF, 每 10 页换一张译文图, 其余页走原页 (drawPDFPage)。
+    /// 这是用户真会碰到的路径: 绝大多数页是没翻译的原页, 原页里的大图被整页拷进新 PDF, 内存随页数线性增长 (见 app/README.md 的「内存」)。
+    func testExportOfARealImagePDFReportsItsMemory() async throws {
+        guard let path = ProcessInfo.processInfo.environment["HOST_MANGA_PDF"] else { throw XCTSkip("set TEST_RUNNER_HOST_MANGA_PDF to a large image PDF") }
+        let source = URL(fileURLWithPath: path)
+        let artifact = directory.appendingPathComponent("translated.jpg")
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        try UIGraphicsImageRenderer(size: CGSize(width: 1800, height: 2600), format: format)
+            .jpegData(withCompressionQuality: 0.9) { context in
+                UIColor.systemTeal.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 1800, height: 2600))
+            }.write(to: artifact)
+        let before = HostMetrics.residentMB()
+        let output = directory.appendingPathComponent("real.pdf")
+        let started = Date()
+        let (outcome, peak) = await HostMetrics.measure { try? await PdfExporter.compose(source: source, output: output) { $0 % 10 == 9 ? artifact : nil } }
+        let pages = CGPDFDocument(output as CFURL)?.numberOfPages ?? 0
+        print("EXPORTREAL pages=\(pages) translated=\(outcome?.translated ?? -1) seconds=\(Int(Date().timeIntervalSince(started))) rss+\(peak.rss - before)MB footprint=\(peak.footprint)MB in=\(ManagedFiles.size(of: source) / 1_048_576)MB out=\(ManagedFiles.size(of: output) / 1_048_576)MB")
+        XCTAssertEqual(pages, CGPDFDocument(source as CFURL)?.numberOfPages)
+    }
+
     func testDisplayNamePrefersTheSuggestedNameAndKeepsOneExtension() {
         let temp = URL(fileURLWithPath: "/tmp/PNG图像.png")
         XCTAssertEqual(FileIngestor.name(for: temp, suggested: "page01", type: .png), "page01.png")
