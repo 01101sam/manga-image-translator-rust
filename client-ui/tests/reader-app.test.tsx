@@ -127,17 +127,17 @@ describe("PDF reader on the web (pdf.js overlay)", () => {
     await app.keyboard.press("right");
     await app.keyboard.press("space");
     expect(status(app)).toMatch(/准备中|排队中|翻译中/);
-    await app.waitFor("text:/已翻译 · 原文/", { timeout: 30_000 });
+    await app.waitFor("text:/已翻译 · 译文/", { timeout: 30_000 });
     expect(rendered).toEqual([{ fileId: "pdf-1", page: 1, longEdge: 4096 }]);
     expect(uploaded).toEqual(["render-1-1"]);
     expect(daemon.log.submitted).toBe(1);
-    expect(app.shows("id:reader-translated")).toBe(false);
-    await app.keyboard.press("space");
-    expect(status(app)).toBe("第 2/5 页 · 已翻译 · 译文");
     expect(app.shows("id:reader-translated")).toBe(true);
     await app.keyboard.press("space");
     expect(status(app)).toBe("第 2/5 页 · 已翻译 · 原文");
     expect(app.shows("id:reader-translated")).toBe(false);
+    await app.keyboard.press("space");
+    expect(status(app)).toBe("第 2/5 页 · 已翻译 · 译文");
+    expect(app.shows("id:reader-translated")).toBe(true);
     // 页图是普通 Job, 也出现在任务列表里。
     await app.press("text:任务");
     await app.waitFor("text:/共 1 张/");
@@ -237,7 +237,7 @@ describe("PDF reader on the web (pdf.js overlay)", () => {
     expect(posts(app, "pdf.dispose").length).toBe(1);
     await app.press("text:阅读");
     await app.waitFor("id:reader-status");
-    expect(status(app)).toBe("第 2/5 页 · 已翻译 · 原文");
+    expect(status(app)).toBe("第 2/5 页 · 已翻译 · 译文");
     await app.waitUntil(() => shown.length > before);
     expect(shown.at(-1)).toEqual({ fileId: "pdf-1", page: 1, hidden: false });
   });
@@ -331,7 +331,7 @@ describe("PDF reader: export and restoring the last PDF", () => {
     expect(app.texts()).toContain("vol01.pdf");
     await app.keyboard.press("right");
     await app.waitFor("text:/^第 4\\/5 页/");
-    expect(JSON.parse(app.storage()["reader.last"] ?? "null")).toEqual({ id: "pdf-1", page: 3 });
+    expect(JSON.parse(app.storage()["reader.last"] ?? "null")).toEqual({ id: "pdf-1", page: 3, viewing: "translated" });
   });
 
   test("a PDF the host no longer has is forgotten", async () => {
@@ -350,9 +350,92 @@ describe("PDF reader: export and restoring the last PDF", () => {
     const { app } = await launch({ daemon: createFakeDaemon(), platform: "ios" });
     await openPdf(app);
     await app.waitUntil(() => app.storage()["reader.last"] !== undefined);
-    expect(JSON.parse(app.storage()["reader.last"] ?? "null")).toEqual({ id: "pdf-1", page: 0 });
+    expect(JSON.parse(app.storage()["reader.last"] ?? "null")).toEqual({ id: "pdf-1", page: 0, viewing: "translated" });
     await app.press("id:reader-close");
     await app.waitFor("id:reader-empty");
     await app.waitUntil(() => app.storage()["reader.last"] === undefined);
+  });
+});
+describe("PDF reader: which side of a translated page is shown", () => {
+  /** 在当前页按空格, 等它翻译完。 */
+  async function translateHere(app: Launched) {
+    const before = status(app)!;
+    const page = before.match(/^第 (\d+)\//)![1];
+    await app.keyboard.press("space");
+    await app.waitFor("text:/^第 " + page + "\\/\\d+ 页 · 已翻译/", { timeout: 30_000 });
+  }
+
+  test("a finished translation is on screen at once, and still is after paging away and back", async () => {
+    const { app } = await launch({ daemon: createFakeDaemon() });
+    await openPdf(app);
+    await app.keyboard.press("right");
+    await translateHere(app);
+    expect(status(app)).toBe("第 2/5 页 · 已翻译 · 译文");
+    expect(app.shows("id:reader-translated")).toBe(true);
+    await app.keyboard.press("left");
+    expect(status(app)).toBe("第 1/5 页 · 未翻译");
+    expect(app.shows("id:reader-translated")).toBe(false);
+    await app.keyboard.press("right");
+    expect(status(app)).toBe("第 2/5 页 · 已翻译 · 译文");
+    expect(app.shows("id:reader-translated")).toBe(true);
+  });
+
+  test("after the reader switches to the original it stays there for every page, including ones that finish later, until it switches back", async () => {
+    const { app } = await launch({ daemon: createFakeDaemon() });
+    await openPdf(app);
+    await app.keyboard.press("right");
+    await translateHere(app);
+    await app.keyboard.press("right");
+    await translateHere(app);
+    expect(status(app)).toBe("第 3/5 页 · 已翻译 · 译文");
+    await app.keyboard.press("space");
+    expect(status(app)).toBe("第 3/5 页 · 已翻译 · 原文");
+    await app.keyboard.press("left");
+    expect(status(app)).toBe("第 2/5 页 · 已翻译 · 原文");
+    expect(app.shows("id:reader-translated")).toBe(false);
+    await app.keyboard.press("right");
+    await app.keyboard.press("right");
+    await translateHere(app);
+    expect(status(app)).toBe("第 4/5 页 · 已翻译 · 原文");
+    expect(app.shows("id:reader-translated")).toBe(false);
+    await app.keyboard.press("space");
+    expect(status(app)).toBe("第 4/5 页 · 已翻译 · 译文");
+    await app.keyboard.press("left");
+    expect(status(app)).toBe("第 3/5 页 · 已翻译 · 译文");
+    expect(app.shows("id:reader-translated")).toBe(true);
+  });
+
+  test("the choice is saved with the last PDF, comes back after a restart, and a different document starts on the translation", async () => {
+    const first = await launch({ daemon: createFakeDaemon(), platform: "ios" });
+    await openPdf(first.app);
+    await first.app.keyboard.press("right");
+    await translateHere(first.app);
+    await first.app.keyboard.press("space");
+    await first.app.waitUntil(() => JSON.parse(first.app.storage()["reader.last"] ?? "{}").viewing === "original");
+    expect(JSON.parse(first.app.storage()["reader.last"]!)).toEqual({ id: "pdf-1", page: 1, viewing: "original" });
+
+    const restarted = await launch({
+      daemon: createFakeDaemon(),
+      platform: "ios",
+      storage: { "reader.last": first.app.storage()["reader.last"]! },
+      openFile: pdfFile(5),
+    });
+    await restarted.app.waitFor("text:/^第 2\\/5 页/");
+    await translateHere(restarted.app);
+    expect(status(restarted.app)).toBe("第 2/5 页 · 已翻译 · 原文");
+
+    await restarted.app.host.send("pdf.added", [{ ...pdfFile(4), id: "pdf-2", name: "vol02.pdf" }]);
+    await restarted.app.waitFor("text:vol02.pdf");
+    await translateHere(restarted.app);
+    expect(status(restarted.app)).toBe("第 1/4 页 · 已翻译 · 译文");
+  });
+
+  test("a record from before the choice was kept, or a damaged one, opens on the translation", async () => {
+    for (const record of [{ id: "pdf-1", page: 1 }, { id: "pdf-1", page: 1, viewing: "sideways" }]) {
+      const { app } = await launch({ daemon: createFakeDaemon(), platform: "ios", storage: { "reader.last": JSON.stringify(record) }, openFile: pdfFile(5) });
+      await app.waitFor("text:/^第 2\\/5 页/");
+      await translateHere(app);
+      expect(status(app)).toBe("第 2/5 页 · 已翻译 · 译文");
+    }
   });
 });

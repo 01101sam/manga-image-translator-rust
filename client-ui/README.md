@@ -5,7 +5,7 @@
 - **Web:** `scripts/build-ui.sh web` 打包成静态站点 `gui/dist/`, 由 Daemon 托管。
 - **App (iOS / iPadOS / visionOS):** `scripts/build-ui.sh native` 产出 `client-ui/dist/native/`, Swift 宿主用 `NshAppView` 加载; 宿主侧契约见 [HOST_PROTOCOL.md](HOST_PROTOCOL.md)。
 
-页面: 配对 (Pairing Key; App 预填默认 Key 并记住配对成功的那个, 网页的输入框是空的, 也不存输入的 Key)、任务列表 + 上传 (导入菜单: 相册、文件、打开 PDF, 项目由宿主在 `session.snapshot` 里声明; 排序菜单: 名称 / 日期 / 大小各升降序, 一次性; 条目菜单: 移到最前 / 最后; 长按或鼠标按住拖动重排)、单张查看 (原文/译文)、Config (结构化表单)、Engine 启停、PDF 阅读器 (`reader`: 本地显示 PDF, 方向键翻页, 空格把当前页送去翻译或切换原文/译文)。
+页面: 配对 (Pairing Key; App 预填默认 Key 并记住配对成功的那个, 网页的输入框是空的, 也不存输入的 Key)、任务列表 + 上传 (导入菜单: 相册、文件、打开 PDF, 项目由宿主在 `session.snapshot` 里声明; 排序菜单: 名称 / 日期 / 大小各升降序, 一次性; 条目菜单: 移到最前 / 最后; 长按或鼠标按住拖动重排)、单张查看 (原文/译文)、Config (结构化表单)、Engine 启停、PDF 阅读器 (`reader`: 本地显示 PDF, 方向键翻页, 空格把当前页送去翻译或切换原文/译文; 有译文的页默认显示译文, 切回原文后整个文档保持原文直到再切回来, 这个偏好随 `reader.last` 保存)。
 
 ## 结构
 
@@ -24,7 +24,7 @@ src/domain/        纯函数与状态机, 不依赖 nsh; tests/ 里逐个测
   reorder.ts       拖动重排的几何: 每个单元格的位置、落点、指示线、边缘自动滚动的速度
   saved.ts         随列表保存的行的读写: Job (id、名字、大小、修改时间) 和还没上传的文件 (`local:<fileId>`, 另存 type 和被拒绝的原因)
   nav.ts           键盘高亮与查看器的移动
-  reader.ts        PDF 阅读器每页的状态机 (移植自旧 Client 的 PageMachine) 与翻页、渲染节奏的纯函数
+  reader.ts        PDF 阅读器每页的状态机 (移植自旧 Client 的 PageMachine) 与翻页、渲染节奏的纯函数; 看译文还是原文是整个文档的偏好 (store 的 `viewing`), 不在页上
   config.ts        Config 表单的字段表、校验、整份文档的改写
   media.ts         降采样图片 URL (w=256 列表, w=2048 查看器)
 src/api/           Daemon 的 HTTP 客户端; 外部 JSON 在 parse.ts 一次性解析

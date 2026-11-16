@@ -198,7 +198,7 @@ Server 不接触 PDF, 来源只有用户本地文件。App 宿主把 PDF 存进�
 
 ### `pdf.open`
 
-重启后恢复上次打开的 PDF: TSX 在 NSH Storage 里记着上次的 `fileId` 和页码 (键 `reader.last`), 启动时用它问宿主文件还在不在。
+重启后恢复上次打开的 PDF: TSX 在 NSH Storage 里记着上次的 `fileId`、页码和看译文还是原文的偏好 (键 `reader.last`, `{ id, page, viewing }`, 缺少或不认得的 `viewing` 当作译文), 启动时用它问宿主文件还在不在。
 
 ```jsonc
 // 参数

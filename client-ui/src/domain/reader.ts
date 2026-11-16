@@ -8,13 +8,23 @@ export type Translation = "untranslated" | "preparing" | "queued" | "running" | 
 
 export type PageViewing = "original" | "translated";
 
+/**
+ * 一页的状态。看译文还是看原文不属于某一页, 而是整个文档的偏好 (store 的 `viewing`): 翻译完的页按它显示,
+ * 用户在这个文档里切回原文后, 翻到别的已翻译页、或新翻译完的页都保持原文, 直到再切回来。
+ */
 export interface ReaderPage {
   /** 从 0 起。 */
   readonly index: number;
   readonly translation: Translation;
-  readonly viewing: PageViewing;
   readonly jobId?: string;
 }
+
+/** 新打开的文档: 有译文的页默认显示译文。 */
+export const DEFAULT_VIEWING: PageViewing = "translated";
+
+export const flipViewing = (viewing: PageViewing): PageViewing => (viewing === "translated" ? "original" : "translated");
+
+export const parseViewing = (value: unknown): PageViewing => (value === "original" || value === "translated" ? value : DEFAULT_VIEWING);
 
 export type PageEvent =
   | { readonly type: "space" }
@@ -29,7 +39,7 @@ export type PageEvent =
 
 export type PageCommand = "none" | "enqueue" | "toggleView";
 
-export const newPage = (index: number): ReaderPage => ({ index, translation: "untranslated", viewing: "original" });
+export const newPage = (index: number): ReaderPage => ({ index, translation: "untranslated" });
 
 const reset = (page: ReaderPage): ReaderPage => newPage(page.index);
 
@@ -38,7 +48,7 @@ function onSpace(page: ReaderPage): [ReaderPage, PageCommand] {
     case "untranslated":
       return [page, "enqueue"];
     case "done":
-      return [{ ...page, viewing: page.viewing === "original" ? "translated" : "original" }, "toggleView"];
+      return [page, "toggleView"];
     case "preparing":
     case "queued":
     case "running":
@@ -93,7 +103,7 @@ export function translateAllOrder(pages: readonly ReaderPage[], current: number)
 }
 
 /** 页脚状态文案, 沿用旧 Client 的措辞: UI 测试按「第 N/M 页」和后面的词匹配。 */
-export function pageStatus(page: ReaderPage, count: number): string {
+export function pageStatus(page: ReaderPage, count: number, viewing: PageViewing): string {
   const where = `第 ${page.index + 1}/${count} 页`;
   switch (page.translation) {
     case "untranslated":
@@ -105,7 +115,7 @@ export function pageStatus(page: ReaderPage, count: number): string {
     case "running":
       return `${where} · 翻译中`;
     case "done":
-      return `${where} · 已翻译 · ${page.viewing === "translated" ? "译文" : "原文"}`;
+      return `${where} · 已翻译 · ${viewing === "translated" ? "译文" : "原文"}`;
   }
 }
 
@@ -131,16 +141,17 @@ export function renderLongEdge(config: Readonly<Record<string, unknown>> | null)
   return Math.min(Math.max(Math.round(value), MIN_LONG_EDGE), MAX_LONG_EDGE);
 }
 
-/** 页面现在该盖着哪个 Job 的译文: 已翻译完且选了译文时才有。 */
-export const translatedJobId = (page: ReaderPage): string | null => (page.translation === "done" && page.viewing === "translated" ? (page.jobId ?? null) : null);
+/** 页面现在该盖着哪个 Job 的译文: 已翻译完且文档的偏好是译文时才有。 */
+export const translatedJobId = (page: ReaderPage, viewing: PageViewing): string | null =>
+  page.translation === "done" && viewing === "translated" ? (page.jobId ?? null) : null;
 
 /** 页脚空格按钮的字: 与键盘空格做同一件事。 */
-export function spaceLabel(page: ReaderPage): string {
+export function spaceLabel(page: ReaderPage, viewing: PageViewing): string {
   switch (page.translation) {
     case "untranslated":
       return "翻译本页";
     case "done":
-      return page.viewing === "translated" ? "看原文" : "看译文";
+      return viewing === "translated" ? "看原文" : "看译文";
     case "preparing":
     case "queued":
     case "running":

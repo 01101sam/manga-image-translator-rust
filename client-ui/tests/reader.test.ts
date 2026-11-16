@@ -12,7 +12,10 @@ import {
   translatedJobId,
   translateAllOrder,
   untranslatedIndexes,
+  DEFAULT_VIEWING,
+  flipViewing,
   followHost,
+  parseViewing,
   type PageEvent,
   type ReaderPage,
 } from "../src/domain/reader";
@@ -20,7 +23,6 @@ import {
 const page = (index: number, translation: ReaderPage["translation"], extra: Partial<ReaderPage> = {}): ReaderPage => ({
   index,
   translation,
-  viewing: "original",
   ...extra,
 });
 
@@ -43,16 +45,9 @@ describe("PageMachine (ported from the Swift tests)", () => {
     expect(p).toEqual(page(1, "done", { jobId: "job-1" }));
   });
 
-  test("space on a done page toggles translated and original", () => {
-    let p = page(2, "done", { jobId: "job-2" });
-    let command;
-    [p, command] = reducePage(p, { type: "space" });
-    expect(command).toBe("toggleView");
-    expect(p.viewing).toBe("translated");
-    expect(p.translation).toBe("done");
-    [p, command] = reducePage(p, { type: "space" });
-    expect(command).toBe("toggleView");
-    expect(p.viewing).toBe("original");
+  test("space on a done page asks to flip the document's view and leaves the page alone", () => {
+    const p = page(2, "done", { jobId: "job-2" });
+    expect(reducePage(p, { type: "space" })).toEqual([p, "toggleView"]);
   });
 
   test("space on a queued or running page does nothing", () => {
@@ -63,7 +58,7 @@ describe("PageMachine (ported from the Swift tests)", () => {
   });
 
   test("failed and cancelled Jobs send the page back to untranslated", () => {
-    const p = page(3, "running", { jobId: "j3", viewing: "translated" });
+    const p = page(3, "running", { jobId: "j3" });
     expect(run(p, { type: "jobState", state: "failed" })).toEqual(page(3, "untranslated"));
     expect(run(p, { type: "jobState", state: "cancelled" })).toEqual(page(3, "untranslated"));
   });
@@ -80,7 +75,7 @@ describe("PageMachine (what the TSX reader adds)", () => {
     expect(accepted.translation).toBe("preparing");
     expect(reducePage(accepted, { type: "space" })).toEqual([accepted, "none"]);
     expect(canPressSpace(accepted)).toBe(false);
-    expect(spaceLabel(accepted)).toBe("翻译中…");
+    expect(spaceLabel(accepted, "translated")).toBe("翻译中…");
   });
 
   test("enqueued only moves an untranslated page", () => {
@@ -96,34 +91,42 @@ describe("PageMachine (what the TSX reader adds)", () => {
   });
 
   test("a lost Artifact resets a done page so it can be translated again", () => {
-    const done = page(6, "done", { jobId: "j", viewing: "translated" });
+    const done = page(6, "done", { jobId: "j" });
     expect(run(done, { type: "artifactLost" })).toEqual(newPage(6));
     const running = page(6, "running", { jobId: "j" });
     expect(reducePage(running, { type: "artifactLost" })[0]).toBe(running);
   });
 
-  test("the translation covers the page only when it is done and translated is selected", () => {
-    expect(translatedJobId(page(0, "done", { jobId: "j", viewing: "translated" }))).toBe("j");
-    expect(translatedJobId(page(0, "done", { jobId: "j" }))).toBeNull();
-    expect(translatedJobId(page(0, "running", { jobId: "j", viewing: "translated" }))).toBeNull();
+  test("the translation covers the page only when it is done and the document's view is translated", () => {
+    expect(translatedJobId(page(0, "done", { jobId: "j" }), "translated")).toBe("j");
+    expect(translatedJobId(page(0, "done", { jobId: "j" }), "original")).toBeNull();
+    expect(translatedJobId(page(0, "running", { jobId: "j" }), "translated")).toBeNull();
+  });
+
+  test("a document starts on the translation, flipping is symmetric, and a stored preference that is not one of the two is ignored", () => {
+    expect(DEFAULT_VIEWING).toBe("translated");
+    expect(flipViewing("translated")).toBe("original");
+    expect(flipViewing(flipViewing("translated"))).toBe("translated");
+    expect(parseViewing("original")).toBe("original");
+    for (const junk of [undefined, null, 3, "orig", ""]) expect(parseViewing(junk)).toBe("translated");
   });
 
   test("the space button says what the key would do", () => {
-    expect(spaceLabel(newPage(0))).toBe("翻译本页");
-    expect(spaceLabel(page(0, "done", { jobId: "j" }))).toBe("看译文");
-    expect(spaceLabel(page(0, "done", { jobId: "j", viewing: "translated" }))).toBe("看原文");
+    expect(spaceLabel(newPage(0), "translated")).toBe("翻译本页");
+    expect(spaceLabel(page(0, "done", { jobId: "j" }), "original")).toBe("看译文");
+    expect(spaceLabel(page(0, "done", { jobId: "j" }), "translated")).toBe("看原文");
     expect(canPressSpace(page(0, "queued", { jobId: "j" }))).toBe(false);
   });
 });
 
 describe("reader status text (the old UI tests match on it)", () => {
   test("the page count comes first and the state after it", () => {
-    expect(pageStatus(newPage(0), 3)).toBe("第 1/3 页 · 未翻译");
-    expect(pageStatus(page(1, "preparing"), 3)).toBe("第 2/3 页 · 准备中");
-    expect(pageStatus(page(1, "queued", { jobId: "j" }), 3)).toBe("第 2/3 页 · 排队中");
-    expect(pageStatus(page(1, "running", { jobId: "j" }), 3)).toBe("第 2/3 页 · 翻译中");
-    expect(pageStatus(page(2, "done", { jobId: "j" }), 3)).toBe("第 3/3 页 · 已翻译 · 原文");
-    expect(pageStatus(page(2, "done", { jobId: "j", viewing: "translated" }), 3)).toBe("第 3/3 页 · 已翻译 · 译文");
+    expect(pageStatus(newPage(0), 3, "translated")).toBe("第 1/3 页 · 未翻译");
+    expect(pageStatus(page(1, "preparing"), 3, "translated")).toBe("第 2/3 页 · 准备中");
+    expect(pageStatus(page(1, "queued", { jobId: "j" }), 3, "translated")).toBe("第 2/3 页 · 排队中");
+    expect(pageStatus(page(1, "running", { jobId: "j" }), 3, "translated")).toBe("第 2/3 页 · 翻译中");
+    expect(pageStatus(page(2, "done", { jobId: "j" }), 3, "original")).toBe("第 3/3 页 · 已翻译 · 原文");
+    expect(pageStatus(page(2, "done", { jobId: "j" }), 3, "translated")).toBe("第 3/3 页 · 已翻译 · 译文");
   });
 });
 

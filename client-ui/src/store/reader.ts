@@ -3,7 +3,10 @@ import { localKey } from "../domain/board";
 import { rawMediaUrl } from "../domain/media";
 import {
   clampPage,
+  DEFAULT_VIEWING,
+  flipViewing,
   newPage,
+  parseViewing,
   nextRender,
   reducePage,
   renderLongEdge,
@@ -11,6 +14,7 @@ import {
   followHost,
   type PageCommand,
   type PageEvent,
+  type PageViewing,
   type ReaderPage,
 } from "../domain/reader";
 import type { JobState } from "../domain/types";
@@ -34,6 +38,11 @@ export const pdf = signal<OpenPdf | null>(null);
 /** 页数还不知道 (宿主没给 pageCount, 组件的 loaded 也没来) 时为空。 */
 export const pages = signal<readonly ReaderPage[]>([]);
 export const current = signal(0);
+/**
+ * 这个文档里翻译完的页看译文还是原文。默认译文 (打开、翻页、译文刚完成时都直接看到译文); 用户按空格切回原文之后保持原文, 直到再按一次。
+ * 偏好属于文档: 打开另一个文档回到默认; 随 reader.last 保存, 重启后恢复。
+ */
+export const viewing = signal<PageViewing>(DEFAULT_VIEWING);
 export const loadError = signal<string | null>(null);
 export const opening = signal(false);
 export const exporting = signal(false);
@@ -83,6 +92,7 @@ function openDocument(file: PdfFile) {
     pdf.set({ id: file.id, name: file.name });
     pages.set(file.pageCount === undefined ? [] : makePages(file.pageCount));
     current.set(0);
+    viewing.set(DEFAULT_VIEWING);
     loadError.set(null);
   });
   if (file.pageCount === undefined) armWatchdog();
@@ -95,6 +105,7 @@ export function closePdf() {
     pdf.set(null);
     pages.set([]);
     current.set(0);
+    viewing.set(DEFAULT_VIEWING);
     loadError.set(null);
   });
 }
@@ -218,7 +229,9 @@ function dispatchMany(indexes: readonly number[], event: PageEvent) {
 /** 空格: 未翻译的页加入 Queue, 翻译完的页在原文和译文之间切换, 其余没有反应。 */
 export function pressSpace() {
   const index = current();
-  if (dispatchPage(index, { type: "space" }) === "enqueue") enqueue([index]);
+  const command = dispatchPage(index, { type: "space" });
+  if (command === "enqueue") enqueue([index]);
+  else if (command === "toggleView") viewing.update(flipViewing);
 }
 
 export function translateAll() {
@@ -301,12 +314,13 @@ async function pumpRenders(): Promise<void> {
   void pumpRenders();
 }
 
-/** 上次打开的 PDF: 宿主把 PDF 留在沙盒里 (超过 30 天没打开才清), 重启后按 id 找回来。页的翻译进度属于 Daemon 的 Job, 不保存。 */
+/** 上次打开的 PDF: 宿主把 PDF 留在沙盒里 (超过 30 天没打开才清), 重启后按 id 找回来, 连同页码和看译文还是原文的偏好。页的翻译进度属于 Daemon 的 Job, 不保存。 */
 const LAST_PDF_KEY = "reader.last";
 
 interface LastPdf {
   readonly id: string;
   readonly page: number;
+  readonly viewing: PageViewing;
 }
 
 function parseLastPdf(raw: string | null): LastPdf | null {
@@ -314,7 +328,7 @@ function parseLastPdf(raw: string | null): LastPdf | null {
   try {
     const value: unknown = JSON.parse(raw);
     if (typeof value === "object" && value !== null && "id" in value && "page" in value && typeof value.id === "string" && typeof value.page === "number") {
-      return { id: value.id, page: value.page };
+      return { id: value.id, page: value.page, viewing: parseViewing("viewing" in value ? value.viewing : undefined) };
     }
   } catch {
     // 存的东西坏了就当没有。
@@ -335,6 +349,7 @@ async function restoreLastPdf(): Promise<void> {
     }
     openDocument(file);
     current.set(file.pageCount === undefined ? Math.max(0, Math.trunc(saved.page)) : clampPage(saved.page, file.pageCount));
+    viewing.set(saved.viewing);
   } catch {
     // 宿主打不开就当没有这个文件, 留着记录等下次。
   }
@@ -349,7 +364,8 @@ export function startReader(): void {
   effect(() => {
     const open = pdf();
     const page = current();
-    if (open !== null) void Storage.setItem(LAST_PDF_KEY, JSON.stringify({ id: open.id, page }));
+    const looking = viewing();
+    if (open !== null) void Storage.setItem(LAST_PDF_KEY, JSON.stringify({ id: open.id, page, viewing: looking }));
   });
   void restoreLastPdf();
   pdfPort.onAdded((files) => {

@@ -22,6 +22,7 @@ import {
   surfaceAttached,
   syncJobStates,
   translateAll,
+  viewing,
 } from "../store/reader";
 import { session } from "../store/session";
 import { Banner, Button, Empty, Icon, IconButton, Spinner } from "../ui";
@@ -48,7 +49,7 @@ export function ReaderPage() {
   const page = () => pages()[current()];
   const translatedUrl = () => {
     const p = page();
-    const jobId = p === undefined ? null : translatedJobId(p);
+    const jobId = p === undefined ? null : translatedJobId(p, viewing());
     const s = session();
     return jobId !== null && s.kind === "paired" ? mediaUrl(s.daemon.url, jobId, "artifact", VIEW_WIDTH, s.token) : null;
   };
@@ -58,7 +59,7 @@ export function ReaderPage() {
   };
   const status = () => {
     const p = page();
-    return p === undefined ? "正在读取…" : pageStatus(p, pages().length);
+    return p === undefined ? "正在读取…" : pageStatus(p, pages().length, viewing());
   };
 
   return (
@@ -172,7 +173,7 @@ export function ReaderPage() {
                 <IconButton label="保存译图" icon="download" testID="reader-save" onPress={() => void saveCurrentPage()} />
               </If>
               <If when={page()}>
-                {(p) => <Button label={spaceLabel(p())} size="sm" variant="secondary" testID="reader-space" disabled={!canPressSpace(p())} onPress={pressSpace} />}
+                {(p) => <Button label={spaceLabel(p(), viewing())} size="sm" variant="secondary" testID="reader-space" disabled={!canPressSpace(p())} onPress={pressSpace} />}
               </If>
               <IconButton label="下一页" icon="chevron-right" testID="reader-next" disabled={current() >= pages().length - 1} onPress={() => step(1)} />
             </View>
