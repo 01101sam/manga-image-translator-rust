@@ -77,10 +77,15 @@ struct HostCallError: Error, LocalizedError, Equatable {
 
 /// 宿主持有的文件: id 到沙盒内文件。文件内容不经过 JS, 宿主自己也不把它读进内存。
 ///
-/// 图片 (拖放、选择、PDF 渲染出来的页) 放在 tmp 下, 启动时整个清掉, 因为 TSX 的待上传列表不跨启动保留。
-/// PDF 放在 Application Support, id 就是文件名里的 uuid, 重启后仍然能解析。
+/// 图片 (拖放、选择、PDF 渲染出来的页) 和 PDF 都放在 Application Support, id 就是目录名 / 文件名里的 uuid, 重启后凭 id 仍然能解析:
+/// TSX 把还没上传的图片的 id 存进自己的存档, 重启后用 files.resolve 找回它们并接着上传。tmp 下只有上传的 multipart 体、渲染中的页这类
+/// 只在一次运行里有意义的东西, 启动时整个清掉。
 final class ManagedFiles: @unchecked Sendable {
     static let pdfMaxAge: TimeInterval = 30 * 24 * 3600
+    /// 没被找回过 (files.resolve 会刷新) 的图片超过这么久就在启动时清掉: TSX 的存档丢了、换了 Daemon 之后留下的孤儿。
+    static let imageMaxAge: TimeInterval = 14 * 24 * 3600
+    /// 缩略图的 data URI 存在条目目录里的这个隐藏文件中, 重启后 files.resolve 直接读, 不用再解码图片。
+    static let thumbName = ".thumb"
 
     private let root: URL
     private let images: URL
@@ -90,9 +95,10 @@ final class ManagedFiles: @unchecked Sendable {
     private var registry: [String: URL] = [:]
     private var fileManager: FileManager { .default }
 
-    init(root: URL, pdfRoot: URL) {
+    /// imageRoot 缺省时图片放在 root 下 (测试用); 真正运行时放在 Application Support, 不随系统清理 tmp 消失。
+    init(root: URL, pdfRoot: URL, imageRoot: URL? = nil) {
         self.root = root
-        self.images = root.appendingPathComponent("images", isDirectory: true)
+        self.images = imageRoot ?? root.appendingPathComponent("images", isDirectory: true)
         self.scratch = root.appendingPathComponent("scratch", isDirectory: true)
         self.pdfRoot = pdfRoot
         prepareDirectories()
@@ -103,29 +109,39 @@ final class ManagedFiles: @unchecked Sendable {
         let tmp = manager.temporaryDirectory.appendingPathComponent("imagetranslator-host", isDirectory: true)
         let support = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("imagetranslator-host", isDirectory: true)
-            .appendingPathComponent("pdfs", isDirectory: true)
-        return ManagedFiles(root: tmp, pdfRoot: support)
+        return ManagedFiles(root: tmp, pdfRoot: support.appendingPathComponent("pdfs", isDirectory: true), imageRoot: support.appendingPathComponent("images", isDirectory: true))
     }
 
     private func prepareDirectories() {
         for directory in [images, scratch, pdfRoot] {
             try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
+        // 用户的图片不该进 iCloud 备份: 它们是还没传走的临时素材。
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var imageDirectory = images
+        try? imageDirectory.setResourceValues(values)
     }
 
-    /// 启动时调用: 删掉上次运行遗留的临时文件, 以及超过 pdfMaxAge 没被打开过的 PDF。
+    /// 启动时调用: 删掉上次运行遗留的临时文件, 旧版本放在 tmp 里的图片, 超过 imageMaxAge 没被找回过的图片和超过 pdfMaxAge 没被打开过的 PDF。
+    /// 还在被 TSX 的存档引用的图片留着: 它们在 files.resolve 时被刷新修改时间。
     func cleanOnLaunch(now: Date = Date()) {
         lock.lock()
         registry.removeAll()
         lock.unlock()
-        try? fileManager.removeItem(at: root)
+        try? fileManager.removeItem(at: scratch)
+        let legacy = root.appendingPathComponent("images", isDirectory: true)
+        if legacy.standardizedFileURL != images.standardizedFileURL { try? fileManager.removeItem(at: legacy) }
         prepareDirectories()
-        let entries = (try? fileManager.contentsOfDirectory(at: pdfRoot, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        sweep(images, olderThan: Self.imageMaxAge, now: now)
+        sweep(pdfRoot, olderThan: Self.pdfMaxAge, now: now)
+    }
+
+    private func sweep(_ directory: URL, olderThan age: TimeInterval, now: Date) {
+        let entries = (try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         for entry in entries {
             let modified = (try? entry.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-            if let modified, now.timeIntervalSince(modified) > Self.pdfMaxAge {
-                try? fileManager.removeItem(at: entry)
-            }
+            if let modified, now.timeIntervalSince(modified) > age { try? fileManager.removeItem(at: entry) }
         }
     }
 
@@ -152,21 +168,50 @@ final class ManagedFiles: @unchecked Sendable {
         registry[id] = stored
         lock.unlock()
         let thumb = prepare ? ImagePrep.inspect(at: stored)?.thumb : nil
+        if let thumb { try? Data(thumb.utf8).write(to: directory.appendingPathComponent(Self.thumbName)) }
         return FileRef(id: id, name: stored.lastPathComponent, size: Self.size(of: stored), type: Self.mimeType(of: stored), modifiedAt: modifiedAt, thumb: thumb)
     }
 
+    /// 重启后内存里的登记表是空的, 凭 id 到磁盘上找: 条目目录 images/<uuid>/ 里的第一个非隐藏文件。
     func url(for id: String) -> URL? {
         lock.lock()
-        defer { lock.unlock() }
-        return registry[id]
+        if let known = registry[id] {
+            lock.unlock()
+            return known
+        }
+        lock.unlock()
+        guard let directory = imageDirectory(for: id),
+              let name = ((try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []).filter({ !$0.hasPrefix(".") }).sorted().first
+        else { return nil }
+        let found = directory.appendingPathComponent(name)
+        lock.lock()
+        registry[id] = found
+        lock.unlock()
+        return found
+    }
+
+    /// id 来自 TSX, 先按 uuid 校验再拼路径, 防止 ../ 之类的路径。
+    private func imageDirectory(for id: String) -> URL? {
+        UUID(uuidString: id) == nil ? nil : images.appendingPathComponent(id, isDirectory: true)
     }
 
     func release(_ ids: [String]) {
         for id in ids {
             lock.lock()
-            let file = registry.removeValue(forKey: id)
+            registry.removeValue(forKey: id)
             lock.unlock()
-            if let file { try? fileManager.removeItem(at: file.deletingLastPathComponent()) }
+            if let directory = imageDirectory(for: id) { try? fileManager.removeItem(at: directory) }
+        }
+    }
+
+    /// 重启后 TSX 凭存档里的 id 问宿主还留着哪些文件: 找得到的返回文件引用 (带缩略图), 并刷新修改时间让它们不被启动清理当成孤儿。
+    /// 修改时间 (modifiedAt) 是导入时从原文件读的, 沙盒里的副本没有, 由 TSX 的存档补回。
+    func resolve(_ ids: [String]) -> [FileRef] {
+        ids.compactMap { id in
+            guard let file = url(for: id), let directory = imageDirectory(for: id) else { return nil }
+            try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: directory.path)
+            let thumb = (try? String(contentsOf: directory.appendingPathComponent(Self.thumbName), encoding: .utf8)).flatMap { $0.isEmpty ? nil : $0 }
+            return FileRef(id: id, name: file.lastPathComponent, size: Self.size(of: file), type: Self.mimeType(of: file), thumb: thumb)
         }
     }
 

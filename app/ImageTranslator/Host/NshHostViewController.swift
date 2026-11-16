@@ -210,6 +210,10 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
             guard let self else { return ["files": [Any]()] }
             return ["files": await paste().map(\.json)]
         }
+        app.handle("files.resolve") { [weak self] data -> Any? in
+            let ids = ((data as? [String: Any])?["ids"] as? [Any])?.compactMap { $0 as? String } ?? []
+            return ["files": (self?.files.resolve(ids) ?? []).map(\.json)]
+        }
         app.handle("files.release") { [weak self] data, _ in
             let ids = ((data as? [String: Any])?["ids"] as? [Any])?.compactMap { $0 as? String } ?? []
             self?.files.release(ids)

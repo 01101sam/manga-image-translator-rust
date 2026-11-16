@@ -13,8 +13,9 @@ import {
   jobsNeedingError,
   planUploads,
   removeKeys,
-  restoreJobs,
-  savedJobs,
+  fileIdOfKey,
+  restoreBoard,
+  savedItems,
   retryRejected,
   startUpload,
   UPLOAD_CONCURRENCY,
@@ -28,13 +29,13 @@ import {
 } from "../domain/board";
 import { moveItem, moveToBack, moveToFront, sortBoard, type SortChoice } from "../domain/arrange";
 import { adjacentDone, moveHighlight } from "../domain/nav";
-import { decodeSaved, encodeSaved } from "../domain/saved";
+import { decodeSaved, encodeSaved, type SavedJob } from "../domain/saved";
 import type { PickSource } from "../domain/import";
 import type { LocalFile } from "../domain/types";
 import { engineAcceptsJobs, engineState, queueCapacity, refreshEngine } from "./engine";
 import { overrides } from "./overrides";
 import { api, handleError, hostPort, session } from "./session";
-import { showToast } from "./toast";
+import { LONG_MS, showToast } from "./toast";
 
 /**
  * 列表状态。Board 是纯数据, 这里把它的变化翻译成 signal:
@@ -111,6 +112,8 @@ function commit(change: Change) {
       if (existing) existing.set(item);
       else itemSignals.set(key, signal(item));
     }
+    // 被拒绝和重试改的是条目的内容, 不是顺序, 但存档里有它们。
+    if (!change.orderChanged && change.changed.some((key) => board.items[key]?.kind === "pending")) schedulePersist();
     if (change.orderChanged) {
       for (const key of itemSignals.keys()) if (board.items[key] === undefined) itemSignals.delete(key);
       for (const key of board.displayOrder) if (!itemSignals.has(key)) itemSignals.set(key, signal(board.items[key]!));
@@ -123,7 +126,7 @@ function commit(change: Change) {
   });
 }
 
-// ---- 持久化: 只存 Job (id、名字、大小、修改时间) 的显示顺序, 刷新页面后据此从 Daemon 恢复 ----
+// ---- 持久化: 按显示顺序存 Job 和还没上传的文件 (id、名字、大小、修改时间), 重启或刷新后 Job 从 Daemon 恢复, 文件由宿主凭 fileId 找回 ----
 
 let persistTimer: ReturnType<typeof setTimeout> | undefined;
 const storageKey = (url: string) => `jobs:${url}`;
@@ -134,7 +137,8 @@ function schedulePersist() {
   persistTimer = setTimeout(() => {
     const s = session();
     if (s.kind !== "paired") return;
-    void Storage.setItem(storageKey(s.daemon.url), encodeSaved(savedJobs(board).slice(-MAX_PERSISTED)));
+    const waiting = unrestoredJobs.filter((row) => board.items[row.id] === undefined);
+    void Storage.setItem(storageKey(s.daemon.url), encodeSaved([...waiting, ...savedItems(board)].slice(-MAX_PERSISTED)));
   }, 400);
 }
 
@@ -298,17 +302,22 @@ export function startPolling(): () => void {
   const generation = ++pollGeneration;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let tick = 0;
-  let restored = false;
+  let saved: readonly SavedJob[] | undefined;
+  let jobsRestored = false;
   const alive = () => generation === pollGeneration;
 
   const run = async () => {
     const client = api();
     if (!alive() || !client) return;
     try {
-      // 首轮请求失败时下一轮再试, 不然刷新页面后遇上网络抖动列表就丢了。
-      if (!restored) {
-        await restore(client);
-        restored = true;
+      // 恢复分两步: 本地文件不需要 Daemon, 先放回来; Job 要问 Daemon, 首轮请求失败时下一轮再试, 不然刷新页面后遇上网络抖动列表就丢了。
+      if (saved === undefined) {
+        saved = await readSaved();
+        await restoreLocals(saved);
+      }
+      if (!jobsRestored) {
+        await restoreJobs(client, saved);
+        jobsRestored = true;
       }
       commit(applyJobList(board, await client.jobs()));
       for (const id of jobsNeedingError(board).slice(0, ERROR_FETCH_PER_TICK)) {
@@ -333,23 +342,70 @@ export function startPolling(): () => void {
   };
 }
 
-/** 首轮: 从保存的 id 恢复这台 Daemon 上自己提交过的 Job, 当前内存里已有的 Pending 保持在后面。 */
-async function restore(client: NonNullable<ReturnType<typeof api>>): Promise<void> {
+/** 宿主凭 fileId 还留着的待上传文件。老宿主没有 files.resolve (调用失败) 就当一个都没有。 */
+async function hostedFiles(saved: readonly SavedJob[]): Promise<Map<string, LocalFile>> {
+  const ids = saved.flatMap((row) => fileIdOfKey(row.id) ?? []);
+  try {
+    return new Map((await hostPort.resolve(ids)).map((file) => [file.id, file] as const));
+  } catch {
+    return new Map();
+  }
+}
+
+/** 这台 Daemon 的存档; 读不出来就当没有。 */
+async function readSaved(): Promise<SavedJob[]> {
   const s = session();
-  if (s.kind !== "paired") return;
-  const raw = await Storage.getItem(storageKey(s.daemon.url));
-  if (!raw) return;
-  const restored = restoreJobs(decodeSaved(raw), await client.jobs());
-  const keptSubmit = board.submitOrder.filter((key) => restored.items[key] === undefined);
-  const keptDisplay = board.displayOrder.filter((key) => restored.items[key] === undefined);
+  if (s.kind !== "paired") return [];
+  try {
+    const raw = await Storage.getItem(storageKey(s.daemon.url));
+    return raw ? decodeSaved(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 把恢复出来的条目放回列表。存档里的顺序 (savedKeys) 管所有它认得的条目, 包括之前已经放回来的; 这一次会话里新加的、存档里没有的追加在后面。
+ * 已经在列表里的条目不动: 重新配对后轮询重启, 正在上传的文件不能被存档里的旧状态盖掉。
+ */
+function restoreInto(restored: Board, savedKeys: readonly string[]) {
   const items: Record<string, Item> = { ...restored.items };
-  for (const key of keptSubmit) items[key] = board.items[key]!;
-  const merged: Board = {
-    submitOrder: [...restored.submitOrder, ...keptSubmit],
-    displayOrder: [...restored.displayOrder, ...keptDisplay],
-    items,
+  for (const key of board.submitOrder) items[key] = board.items[key]!;
+  const arrange = (current: readonly string[]): string[] => {
+    const placed = new Set<string>();
+    const known = savedKeys.filter((key) => items[key] !== undefined && !placed.has(key) && placed.add(key));
+    return [...known, ...current.filter((key) => !placed.has(key))];
   };
-  commit({ board: merged, changed: merged.submitOrder, orderChanged: true });
+  const merged: Board = { items, submitOrder: arrange(board.submitOrder), displayOrder: arrange(board.displayOrder) };
+  commit({ board: merged, changed: Object.keys(restored.items), orderChanged: true });
+}
+
+/**
+ * 还没从 Daemon 恢复的 Job 行。本地文件先于 Job 放回列表 (它们不需要 Daemon), 放回之后的那次保存只含已经在列表里的条目,
+ * 所以这些行要一起写回去, 不然 Daemon 暂时连不上的时候, 存档里的 Job 就被覆盖掉了。
+ */
+let unrestoredJobs: readonly SavedJob[] = [];
+
+/**
+ * 第一步, 不需要 Daemon: 宿主凭存档里的 fileId 找回还没上传的文件, 放回列表 (上传在 Daemon 可用之后接着做)。
+ * 找不回的 (宿主被系统清理了、网页刷新了) 说一声, 不悄悄丢。
+ */
+async function restoreLocals(saved: readonly SavedJob[]): Promise<void> {
+  const isLocal = (row: SavedJob) => fileIdOfKey(row.id) !== undefined;
+  unrestoredJobs = saved.filter((row) => !isLocal(row) && board.items[row.id] === undefined);
+  const rows = saved.filter((row) => isLocal(row) && board.items[row.id] === undefined);
+  if (rows.length === 0) return;
+  const { board: restored, lost } = restoreBoard(rows, [], await hostedFiles(rows));
+  if (lost > 0) showToast(`有 ${lost} 张还没上传的图片找不到了 (文件已被清理, 网页版刷新页面也会丢), 请重新添加`, "error", LONG_MS);
+  restoreInto(restored, saved.map((row) => row.id));
+}
+
+/** 第二步: 从保存的 id 恢复这台 Daemon 上自己提交过的 Job, Daemon 已不认识的丢弃。 */
+async function restoreJobs(client: NonNullable<ReturnType<typeof api>>, saved: readonly SavedJob[]): Promise<void> {
+  const rows = saved.filter((row) => fileIdOfKey(row.id) === undefined && board.items[row.id] === undefined);
+  const entries = await client.jobs();
+  if (rows.length > 0) restoreInto(restoreBoard(rows, entries, new Map()).board, saved.map((row) => row.id));
+  unrestoredJobs = [];
 }
 
 /** 更换 Daemon: 列表属于旧 Daemon, 清空, 并让宿主释放还没上传的文件。 */
@@ -360,6 +416,7 @@ export function resetBoard() {
   });
   hostPort.release(abandoned);
   board = emptyBoard;
+  unrestoredJobs = [];
   for (const fileId of abandoned) emitOutcome({ type: "removed", fileId });
   itemSignals.clear();
   batch(() => {

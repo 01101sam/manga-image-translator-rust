@@ -7,7 +7,7 @@ import {
   planUploads,
   removeKeys,
   restoreJobs,
-  savedJobs,
+  savedItems,
   startUpload,
   uploadSucceeded,
   type Board,
@@ -230,7 +230,7 @@ describe("the displayed order drives navigation and persistence", () => {
   test("the saved list is in display order with name, size and date, and restores into the same order", () => {
     const board = moveToBack(sortBoard(doneBoard(), choice("size", "desc")).board, "job-c").board;
     expect(board.displayOrder).toEqual(["job-b", "job-a", "job-c"]);
-    const saved = savedJobs(board);
+    const saved = savedItems(board);
     expect(saved).toEqual([
       { id: "job-b", name: "a.png", size: 2, modifiedAt: T + 1 },
       { id: "job-a", name: "c.png", size: 1, modifiedAt: T },

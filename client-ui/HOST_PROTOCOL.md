@@ -89,6 +89,21 @@
 - iOS 在内容来自别的 App 时会问一次「允许粘贴」。宿主先用 `hasImages`、`hasURLs` 这类不触发提示的查询看有没有可读的类型, 没有就不去读内容; 用户可以在系统设置里给这个 App 选「允许」, 之后不再问。
 - 图片一到 TSX 就回到任务页 (⌘V 在哪个分区都能按); 文本框有焦点时 ⌘V 归文本框。
 
+### `files.resolve`
+
+重启后 TSX 凭存档里的 fileId 问宿主还留着哪些还没上传的文件。
+
+```jsonc
+// 参数
+{ "ids": ["…", "…"] }
+// 返回: 找得到的, 与 files.pick 同形的文件引用 (带 thumb); 找不到的不在里面
+{ "files": [{ "id": "…", "name": "page01.png", "size": 123456, "type": "image/png", "thumb": "data:image/jpeg;base64,…" }] }
+```
+
+- App: 图片放在 Application Support 的 `images/<uuid>/`, 所以重启后还在; 凭 id (按 uuid 校验后) 到磁盘上找, 并刷新目录的修改时间, 让它不被启动清理当成孤儿 (14 天没被找回的才清)。`modifiedAt` 不返回: 它是导入时从原文件读的, 沙盒里的副本没有, TSX 用存档里的值。缩略图读的是导入时存在条目目录里的 `.thumb`, 不重新解码图片。
+- Web: 恒为 `{ "files": [] }` (File 对象刷新页面就没了); TSX 因此提示「N 张还没上传的图片找不到了」。
+- 没有这个调用的老宿主会 reject, TSX 当作一个都没有。TSX 在每次轮询重启时只对列表里还没有的 fileId 调用一次。
+
 ### `files.release` (post, 无返回)
 
 ```jsonc

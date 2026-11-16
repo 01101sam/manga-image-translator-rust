@@ -1,17 +1,30 @@
 /**
- * 持久化的 Job 行: 重启或刷新后据此从 Daemon 恢复列表。顺序就是当时的显示顺序。
+ * 持久化的一行: 重启或刷新后据此恢复列表。顺序就是当时的显示顺序。
  * 文件名、大小、修改时间来自导入时, 恢复后排序还要用, 所以一起存。
+ * `id` 是 Job 的 id; 还没上传的文件 (待上传、上传中、被拒绝) 是 `local:<宿主的 fileId>`, 多存一个 type 和被拒绝的原因,
+ * 重启后由宿主凭 fileId 找回文件 (缩略图不存: 每次存档都整份写, 几百张缩略图会让存档大到拖慢列表, 宿主自己留着)。
  */
 export interface SavedJob {
   readonly id: string;
   readonly name?: string;
   readonly size?: number;
   readonly modifiedAt?: number;
+  readonly type?: string;
+  readonly rejected?: string;
 }
 
-/** 紧凑格式 [[id, name, size, modifiedAt], ...], 缺失的值写 null, 两千项也只有几十 KB。 */
+/**
+ * 紧凑格式 [[id, name, size, modifiedAt], ...], 缺失的值写 null, 两千项也只有几十 KB。
+ * 还没上传的文件的行多两项 [..., type, rejected]; 没有这两项时行和以前一样, 老版本也读得懂。
+ */
 export function encodeSaved(jobs: readonly SavedJob[]): string {
-  return JSON.stringify(jobs.map((job) => [job.id, job.name ?? null, job.size ?? null, job.modifiedAt ?? null]));
+  return JSON.stringify(
+    jobs.map((job) => {
+      const row: (string | number | null)[] = [job.id, job.name ?? null, job.size ?? null, job.modifiedAt ?? null];
+      if (job.type !== undefined || job.rejected !== undefined) row.push(job.type ?? null, job.rejected ?? null);
+      return row;
+    }),
+  );
 }
 
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -28,13 +41,15 @@ export function decodeSaved(raw: string): SavedJob[] {
   return rows.flatMap((row): SavedJob[] => {
     if (typeof row === "string") return [{ id: row }];
     if (!Array.isArray(row) || typeof row[0] !== "string") return [];
-    const [id, name, size, modifiedAt] = row as unknown[] & [string];
+    const [id, name, size, modifiedAt, type, rejected] = row as unknown[] & [string];
     return [
       {
         id,
         name: typeof name === "string" ? name : undefined,
         size: finite(size) && size > 0 ? size : undefined,
         modifiedAt: finite(modifiedAt) && modifiedAt > 0 ? modifiedAt : undefined,
+        ...(typeof type === "string" ? { type } : {}),
+        ...(typeof rejected === "string" ? { rejected } : {}),
       },
     ];
   });

@@ -144,17 +144,71 @@ final class HostFilesTests: XCTestCase {
         XCTAssertNil(files.pdfURL(for: ref.id))
     }
 
-    func testCleanOnLaunchDropsTransientFilesAndStalePDFsOnly() throws {
+    func testCleanOnLaunchDropsScratchAndOldFilesButKeepsRecentImagesAndPDFs() throws {
         let files = makeFiles()
         let image = try files.adopt(try write("a.png"), move: true)
+        let oldImage = try files.adopt(try write("old.png"), move: true)
+        let oldDirectory = try XCTUnwrap(files.url(for: oldImage.id)).deletingLastPathComponent()
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -15 * 24 * 3600)], ofItemAtPath: oldDirectory.path)
+        let scratch = files.scratchFile(named: "upload.body")
+        try Data("x".utf8).write(to: scratch)
         let stale = try files.importPDF(from: try makePDF(pages: 1), move: false)
         let fresh = try files.importPDF(from: try makePDF(pages: 1), move: false)
         let staleURL = try XCTUnwrap(files.pdfURL(for: stale.id))
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -31 * 24 * 3600)], ofItemAtPath: staleURL.path)
         files.cleanOnLaunch()
-        XCTAssertNil(files.url(for: image.id))
+        XCTAssertNotNil(files.url(for: image.id), "an image that may still be in the saved list must survive a launch")
+        XCTAssertNil(files.url(for: oldImage.id), "an image nobody has claimed for two weeks is an orphan")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scratch.path))
         XCTAssertNil(files.pdfURL(for: stale.id))
         XCTAssertNotNil(files.pdfURL(for: fresh.id))
+    }
+
+    /// 用户的真机复现之一: 待上传的图片只在 JS 内存里, App 在上传前被杀就没了。现在存档里有 fileId, 重启后宿主凭它找回文件和缩略图。
+    func testAnImageIsFoundByItsIDAfterARestartWithItsNameSizeAndThumbnail() throws {
+        let source = directory.appendingPathComponent("page.png")
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        try UIGraphicsImageRenderer(size: CGSize(width: 120, height: 80), format: format).pngData { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 120, height: 80))
+        }.write(to: source)
+        let before = makeFiles()
+        let ref = try before.adopt(source, move: true)
+        XCTAssertNotNil(ref.thumb)
+        let after = makeFiles()
+        after.cleanOnLaunch()
+        let found = after.resolve([ref.id, UUID().uuidString, "../etc", ""])
+        XCTAssertEqual(found.map(\.id), [ref.id])
+        XCTAssertEqual(found.first?.name, "page.png")
+        XCTAssertEqual(found.first?.size, ref.size)
+        XCTAssertEqual(found.first?.type, "image/png")
+        XCTAssertEqual(found.first?.thumb, ref.thumb)
+        XCTAssertEqual(after.url(for: ref.id)?.lastPathComponent, "page.png")
+    }
+
+    func testResolvingRefreshesTheAgeSoAClaimedImageSurvivesTheNextSweepAndTheOrphanDoesNot() throws {
+        let files = makeFiles()
+        let claimed = try files.adopt(try write("claimed.png"), move: true)
+        let orphan = try files.adopt(try write("orphan.png"), move: true)
+        for ref in [claimed, orphan] {
+            let folder = try XCTUnwrap(files.url(for: ref.id)).deletingLastPathComponent()
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -13 * 24 * 3600)], ofItemAtPath: folder.path)
+        }
+        XCTAssertEqual(files.resolve([claimed.id]).count, 1)
+        files.cleanOnLaunch(now: Date(timeIntervalSinceNow: 3 * 24 * 3600))
+        XCTAssertNotNil(files.url(for: claimed.id))
+        XCTAssertNil(files.url(for: orphan.id))
+    }
+
+    func testReleaseAfterARestartStillDeletesTheFile() throws {
+        let before = makeFiles()
+        let ref = try before.adopt(try write("gone.png"), move: true)
+        let stored = try XCTUnwrap(before.url(for: ref.id))
+        let after = makeFiles()
+        after.release([ref.id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stored.path))
+        XCTAssertNil(after.url(for: ref.id))
     }
 
     func testSharedFileKeepsTheCleanNameInItsOwnDirectory() {

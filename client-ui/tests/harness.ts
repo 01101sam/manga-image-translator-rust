@@ -22,6 +22,8 @@ export interface Harness {
   /** 宿主在 files.resolve 里认得的文件 (重启后还留着的待上传)。 */
   readonly resolve?: (ids: readonly string[]) => HostFileRef[];
   readonly storage?: Record<string, string>;
+  /** 替换 Daemon 替身的网络桩 (比如让 GET /jobs 暂时连不上)。 */
+  readonly network?: FakeDaemon["network"];
   readonly platform?: "ios" | "web";
   readonly width?: number;
   readonly height?: number;
@@ -51,7 +53,7 @@ export async function launchPaired(scenario: Harness) {
   };
   return open("../App.tsx", {
     clock: {},
-    network: scenario.daemon.network,
+    network: scenario.network ?? scenario.daemon.network,
     host: { handlers },
     ...(scenario.storage ? { storage: scenario.storage } : {}),
     ...(scenario.platform ? { platform: scenario.platform } : {}),

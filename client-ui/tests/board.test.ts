@@ -2,6 +2,7 @@ import { describe, expect, test } from "nsh/test";
 import {
   addFiles,
   applyJobEvent,
+  boardIssues,
   applyJobList,
   clearableKeys,
   isRemovable,
@@ -11,7 +12,9 @@ import {
   jobsNeedingError,
   planUploads,
   removeKeys,
+  restoreBoard,
   restoreJobs,
+  savedItems,
   retryRejected,
   startUpload,
   uploadRejected,
@@ -200,5 +203,35 @@ describe("Board", () => {
       board = applyJobList(board, active.slice(0, 10).map((jobId) => ({ jobId, state: "done" as const }))).board;
     }
     expect(submittedCount).toBe(200);
+  });
+
+  test("waiting, uploading and refused files are saved with the Jobs in display order, and come back as Pending", () => {
+    let board = addFiles(emptyBoard, [file("w"), file("u"), file("r"), file("j")]).board;
+    board = startUpload(board, "local:u").board;
+    board = startUpload(board, "local:r").board;
+    board = uploadRejected(board, "local:r", "格式不支持").board;
+    board = submitted(board, "j", "job-9");
+    const saved = savedItems(board);
+    expect(saved.map((row) => row.id)).toEqual(["local:w", "local:u", "local:r", "job-9"]);
+    expect(saved[2]).toEqual({ id: "local:r", name: "r.png", size: 10, modifiedAt: undefined, type: "image/png", rejected: "格式不支持" });
+    expect("rejected" in saved[1]!).toBe(false);
+
+    const found = new Map(["w", "u", "r"].map((id) => [id, { ...file(id), thumb: "data:image/jpeg;base64,AAA" }] as const));
+    const { board: restored, lost } = restoreBoard(saved, [{ jobId: "job-9", state: "done" }], found);
+    expect(lost).toBe(0);
+    expect(restored.displayOrder).toEqual(["local:w", "local:u", "local:r", "job-9"]);
+    expect(restored.items["local:u"]).toMatchObject({ kind: "pending", file: { id: "u", thumb: "data:image/jpeg;base64,AAA" } });
+    expect(restored.items["local:r"]).toMatchObject({ kind: "pending", rejected: "格式不支持" });
+    expect("rejected" in restored.items["local:w"]!).toBe(false);
+    expect(restored.items["job-9"]!.kind).toBe("job");
+    expect(boardIssues(restored)).toEqual([]);
+  });
+
+  test("a saved file the host no longer has is dropped and counted, and a Job the Daemon forgot is dropped silently", () => {
+    const saved = [{ id: "local:gone" }, { id: "local:here", name: "here.png" }, { id: "job-old" }];
+    const { board, lost } = restoreBoard(saved, [], new Map([["here", file("here")]]));
+    expect(lost).toBe(1);
+    expect(board.displayOrder).toEqual(["local:here"]);
+    expect(restoreJobs(saved, []).displayOrder).toEqual([]);
   });
 });

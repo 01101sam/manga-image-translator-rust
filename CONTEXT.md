@@ -21,7 +21,7 @@ _Avoid_: thread、process
 _Avoid_: task、request
 
 **Pending Upload**:
-Client 已接收、尚未提交给 Daemon 的图片。Queue 满时图片停在这里,按顺序成为 Job。它不属于 Job 的生命周期,取消它不涉及 Daemon。
+Client 已接收、尚未提交给 Daemon 的图片。Queue 满时图片停在这里,按顺序成为 Job。它不属于 Job 的生命周期,取消它不涉及 Daemon。文件留在 Client 自己的存储里,随列表保存,App 被杀或重启后回来并接着上传。
 _Avoid_: queued、draft
 
 **Display Order**:

@@ -616,6 +616,9 @@ export async function createHost(player) {
           return null;
         case "files.pick":
           return hasDom ? pick(Math.min(args?.limit ?? MAX_PICK, MAX_PICK), args?.source) : { files: [] };
+        case "files.resolve":
+          // 网页的文件是 File 对象, 刷新页面就没了, 没有可以找回的东西。
+          return { files: [] };
         case "upload.start":
           return upload(args);
         case "artifact.save":

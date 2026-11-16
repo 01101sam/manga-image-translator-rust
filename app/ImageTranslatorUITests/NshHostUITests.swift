@@ -11,7 +11,9 @@ final class NshHostUITests: XCTestCase {
     private var folder: String { ProcessInfo.processInfo.environment["HOST_PICK_FOLDER"] ?? "/tmp/nsh-ui-work/imgs" }
 
     /// 不需要 Daemon 的用例配到这个地址 (127.0.0.1:1, 没有人听): 配到测试 Daemon 的端口会因为假 Token 收到 401, 回到配对页。
-    private let offlinePairing = ["-paired-test", "127.0.0.1", "1", "unused-token"]
+    /// 端口每个用例随机一个: 待上传的图片现在跟着 TSX 存档按 Daemon 地址保存, 重启后会回来, 地址不换的话上一个用例留下的图片会混进下一个用例的数目。
+    /// 一个用例里的几次启动用同一个地址 (offlinePairing 是实例属性, 每个用例一份)。
+    private let offlinePairing = ["-paired-test", "127.0.0.1", String(Int.random(in: 40_000...49_999)), "unused-token"]
 
     override func setUp() {
         continueAfterFailure = false
@@ -377,6 +379,46 @@ final class NshHostUITests: XCTestCase {
             XCTAssertLessThan(abs(found.r - expected.0), 70, "\(name) thumbnail red=\(found.r)")
             XCTAssertLessThan(abs(found.g - expected.1), 70, "\(name) thumbnail green=\(found.g)")
             XCTAssertLessThan(abs(found.b - expected.2), 70, "\(name) thumbnail blue=\(found.b)")
+        }
+    }
+
+    /// 待上传的图片在 App 被杀之后回来: 以前它们只在 JS 内存里, 现在存档里有宿主的 fileId, 重启后宿主凭它找回文件和缩略图。
+    /// Daemon 不通 (没有人听的端口), 所以图片留在待上传, 也不需要 Daemon。
+    func testPendingImagesComeBackWithTheirThumbnailsAfterTheAppIsKilledAndRelaunched() throws {
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("it-restore-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: scratch) }
+        _ = try writeSolidImage("red.png", colour: .red, type: .png, into: scratch)
+        _ = try writeSolidImage("blue.heic", colour: .blue, type: .heic, into: scratch)
+        let first = launch(offlinePairing + ["-pick-folder", scratch.path], seed: false)
+        XCTAssertTrue(element(first, "add-images").waitForExistence(timeout: 30))
+        element(first, "add-images").tap()
+        XCTAssertTrue(element(first, "import-files").waitForExistence(timeout: 10))
+        element(first, "import-files").tap()
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "共 2 张"), evaluatedWith: element(first, "jobs-summary"))
+        waitForExpectations(timeout: 30)
+        // 存档在列表变化 0.4 秒之后写; 等它写完再杀。
+        sleep(3)
+        first.terminate()
+        // 原文件已不在 (原目录里的两个文件也删掉): 回来的只能是宿主沙盒里留着的副本。
+        try FileManager.default.removeItem(at: scratch.appendingPathComponent("red.png"))
+        try FileManager.default.removeItem(at: scratch.appendingPathComponent("blue.heic"))
+        let second = launch(offlinePairing, seed: false)
+        let summary = element(second, "jobs-summary")
+        XCTAssertTrue(summary.waitForExistence(timeout: 30))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "共 2 张"), evaluatedWith: summary)
+        waitForExpectations(timeout: 30)
+        func tile(_ name: String) -> XCUIElement {
+            second.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", name + ",")).firstMatch
+        }
+        for name in ["blue.jpg", "red.png"] { XCTAssertTrue(tile(name).waitForExistence(timeout: 10), "\(name) did not come back") }
+        sleep(2)
+        let screenshot = second.screenshot()
+        shot(second, "pending-images-after-relaunch")
+        for (name, expected) in [("red.png", (255, 0, 0)), ("blue.jpg", (0, 0, 255))] {
+            let frame = tile(name).frame
+            let found = try colour(in: screenshot, at: CGPoint(x: frame.midX, y: frame.minY + frame.height * 0.3), appWidth: second.frame.width)
+            XCTAssertLessThan(abs(found.r - expected.0) + abs(found.g - expected.1) + abs(found.b - expected.2), 150, "\(name) thumbnail is \(found)")
         }
     }
 

@@ -33,6 +33,8 @@ export interface HostPort {
   pickFiles(limit: number, source: PickSource): Promise<LocalFile[]>;
   /** 读系统剪贴板里的图片 (PDF 走 pdf.added)。宿主声明了 paste 才会被调用。 */
   paste(): Promise<LocalFile[]>;
+  /** 重启后凭存档里的 fileId 找回宿主还留着的待上传文件 (App 留在沙盒里; Web 的 File 随页面消失, 恒为空)。找不到的不在返回值里。 */
+  resolve(ids: readonly string[]): Promise<LocalFile[]>;
   release(ids: readonly string[]): void;
   upload(request: UploadRequest): Promise<UploadOutcome>;
   saveArtifact(url: string, filename: string): Promise<void>;
@@ -119,6 +121,11 @@ export function createHostPort(): HostPort {
     },
     paste: async () => {
       const answer = await host.call("files.paste", undefined, NO_TIMEOUT);
+      return parseFiles(isRecord(answer) ? answer.files : []);
+    },
+    resolve: async (ids) => {
+      if (ids.length === 0) return [];
+      const answer = await host.call("files.resolve", { ids });
       return parseFiles(isRecord(answer) ? answer.files : []);
     },
     release: (ids) => {

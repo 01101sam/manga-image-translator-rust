@@ -23,6 +23,24 @@ describe("saved jobs", () => {
     ]);
   });
 
+  test("a file that is not uploaded yet keeps its type and the reason it was refused, and an ordinary row is unchanged", () => {
+    const rows = [
+      { id: "job-1", name: "a.png", size: 5, modifiedAt: 9 },
+      { id: "local:F1", name: "b.jpg", size: 7, modifiedAt: 11, type: "image/jpeg" },
+      { id: "local:F2", name: "c.jpg", type: "image/jpeg", rejected: "格式不支持" },
+    ];
+    expect(JSON.parse(encodeSaved(rows))).toEqual([
+      ["job-1", "a.png", 5, 9],
+      ["local:F1", "b.jpg", 7, 11, "image/jpeg", null],
+      ["local:F2", "c.jpg", null, null, "image/jpeg", "格式不支持"],
+    ]);
+    expect(decodeSaved(encodeSaved(rows))).toEqual([
+      { id: "job-1", name: "a.png", size: 5, modifiedAt: 9 },
+      { id: "local:F1", name: "b.jpg", size: 7, modifiedAt: 11, type: "image/jpeg" },
+      { id: "local:F2", name: "c.jpg", type: "image/jpeg", rejected: "格式不支持" },
+    ]);
+  });
+
   test("older saves still load: bare ids and [id, name] pairs", () => {
     expect(decodeSaved(JSON.stringify(["a", ["b", "b.png"], ["c", null]]))).toEqual([
       { id: "a" },

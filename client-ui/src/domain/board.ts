@@ -97,7 +97,9 @@ export function repairBoard(board: Board): Board {
   return { ...board, submitOrder: fix(board.submitOrder), displayOrder: fix(board.displayOrder) };
 }
 
-export const localKey = (fileId: string): string => `local:${fileId}`;
+const LOCAL_PREFIX = "local:";
+
+export const localKey = (fileId: string): string => LOCAL_PREFIX + fileId;
 
 export const unchanged = (board: Board): Change => ({ board, changed: [], orderChanged: false });
 
@@ -225,25 +227,76 @@ export function jobsNeedingError(board: Board): string[] {
   });
 }
 
-/** 用保存的列表和 Daemon 当前的批量状态重建 Job Item, 保持保存时的顺序, Daemon 已不认识的丢弃。 */
-export function restoreJobs(saved: readonly SavedJob[], entries: readonly JobEntry[]): Board {
+/** 本地条目的 key 里的宿主 fileId; 不是本地条目 (Job 的 id) 返回 undefined。 */
+export const fileIdOfKey = (key: string): string | undefined => (key.startsWith(LOCAL_PREFIX) ? key.slice(LOCAL_PREFIX.length) : undefined);
+
+export interface Restored {
+  readonly board: Board;
+  /** 存档里还没上传的文件, 宿主已经找不到了 (被系统清理、网页刷新过): 数量, 供提示。 */
+  readonly lost: number;
+}
+
+/**
+ * 用保存的列表、Daemon 当前的批量状态和宿主还留着的文件重建 Board, 保持保存时的顺序。
+ * Daemon 已不认识的 Job 丢弃; 还没上传的文件宿主 (`found`, fileId 到文件引用) 找不回的丢弃并计数。
+ * 找回的文件回到 Pending (上传中的也是: 重启时那次上传已经没有了), 被拒绝的保持被拒绝。
+ */
+export function restoreBoard(saved: readonly SavedJob[], entries: readonly JobEntry[], found: ReadonlyMap<string, LocalFile>): Restored {
   const byId = new Map(entries.map((entry) => [entry.jobId, entry] as const));
   const order: string[] = [];
   const items: Record<string, Item> = {};
-  for (const { id, name, size, modifiedAt } of saved) {
+  let lost = 0;
+  for (const { id, name, size, modifiedAt, type, rejected } of saved) {
+    if (items[id] !== undefined) continue;
+    const fileId = fileIdOfKey(id);
+    if (fileId !== undefined) {
+      const hosted = found.get(fileId);
+      if (hosted === undefined) {
+        lost++;
+        continue;
+      }
+      const file: LocalFile = {
+        ...hosted,
+        name: name ?? hosted.name,
+        size: size ?? hosted.size,
+        type: type ?? hosted.type,
+        ...(modifiedAt === undefined ? {} : { modifiedAt }),
+      };
+      order.push(id);
+      items[id] = { kind: "pending", key: id, file, ...(rejected === undefined ? {} : { rejected }) };
+      continue;
+    }
     const entry = byId.get(id);
-    if (!entry || items[id] !== undefined) continue;
+    if (!entry) continue;
     order.push(id);
     items[id] = { kind: "job", key: id, name, size, modifiedAt, row: jobFromEntry(entry) };
   }
-  return { submitOrder: order, displayOrder: order, items };
+  return { board: { submitOrder: order, displayOrder: order, items }, lost };
 }
 
-/** 按显示顺序存, 重启后列表就是用户看到的样子。 */
-export function savedJobs(board: Board): SavedJob[] {
-  return board.displayOrder.flatMap((key) => {
+/** 只恢复 Job (没有宿主可问时)。 */
+export const restoreJobs = (saved: readonly SavedJob[], entries: readonly JobEntry[]): Board => restoreBoard(saved, entries, new Map()).board;
+
+/**
+ * 按显示顺序存, 重启后列表就是用户看到的样子。Job 存名字、大小、修改时间; 还没上传的文件 (上传中的当作待上传) 多存 type 和被拒绝的原因,
+ * 文件本身留在宿主里, 凭 fileId 找回。
+ */
+export function savedItems(board: Board): SavedJob[] {
+  return board.displayOrder.flatMap((key): SavedJob[] => {
     const item = board.items[key];
-    return item?.kind === "job" ? [{ id: key, name: item.name, size: item.size, modifiedAt: item.modifiedAt }] : [];
+    if (item === undefined) return [];
+    if (item.kind === "job") return [{ id: key, name: item.name, size: item.size, modifiedAt: item.modifiedAt }];
+    const { name, size, modifiedAt, type } = item.file;
+    return [
+      {
+        id: key,
+        name,
+        size: size > 0 ? size : undefined,
+        modifiedAt,
+        type,
+        ...(item.kind === "pending" && item.rejected !== undefined ? { rejected: item.rejected } : {}),
+      },
+    ];
   });
 }
 

@@ -22,7 +22,7 @@ src/domain/        纯函数与状态机, 不依赖 nsh; tests/ 里逐个测
   arrange.ts       一次性排序 (名称自然序、日期、大小, 缺值排末尾) 与单项移动, 只改 displayOrder
   natural.ts       文件名的自然序比较: 数字段按数值, 不依赖 Intl.Collator (嵌入 App 的引擎里没有)
   reorder.ts       拖动重排的几何: 每个单元格的位置、落点、指示线、边缘自动滚动的速度
-  saved.ts         随 Job 保存的行 (id、名字、大小、修改时间) 的读写
+  saved.ts         随列表保存的行的读写: Job (id、名字、大小、修改时间) 和还没上传的文件 (`local:<fileId>`, 另存 type 和被拒绝的原因)
   nav.ts           键盘高亮与查看器的移动
   reader.ts        PDF 阅读器每页的状态机 (移植自旧 Client 的 PageMachine) 与翻页、渲染节奏的纯函数
   config.ts        Config 表单的字段表、校验、整份文档的改写
@@ -40,7 +40,7 @@ tests/             nsh test: 领域单测 + 整个界面的无头流程测试
 - 图片字节不进 JS (嵌入式 NSH 的 JS 堆上限 256 MB)。列表缩略图用 `<Image src=".../source|artifact?w=256&token=...">`, 查看器用 `w=2048`; 选文件、拖放、上传由宿主完成。
 - 状态机在 `src/domain`: 配对、Job、列表 Board 都是纯函数 reducer, 返回新状态和要执行的命令; store 执行命令、写 signal。
 - 轮询: 配对后每秒一次 `GET /jobs`, 只更新变化的行; 每 3 秒查一次 Engine。上一轮没结束不会开下一轮。
-- 显示顺序: 排序和拖动只改 `displayOrder`, 不改 `submitOrder`, 所以不影响 Pending 提交给 Daemon 的先后, 也不影响 Daemon 的队列; 新加入的条目追加在末尾, 不会自动维持排序。`displayOrder` 随 Job 的 id、名字、大小、修改时间存进 NSH Storage (`jobs:<daemon url>`), 重启或刷新后按它恢复。
+- 显示顺序: 排序和拖动只改 `displayOrder`, 不改 `submitOrder`, 所以不影响 Pending 提交给 Daemon 的先后, 也不影响 Daemon 的队列; 新加入的条目追加在末尾, 不会自动维持排序。`displayOrder` 随 Job 的 id、名字、大小、修改时间存进 NSH Storage (`jobs:<daemon url>`), 重启或刷新后按它恢复。还没上传的文件 (待上传、上传中、被拒绝) 也在这份存档里 (宿主的 fileId、名字、大小、type、被拒绝的原因; 缩略图不存, 宿主自己留着); 重启后先不等 Daemon, 向宿主 `files.resolve` 找回文件放回列表, Job 等 Daemon 应答后再放回、各自回到存档里的位置, 上传接着做。
 - 上传调度: 本地 Pending 按加入顺序提交, 在途 (上传中 + 排队 + 翻译中) 不超过 Daemon 队列容量 64, 同时上传不超过 3 个; 429 回到 Pending 重试, Engine 停止时暂停。
 - PDF 不上传: 当前页由宿主显示 (App 是 PDFKit 的原生组件 `it.pdf`, Web 是 pdf.js 的 canvas), 要翻译的页由宿主渲染成 PNG 文件, 再走和图片同一条 `upload.start`, 成为任务列表里的普通 Job。页图一页一页地渲染, 已渲染未上传的最多 5 张, 所以「翻译全部」不会一次把整本变成 PNG。
 - 401: 任何受保护请求收到 401 就清掉 Token 回到配对页, 本地待上传的文件保留。
