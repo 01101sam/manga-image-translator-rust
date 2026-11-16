@@ -65,11 +65,6 @@ function chooseFiles(accept, multiple) {
   });
 }
 
-async function pickFromDialog(limit) {
-  const list = await chooseFiles("image/*", true);
-  return { files: register(list.filter(isImage).slice(0, limit)) };
-}
-
 const KIND_BY_STATUS = new Map([
   [401, "unauthorized"],
   [429, "queue-full"],
@@ -132,6 +127,14 @@ const OVERLAY_MAX_EDGE = 3000;
 /** 没人用的文档放这么久之后释放; 回到阅读器时再打开 (读一次文件头尾, 不到一秒)。 */
 const DOC_IDLE_MS = 20_000;
 const isPdf = (file) => file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+
+/** 把一批文件分成图片、PDF 和别的 (别的只数个数, 用来提示)。 */
+function sortFiles(all) {
+  const images = all.filter(isImage);
+  const documents = all.filter(isPdf);
+  return { images, documents, ignored: all.length - images.length - documents.length };
+}
+
 const messageOf = (error) => (error && error.message ? error.message : String(error));
 
 // 同源的静态文件, 由 scripts/build-ui.sh web 拷进站点的 pdfjs/。模块按绝对 URL 导入 (host.js 是原样拷贝的)。
@@ -420,22 +423,28 @@ function disposeOverlay() {
 
 export async function createHost(player) {
   const notice = (text) => player.hostEvent("host.notice", { text });
-  const add = async (items, plainFiles) => {
-    const all = await filesFromTransfer(items, plainFiles);
-    const images = all.filter(isImage).slice(0, MAX_PICK);
-    const documents = all.filter(isPdf);
-    const ignored = all.length - images.length - documents.length;
+  /** PDF 走 pdf.added, 其余给提示。阅读器一次只开一个 PDF; 其余的不登记, 免得白占一个 object URL。 */
+  const announce = async ({ documents, ignored }) => {
     if (ignored > 0) notice("已忽略 " + ignored + " 个不是图片或 PDF 的文件");
-    if (images.length > 0) player.hostEvent("files.added", register(images));
-    if (documents.length > 0) {
-      // 阅读器一次只开一个 PDF; 其余的不登记, 免得白占一个 object URL。
-      if (documents.length > 1) notice("一次只打开一个 PDF, 已忽略另外 " + (documents.length - 1) + " 个");
-      try {
-        player.hostEvent("pdf.added", [await adoptPdf(documents[0])]);
-      } catch (error) {
-        notice(messageOf(error));
-      }
+    if (documents.length === 0) return;
+    if (documents.length > 1) notice("一次只打开一个 PDF, 已忽略另外 " + (documents.length - 1) + " 个");
+    try {
+      player.hostEvent("pdf.added", [await adoptPdf(documents[0])]);
+    } catch (error) {
+      notice(messageOf(error));
     }
+  };
+  /** 拖放和粘贴: 图片走 files.added。 */
+  const add = async (items, plainFiles) => {
+    const sorted = sortFiles(await filesFromTransfer(items, plainFiles));
+    if (sorted.images.length > 0) player.hostEvent("files.added", register(sorted.images.slice(0, MAX_PICK)));
+    await announce(sorted);
+  };
+  /** files.pick: 图片放在返回值里, PDF 与拖放一样走 pdf.added。 */
+  const pick = async (limit) => {
+    const sorted = sortFiles(await chooseFiles("image/*,application/pdf,.pdf", true));
+    await announce(sorted);
+    return { files: register(sorted.images.slice(0, limit)) };
   };
 
   if (hasDom) {
@@ -479,13 +488,15 @@ export async function createHost(player) {
           return {
             daemons: hasDom ? [{ name: location.host, url: location.origin }] : [],
             paired: null,
+            // 网页没有相册; 文件对话框里图片和 PDF 都能选。
+            imports: ["files", "pdf"],
           };
         case "session.saveToken":
         case "session.clearToken":
           // Web 的 Token 由 TSX 存进 NSH Storage, 宿主不参与。
           return null;
         case "files.pick":
-          return hasDom ? pickFromDialog(Math.min(args?.limit ?? MAX_PICK, MAX_PICK)) : { files: [] };
+          return hasDom ? pick(Math.min(args?.limit ?? MAX_PICK, MAX_PICK)) : { files: [] };
         case "upload.start":
           return upload(args);
         case "artifact.save":

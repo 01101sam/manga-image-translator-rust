@@ -2,21 +2,6 @@ import PhotosUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// 图片的三个来源。iPad 与 visionOS 的 action sheet 必须有 popover 锚点。
-enum ImageSource: CaseIterable {
-    case photos
-    case files
-    case folder
-
-    var title: String {
-        switch self {
-        case .photos: return "照片"
-        case .files: return "文件"
-        case .folder: return "文件夹"
-        }
-    }
-}
-
 enum PickerOutcome {
     case providers([NSItemProvider])
     case urls([URL])
@@ -34,23 +19,6 @@ final class PickerPresenter: NSObject, PHPickerViewControllerDelegate, UIDocumen
     }
 
     var isBusy: Bool { pending != nil }
-
-    func chooseImageSource() async -> ImageSource? {
-        guard let host, !isBusy else { return nil }
-        return await withCheckedContinuation { continuation in
-            let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
-            for source in ImageSource.allCases {
-                sheet.addAction(UIAlertAction(title: source.title, style: .default) { _ in continuation.resume(returning: source) })
-            }
-            sheet.addAction(UIAlertAction(title: "取消", style: .cancel) { _ in continuation.resume(returning: nil) })
-            if let popover = sheet.popoverPresentationController {
-                popover.sourceView = host.view
-                popover.sourceRect = CGRect(x: host.view.bounds.midX, y: host.view.bounds.midY, width: 0, height: 0)
-                popover.permittedArrowDirections = []
-            }
-            host.present(sheet, animated: true)
-        }
-    }
 
     func pickPhotos(limit: Int) async -> PickerOutcome {
         var configuration = PHPickerConfiguration()

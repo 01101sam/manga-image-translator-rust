@@ -1,6 +1,7 @@
 import { computed, platform, signal, Storage } from "nsh";
 import { createApi, DaemonError, type Api } from "../api/daemon";
 import { initialSession, reduceSession, type Session, type SessionCommand, type SessionEvent } from "../domain/session";
+import { DEFAULT_IMPORTS, type ImportSource } from "../domain/import";
 import type { DaemonRef } from "../domain/types";
 import { createHostPort } from "../ports/host";
 
@@ -10,6 +11,8 @@ export const hostPort = createHostPort();
 export const session = signal<Session>(initialSession);
 /** 此刻发现的 Daemon, 「更换 Daemon」回到列表时用。 */
 export const knownDaemons = signal<readonly DaemonRef[]>([]);
+/** 宿主支持的导入入口; 快照没读到之前用保底的几项。 */
+export const importSources = signal<readonly ImportSource[]>(DEFAULT_IMPORTS);
 /** 宿主没有应答或快照不可读时的说明。 */
 export const startupError = signal<string | null>(null);
 
@@ -93,6 +96,7 @@ export async function startSession(): Promise<void> {
   try {
     const snapshot = await hostPort.snapshot();
     knownDaemons.set(snapshot.daemons);
+    importSources.set(snapshot.imports);
     const saved = snapshot.paired ?? (tokensInStorage ? await savedFromStorage(snapshot.daemons) : null);
     if (saved) dispatch({ type: "restored", daemon: saved.daemon, token: saved.token });
     else dispatch({ type: "daemons", daemons: snapshot.daemons });

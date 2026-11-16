@@ -33,6 +33,39 @@ actor AsyncLimiter {
     }
 }
 
+/// 宿主要发给 TSX 的一个事件。
+struct HostEvent {
+    let name: String
+    let payload: Any
+}
+
+/// 一次导入的结果该发给 TSX 什么。图片走 files.added (files.pick 则放在返回值里), PDF 走 pdf.added,
+/// 其余给一条提示。阅读器一次只开一个 PDF: 多出来的不交给 TSX, 宿主立刻放掉它们在沙盒里的副本。
+struct ImportDelivery {
+    let images: [FileRef]
+    let pdf: FileRef?
+    let droppedPDFs: [FileRef]
+    let ignored: Int
+
+    init(_ result: IngestResult) {
+        images = result.images
+        pdf = result.pdfs.first
+        droppedPDFs = Array(result.pdfs.dropFirst())
+        ignored = result.ignored
+    }
+
+    func events(includeImages: Bool = true) -> [HostEvent] {
+        var events: [HostEvent] = []
+        if includeImages, !images.isEmpty { events.append(HostEvent(name: "files.added", payload: images.map(\.json))) }
+        if let pdf { events.append(HostEvent(name: "pdf.added", payload: [pdf.json])) }
+        if !droppedPDFs.isEmpty {
+            events.append(HostEvent(name: "host.notice", payload: ["text": "一次只打开一个 PDF, 已忽略另外 \(droppedPDFs.count) 个"]))
+        }
+        if ignored > 0 { events.append(HostEvent(name: "host.notice", payload: ["text": "已忽略 \(ignored) 个不是图片或 PDF 的文件"])) }
+        return events
+    }
+}
+
 /// NSItemProvider 没有标 Sendable, 但读取它的回调本来就是跨线程设计的。
 struct ProviderBox: @unchecked Sendable {
     let value: NSItemProvider

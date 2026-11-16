@@ -26,6 +26,7 @@ import {
   type Item,
 } from "../domain/board";
 import { adjacentDone, moveHighlight } from "../domain/nav";
+import type { PickSource } from "../domain/import";
 import type { LocalFile } from "../domain/types";
 import { engineAcceptsJobs, engineState, queueCapacity, refreshEngine } from "./engine";
 import { overrides } from "./overrides";
@@ -117,9 +118,9 @@ export function addLocalFiles(files: readonly LocalFile[]) {
   pump();
 }
 
-export async function pickAndAdd(): Promise<void> {
+export async function pickAndAdd(source: PickSource): Promise<void> {
   try {
-    addLocalFiles(await hostPort.pickFiles(200));
+    addLocalFiles(await hostPort.pickFiles(200, source));
   } catch (error) {
     showToast(`无法选择文件: ${error instanceof Error ? error.message : String(error)}`, "error");
   }

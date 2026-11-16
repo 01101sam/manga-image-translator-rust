@@ -467,3 +467,38 @@ final class LinkStub: URLProtocol, @unchecked Sendable {
 
     override func stopLoading() {}
 }
+
+/// 一次导入的结果发给 TSX 什么 (NshHostViewController 把这些事件原样发出去)。
+final class ImportDeliveryTests: XCTestCase {
+    private func ref(_ name: String, type: String = "image/png") -> FileRef {
+        FileRef(id: UUID().uuidString, name: name, size: 1, type: type)
+    }
+
+    func testImagesPdfAndIgnoredEachGetTheirOwnEvent() {
+        let result = IngestResult(images: [ref("a.png"), ref("b.png")], pdfs: [ref("book.pdf", type: "application/pdf")], ignored: 3)
+        let events = ImportDelivery(result).events()
+        XCTAssertEqual(events.map(\.name), ["files.added", "pdf.added", "host.notice"])
+        XCTAssertEqual((events[0].payload as? [[String: Any]])?.count, 2)
+        XCTAssertEqual((events[2].payload as? [String: String])?["text"], "已忽略 3 个不是图片或 PDF 的文件")
+    }
+
+    func testOnlyTheFirstPDFReachesTheReaderAndTheRestAreNamedForRelease() {
+        let first = ref("one.pdf", type: "application/pdf")
+        let rest = [ref("two.pdf", type: "application/pdf"), ref("three.pdf", type: "application/pdf")]
+        let delivery = ImportDelivery(IngestResult(pdfs: [first] + rest))
+        XCTAssertEqual(delivery.droppedPDFs, rest)
+        let events = delivery.events()
+        XCTAssertEqual(events.map(\.name), ["pdf.added", "host.notice"])
+        XCTAssertEqual((events[0].payload as? [[String: Any]])?.first?["id"] as? String, first.id)
+        XCTAssertEqual((events[1].payload as? [String: String])?["text"], "一次只打开一个 PDF, 已忽略另外 2 个")
+    }
+
+    func testFilesPickKeepsImagesOutOfTheEventsBecauseTheyGoInTheReturnValue() {
+        let delivery = ImportDelivery(IngestResult(images: [ref("a.png")], pdfs: [ref("book.pdf", type: "application/pdf")]))
+        XCTAssertEqual(delivery.events(includeImages: false).map(\.name), ["pdf.added"])
+    }
+
+    func testNothingToSayMeansNoEvents() {
+        XCTAssertTrue(ImportDelivery(IngestResult()).events().isEmpty)
+    }
+}
