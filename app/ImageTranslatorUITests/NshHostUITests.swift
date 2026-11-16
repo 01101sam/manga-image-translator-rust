@@ -220,6 +220,22 @@ final class NshHostUITests: XCTestCase {
         photos.terminate()
     }
 
+    /// 「打开方式」交来的文件: 系统用 URL 打开本 App 时 SwiftUI 的 onOpenURL 要接得住 (XCUIApplication.open 让系统把这个 URL 交给被测的 App),
+    /// 并且走和拖放一样的导入。URL 在 App 容器外面, 所以只能拷不能搬: 原文件必须还在。不需要 Daemon。
+    func testAFileOpenedWithTheAppIsImportedAndTheOriginalIsLeftAlone() throws {
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("it-open-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: scratch) }
+        let pdf = scratch.appendingPathComponent("opened.pdf")
+        try UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 300, height: 400)).writePDF(to: pdf) { $0.beginPage() }
+        let app = launch(["-paired-test", host, port, "unused-token"], seed: false)
+        XCTAssertTrue(element(app, "add-images").waitForExistence(timeout: 30))
+        app.open(pdf)
+        XCTAssertTrue(element(app, "reader-status").waitForExistence(timeout: 30), "onOpenURL did not reach the reader")
+        shot(app, "opened-with-the-app")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: pdf.path), "a file outside the app container must be copied, not moved")
+    }
+
     func testSharingAPhotoFromPhotosShowsTheExtensionAndItConfirms() throws {
         try sharePhotoWithTheExtension()
     }

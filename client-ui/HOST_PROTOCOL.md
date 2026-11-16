@@ -141,7 +141,7 @@
 | 事件 | 载荷 | 说明 |
 |---|---|---|
 | `session.daemons` | `[{ name, url }]` | Bonjour 发现的 Daemon 列表变化 (全量, 不是增量) |
-| `files.added` | `[{ id, name, size, type }]` | 用户拖放、粘贴或从分享入口带进来的图片, 与 `files.pick` 同样的文件引用。Web 的 ⌘V / Ctrl+V 由 `web/host.js` 监听浏览器的 `paste` 事件 (取 `clipboardData.files`), 走这个事件; 拖入的文件夹同样按自然序 |
+| `files.added` | `[{ id, name, size, type }]` | 用户拖放、粘贴, 或从分享扩展、「打开方式」带进来的图片, 与 `files.pick` 同样的文件引用。Web 的 ⌘V / Ctrl+V 由 `web/host.js` 监听浏览器的 `paste` 事件 (取 `clipboardData.files`), 走这个事件; 拖入的文件夹同样按自然序 |
 | `files.dragState` | `{ "active": true \| false }` | 拖拽进入 / 离开窗口, TSX 据此显示「松开以添加」。Web 发; App 可选 |
 | `host.notice` | `{ "text": "…" }` | 一条给用户看的提示 (比如「已忽略 3 个不是图片的文件」), TSX 用 toast 显示 |
 

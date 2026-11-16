@@ -3,11 +3,13 @@ import SwiftUI
 @main
 struct ImageTranslatorApp: App {
     @StateObject private var windowSettings = WindowSettings()
+    private let openRouter = OpenURLRouter()
 
     var body: some Scene {
         WindowGroup {
-            HostRootView()
+            HostRootView(openRouter: openRouter)
                 .environmentObject(windowSettings)
+                .onOpenURL { openRouter.open($0) }
                 .modifier(AppWindowFrame(settings: windowSettings))
         }
         .windowResizability(.contentSize)
@@ -17,12 +19,13 @@ struct ImageTranslatorApp: App {
 
 /// 界面全在 NshAppView 里; SwiftUI 只剩窗口框架, 以及 visionOS 的横竖屏 ornament。
 struct HostRootView: View {
+    let openRouter: OpenURLRouter
     #if os(visionOS)
     @EnvironmentObject private var windowSettings: WindowSettings
     #endif
 
     var body: some View {
-        NshHostView(hooks: TestHooks.fromProcessInfo())
+        NshHostView(hooks: TestHooks.fromProcessInfo(), openRouter: openRouter)
             .ignoresSafeArea(.keyboard)
             #if os(visionOS)
             .ornament(visibility: .visible, attachmentAnchor: .scene(.bottom)) {
