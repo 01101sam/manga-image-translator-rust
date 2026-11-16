@@ -45,6 +45,7 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.addInteraction(UIDropInteraction(delegate: self))
+        if let path = hooks.seedPasteboard { Self.seedPasteboard(from: URL(fileURLWithPath: path)) }
         session.onDaemonsChanged = { [weak self] daemons in self?.appView?.send("session.daemons", daemons) }
         session.start(seed: hooks.browseDaemon)
         mountApp()
@@ -144,6 +145,10 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
             let limit = hostInt(args?["limit"]) ?? 200
             return ["files": try await pickFiles(limit: limit, source: (args?["source"] as? String) ?? "files").map(\.json)]
         }
+        app.handle("files.paste") { [weak self] _ -> Any? in
+            guard let self else { return ["files": [Any]()] }
+            return ["files": await paste().map(\.json)]
+        }
         app.handle("files.release") { [weak self] data, _ in
             let ids = ((data as? [String: Any])?["ids"] as? [Any])?.compactMap { $0 as? String } ?? []
             self?.files.release(ids)
@@ -202,7 +207,7 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
     // MARK: - 选择
 
     /// 宿主声明的导入入口, TSX 的导入菜单只显示这些 (HOST_PROTOCOL.md 的 session.snapshot)。
-    private static let imports = ["photos", "files", "pdf"]
+    private static let imports = ["photos", "files", "pdf", "paste"]
 
     /// photos 只出图片; files 里图片、PDF 和文件夹都行 (文件夹递归, 按自然序)。选出来的 PDF 不放进返回值, 走 pdf.added,
     /// 与拖放一样由 TSX 打开阅读器。
@@ -222,6 +227,15 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
         let delivery = ImportDelivery(result)
         send(delivery)
         return trim(result.images, to: limit)
+    }
+
+    /// 剪贴板里的图片放进返回值, PDF 走 pdf.added; 什么都没有就发一条提示。读取会让系统问一次「允许粘贴」(内容来自别的 App 时)。
+    private func paste() async -> [FileRef] {
+        let result = await ingestor.ingest(pasteboard: .general, allowing: [.image, .pdf])
+        let delivery = ImportDelivery(result)
+        if delivery.isEmpty { appView?.send("host.notice", ["text": "剪贴板里没有可以导入的图片或 PDF"]) }
+        send(delivery)
+        return trim(result.images, to: 200)
     }
 
     private func pickPDF() async throws -> FileRef? {
@@ -376,6 +390,12 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
             HostMetrics.log("ingested \(result.images.count) via providers")
             deliver(result)
         }
+    }
+
+    /// -seed-pasteboard: 把文件 (目录就取里面的图片和 PDF) 当文件表示放进系统剪贴板。是 App 自己写的, 读的时候不会弹「允许粘贴」。
+    private static func seedPasteboard(from url: URL) {
+        let urls = FileIngestor.isDirectory(url) ? FileIngestor.files(inDirectory: url, allowing: [.image, .pdf]) : [url]
+        UIPasteboard.general.setItemProviders(urls.compactMap(DebugProvider.make), localOnly: true, expirationDate: nil)
     }
 
     private static func cloneFiles(inFolder folder: URL, into directory: URL) -> [URL] {

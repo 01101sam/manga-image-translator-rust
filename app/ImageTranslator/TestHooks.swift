@@ -9,6 +9,8 @@ struct TestHooks: Equatable, Sendable {
     var pickFolder: String?
     /// pdf.pick 不弹选择器, 直接用这个 PDF。
     var pickPDF: String?
+    /// -seed-pasteboard: 启动时把这个文件 (或目录里的图片和 PDF) 放进系统剪贴板, UI 测试用来验证粘贴。
+    var seedPasteboard: String?
     /// -debug-drag-source: 窗口里放一个可拖的小方块, UI 测试用它发起真正的拖放。
     var debugDragSource: String?
     /// 加载这个 bundle 文件而不是 App 里内置的 (探针页用)。
@@ -69,6 +71,11 @@ struct TestHooks: Equatable, Sendable {
             }
             if flag == "-debug-drag-source", i + 1 < args.count {
                 hooks.debugDragSource = args[i + 1]
+                i += 2
+                continue
+            }
+            if flag == "-seed-pasteboard", i + 1 < args.count {
+                hooks.seedPasteboard = args[i + 1]
                 i += 2
                 continue
             }

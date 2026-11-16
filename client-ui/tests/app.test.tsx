@@ -8,11 +8,14 @@ interface Scenario {
   readonly saved?: boolean;
   /** 宿主在 session.snapshot 里声明的导入入口; 缺省表示老宿主没有声明。 */
   readonly imports?: readonly string[];
+  /** files.paste 依次交回的剪贴板内容。 */
+  readonly pastes?: ReturnType<typeof files>[];
 }
 
 /** 打开应用: 宿主 (Swift / host.js) 由 handlers 扮演, Daemon 由 fake 扮演。 */
-async function launch({ daemon, picks = [], saved = false, imports }: Scenario, extra: { platform?: "ios" | "web"; width?: number; height?: number } = {}) {
+async function launch({ daemon, picks = [], saved = false, imports, pastes = [] }: Scenario, extra: { platform?: "ios" | "web"; width?: number; height?: number } = {}) {
   const queue = [...picks];
+  const clipboard = [...pastes];
   const handlers = {
     "session.snapshot": () => ({
       daemons: [{ name: "studio", url: BASE }],
@@ -22,6 +25,7 @@ async function launch({ daemon, picks = [], saved = false, imports }: Scenario, 
     "session.saveToken": null,
     "session.clearToken": null,
     "files.pick": () => ({ files: queue.shift() ?? [] }),
+    "files.paste": () => ({ files: clipboard.shift() ?? [] }),
     "upload.start": () => daemon.submit(),
     "artifact.save": null,
     "files.release": null,
@@ -205,8 +209,53 @@ describe("jobs", () => {
 });
 
 describe("import menu", () => {
-  const LABELS = ["从相册", "从文件", "选择文件夹", "打开 PDF"];
+  const LABELS = ["从相册", "从文件", "选择文件夹", "打开 PDF", "粘贴"];
   const shownLabels = (app: Launched) => app.texts().filter((t) => LABELS.includes(t));
+
+  test("the paste item reads the clipboard through the host, shows the shortcut, and adds what it returns", async () => {
+    const daemon = createFakeDaemon({ finishPerPoll: 1000 });
+    const app = await launch({ daemon, saved: true, pastes: [files(2)], imports: ["files", "pdf", "paste"] }, { platform: "ios" });
+    await app.waitFor("id:add-images");
+    await app.press("id:add-images");
+    await app.waitFor("id:import-paste");
+    expect(app.texts()).toContain("粘贴");
+    expect(app.texts().some((t) => /⌘V|Ctrl\+V/.test(t))).toBe(true);
+    await app.press("id:import-paste");
+    await app.waitFor("p0.png");
+    expect(calls(app, "files.paste").length).toBe(1);
+    expect(app.shows("id:import-menu")).toBe(false);
+  });
+
+  test("Cmd+V pastes from anywhere and brings the Jobs page back when images arrive", async () => {
+    const daemon = createFakeDaemon({ finishPerPoll: 1000 });
+    const app = await launch({ daemon, saved: true, pastes: [files(2)], imports: ["files", "pdf", "paste"] }, { platform: "ios" });
+    await app.waitFor("id:jobs-summary");
+    await app.press("id:tab-config");
+    await app.waitFor("id:cfg-workers");
+    await app.keyboard.press("mod+v");
+    await app.waitFor("id:jobs-summary");
+    await app.waitFor("text:/共 2 张/");
+    expect(calls(app, "files.paste").length).toBe(1);
+  });
+
+  test("an empty clipboard adds nothing and stays on the page", async () => {
+    const app = await launch({ daemon: createFakeDaemon(), saved: true, imports: ["files", "pdf", "paste"] }, { platform: "ios" });
+    await app.waitFor("id:jobs-summary");
+    await app.keyboard.press("mod+v");
+    await app.waitUntil(() => calls(app, "files.paste").length === 1);
+    expect(app.texts()).toContain("还没有任务");
+  });
+
+  test("a host that does not declare paste (the web) leaves Cmd+V to the browser: nothing is bound and the menu has no item", async () => {
+    const app = await launch({ daemon: createFakeDaemon(), saved: true, pastes: [files(1)], imports: ["files", "folder", "pdf"] }, { platform: "web" });
+    await app.waitFor("id:jobs-summary");
+    await app.keyboard.press("mod+v");
+    await app.wait(300);
+    expect(calls(app, "files.paste").length).toBe(0);
+    await app.press("id:add-images");
+    await app.waitFor("id:import-menu");
+    expect(app.shows("id:import-paste")).toBe(false);
+  });
 
   test("the folder item is a files.pick with source folder", async () => {
     const daemon = createFakeDaemon({ finishPerPoll: 1000 });
@@ -227,7 +276,7 @@ describe("import menu", () => {
   }
 
   test("lists what the host declares, always in the same order", async () => {
-    const app = await launch({ daemon: createFakeDaemon(), saved: true, imports: ["pdf", "folder", "photos", "files"] }, { platform: "ios" });
+    const app = await launch({ daemon: createFakeDaemon(), saved: true, imports: ["paste", "pdf", "folder", "photos", "files"] }, { platform: "ios" });
     await openMenu(app);
     expect(shownLabels(app)).toEqual(LABELS);
   });

@@ -502,3 +502,88 @@ final class ImportDeliveryTests: XCTestCase {
         XCTAssertTrue(ImportDelivery(IngestResult()).events().isEmpty)
     }
 }
+
+/// 剪贴板导入: 用私有的命名剪贴板, 读它不会触发系统的「允许粘贴」提示。
+final class PasteboardIngestTests: XCTestCase {
+    private var directory: URL!
+    private var pasteboard: UIPasteboard!
+
+    override func setUpWithError() throws {
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent("paste-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        pasteboard = try XCTUnwrap(UIPasteboard(name: UIPasteboard.Name("it-test-\(UUID().uuidString)"), create: true))
+    }
+
+    override func tearDownWithError() throws {
+        UIPasteboard.remove(withName: pasteboard.name)
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private func ingestor() -> (FileIngestor, ManagedFiles) {
+        let files = ManagedFiles(root: directory.appendingPathComponent("tmp"), pdfRoot: directory.appendingPathComponent("pdfs"))
+        return (FileIngestor(files: files), files)
+    }
+
+    private func png(_ name: String) throws -> URL {
+        let url = directory.appendingPathComponent(name)
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8))
+        try renderer.pngData { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }.write(to: url)
+        return url
+    }
+
+    private func pdf(_ name: String) throws -> URL {
+        let url = directory.appendingPathComponent(name)
+        try UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 100, height: 100)).writePDF(to: url) { $0.beginPage() }
+        return url
+    }
+
+    func testCopiedImageFilesComeInAsFilesWithoutBeingDecoded() async throws {
+        let first = try png("a.png")
+        let second = try png("b.png")
+        pasteboard.setItemProviders([DebugProvider.make(first), DebugProvider.make(second)].compactMap { $0 }, localOnly: true, expirationDate: nil)
+        let (ingestor, files) = ingestor()
+        let result = await ingestor.ingest(pasteboard: pasteboard, allowing: [.image, .pdf])
+        XCTAssertEqual(result.images.count, 2)
+        XCTAssertTrue(result.pdfs.isEmpty)
+        for image in result.images {
+            let stored = try XCTUnwrap(files.url(for: image.id))
+            XCTAssertEqual(image.type, "image/png")
+            XCTAssertGreaterThan(ManagedFiles.size(of: stored), 0)
+        }
+    }
+
+    func testACopiedPDFIsRecognisedByItsType() async throws {
+        pasteboard.setItemProviders([DebugProvider.make(try pdf("book.pdf"))].compactMap { $0 }, localOnly: true, expirationDate: nil)
+        let (ingestor, files) = ingestor()
+        let result = await ingestor.ingest(pasteboard: pasteboard, allowing: [.image, .pdf])
+        let ref = try XCTUnwrap(result.pdfs.first)
+        XCTAssertEqual(ref.pageCount, 1)
+        XCTAssertNotNil(files.pdfURL(for: ref.id))
+        XCTAssertTrue(result.images.isEmpty)
+    }
+
+    func testACopiedFileReferenceIsReadAsAFile() async throws {
+        pasteboard.url = try png("ref.png")
+        let (ingestor, _) = ingestor()
+        let result = await ingestor.ingest(pasteboard: pasteboard, allowing: [.image, .pdf])
+        XCTAssertEqual(result.images.map(\.name), ["ref.png"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("ref.png").path), "a copied reference must not move the original")
+    }
+
+    func testTextOnlyClipboardIsEmptyAndNothingIsRead() async throws {
+        pasteboard.string = "hello"
+        XCTAssertFalse(FileIngestor.hasImportable(pasteboard))
+        let (ingestor, _) = ingestor()
+        let result = await ingestor.ingest(pasteboard: pasteboard, allowing: [.image, .pdf])
+        XCTAssertTrue(ImportDelivery(result).isEmpty)
+    }
+
+    func testAWebLinkOnTheClipboardIsNotAnImageUntilItIsDownloaded() async throws {
+        // 网页链接也算「有可读的东西」, 读下来才知道是不是图片; 这里不联网, 只确认它被当成链接处理而不是崩溃。
+        pasteboard.url = URL(string: "http://127.0.0.1:9/never.png")
+        XCTAssertTrue(FileIngestor.hasImportable(pasteboard))
+    }
+}

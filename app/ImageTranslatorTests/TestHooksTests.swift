@@ -33,6 +33,7 @@ final class TestHooksTests: XCTestCase {
         XCTAssertEqual(hooks.section, "reader")
         XCTAssertTrue(hooks.forgetPairing)
         XCTAssertFalse(TestHooks.parse([]).forgetPairing)
+        XCTAssertEqual(TestHooks.parse(["-seed-pasteboard", "/tmp/imgs"]).seedPasteboard, "/tmp/imgs")
         let more = TestHooks.parse(["-bundle", "/tmp/a.js", "-debug-drag-source", "/tmp/imgs", "-auto-import-folder", "/tmp/imgs", "-auto-import-urls"])
         XCTAssertEqual(more.bundlePath, "/tmp/a.js")
         XCTAssertEqual(more.debugDragSource, "/tmp/imgs")

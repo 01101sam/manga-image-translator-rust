@@ -170,6 +170,30 @@ final class NshHostUITests: XCTestCase {
         XCTAssertTrue(add.exists, "the Jobs page should still be there after closing the menu")
     }
 
+    /// 粘贴: -seed-pasteboard 让 App 自己把图片放进系统剪贴板 (自己写的, 读的时候不弹「允许粘贴」), 再从导入菜单和 ⌘V 各粘一次。不需要 Daemon。
+    func testPasteFromTheMenuAndWithCommandVAddsTheClipboard() throws {
+        let names = try FileManager.default.contentsOfDirectory(atPath: folder)
+        let expected = names.filter { ["png", "jpg", "jpeg"].contains(($0 as NSString).pathExtension.lowercased()) }.count
+        XCTAssertGreaterThan(expected, 0, "the pick folder has no images")
+        let app = launch(["-paired-test", host, port, "unused-token", "-seed-pasteboard", folder], seed: false)
+        let add = element(app, "add-images")
+        XCTAssertTrue(add.waitForExistence(timeout: 30))
+        let summary = element(app, "jobs-summary")
+        XCTAssertTrue(summary.waitForExistence(timeout: 10))
+        let before = Self.jobCount(summary.label)
+        add.tap()
+        let paste = element(app, "import-paste")
+        XCTAssertTrue(paste.waitForExistence(timeout: 5), "the import menu has no paste item")
+        paste.tap()
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "共 \(before + expected) 张"), evaluatedWith: summary)
+        waitForExpectations(timeout: 30)
+        shot(app, "pasted-from-menu")
+        app.typeKey("v", modifierFlags: .command)
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "共 \(before + 2 * expected) 张"), evaluatedWith: summary)
+        waitForExpectations(timeout: 30)
+        shot(app, "pasted-with-command-v")
+    }
+
     /// 配置页: 从 Daemon 读出配置并显示 (Pairing Key 在其中), Engine 状态也在。保存条只在有修改时才出现。
     func testConfigPageShowsTheDaemonSettings() throws {
         let token = try XCTUnwrap(ProcessInfo.processInfo.environment["HOST_TOKEN"], "needs HOST_TOKEN")
