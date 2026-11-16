@@ -2,6 +2,8 @@ import { batch, signal, Storage, type Signal } from "nsh";
 import { DaemonError } from "../api/daemon";
 import {
   addFiles,
+  boardIssues,
+  repairBoard,
   applyJobEvent,
   applyJobList,
   clearableKeys,
@@ -49,7 +51,16 @@ export const highlight = signal<string | null>(null);
 /** 列表上方的持续提示 (Engine 停止、连不上 Daemon)。 */
 export const notice = signal<string | null>(null);
 
-export const itemOf = (key: string): Item | undefined => itemSignals.get(key)?.();
+/**
+ * 一个 key 的当前条目。signal 还没登记时订阅显示顺序: 登记总是和显示顺序的更新在同一个 batch 里, 之后这一行会重新读到条目,
+ * 不会停在空白上。
+ */
+export const itemOf = (key: string): Item | undefined => {
+  const entry = itemSignals.get(key);
+  if (entry) return entry();
+  displayOrder();
+  return board.items[key];
+};
 export const currentBoard = (): Board => board;
 
 /**
@@ -86,6 +97,12 @@ const sameCounts = (a: Counts, b: Counts) => (Object.keys(a) as (keyof Counts)[]
 function commit(change: Change) {
   if (change.board === board) return;
   board = change.board;
+  const issues = change.orderChanged ? boardIssues(board) : [];
+  if (issues.length > 0) {
+    // 正常不会到这里 (board.test.ts 对每个操作断言不变式); 万一破坏了, 修好再显示, 免得列表里出现空白行。
+    board = repairBoard(board);
+    showToast(`列表状态不一致, 已自动修复: ${issues[0]}`, "error");
+  }
   batch(() => {
     for (const key of change.changed) {
       const item = board.items[key];
@@ -96,6 +113,7 @@ function commit(change: Change) {
     }
     if (change.orderChanged) {
       for (const key of itemSignals.keys()) if (board.items[key] === undefined) itemSignals.delete(key);
+      for (const key of board.displayOrder) if (!itemSignals.has(key)) itemSignals.set(key, signal(board.items[key]!));
       displayOrder.set(board.displayOrder);
       if (highlight() !== null && board.items[highlight()!] === undefined) highlight.set(null);
       schedulePersist();

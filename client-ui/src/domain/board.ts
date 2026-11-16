@@ -60,6 +60,43 @@ export interface Change {
 
 export const emptyBoard: Board = { submitOrder: [], displayOrder: [], items: {} };
 
+/**
+ * Board 自身的不变式: 两个顺序是同一批 key 的两种排列, 每个 key 都有条目, 每个条目都在两个顺序里。
+ * 违反时列表里会出现没有内容的行或格, 所以每次增删之后都要检查。返回空数组表示一致。
+ */
+export function boardIssues(board: Board): string[] {
+  const issues: string[] = [];
+  const scan = (name: string, order: readonly string[]): Set<string> => {
+    const seen = new Set<string>();
+    for (const key of order) {
+      if (seen.has(key)) issues.push(`${name} 里的 ${key} 出现了两次`);
+      seen.add(key);
+      const item = board.items[key];
+      if (item === undefined) issues.push(`${name} 里的 ${key} 没有条目`);
+      else if (item.key !== key) issues.push(`条目 ${key} 的 key 是 ${item.key}`);
+    }
+    return seen;
+  };
+  const submit = scan("submitOrder", board.submitOrder);
+  const display = scan("displayOrder", board.displayOrder);
+  for (const key of Object.keys(board.items)) {
+    if (!submit.has(key)) issues.push(`条目 ${key} 不在 submitOrder 里`);
+    if (!display.has(key)) issues.push(`条目 ${key} 不在 displayOrder 里`);
+  }
+  return issues;
+}
+
+/** 不变式被破坏时的补救: 去掉没有条目的 key 和重复的 key, 把不在顺序里的条目追加在末尾。 */
+export function repairBoard(board: Board): Board {
+  const fix = (order: readonly string[]): string[] => {
+    const seen = new Set<string>();
+    const kept = order.filter((key) => board.items[key] !== undefined && !seen.has(key) && seen.add(key));
+    for (const key of Object.keys(board.items)) if (!seen.has(key)) kept.push(key);
+    return kept;
+  };
+  return { ...board, submitOrder: fix(board.submitOrder), displayOrder: fix(board.displayOrder) };
+}
+
 export const localKey = (fileId: string): string => `local:${fileId}`;
 
 export const unchanged = (board: Board): Change => ({ board, changed: [], orderChanged: false });
