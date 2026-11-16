@@ -62,6 +62,15 @@ export type FileOutcome =
   | { readonly type: "removed"; readonly fileId: string };
 
 const outcomeListeners = new Set<(outcome: FileOutcome) => void>();
+const rekeyListeners = new Set<(from: string, to: string) => void>();
+
+/**
+ * 待上传项上传成功时 key 从 local:<fileId> 换成 jobId。依赖旧 key 的界面状态 (正在拖的项、打开着的条目菜单)
+ * 在列表更新的同一个 batch 里先换成新 key, 不然它们会因为找不到旧 key 而放弃。
+ */
+export function onRekey(listener: (from: string, to: string) => void): void {
+  rekeyListeners.add(listener);
+}
 
 export function onFileOutcome(listener: (outcome: FileOutcome) => void): () => void {
   outcomeListeners.add(listener);
@@ -224,7 +233,10 @@ async function upload(key: string): Promise<void> {
   if (item?.kind !== "uploading" || s.kind !== "paired") return;
   const outcome = await hostPort.upload({ file: item.file, baseUrl: s.daemon.url, token: s.token, overrides: overrides() });
   if (outcome.ok) {
-    commit(uploadSucceeded(board, key, outcome.jobId));
+    batch(() => {
+      for (const listener of rekeyListeners) listener(key, outcome.jobId);
+      commit(uploadSucceeded(board, key, outcome.jobId));
+    });
     emitOutcome({ type: "uploaded", fileId: item.file.id, jobId: outcome.jobId });
   } else {
     switch (outcome.kind) {

@@ -10,6 +10,9 @@ const initialSection = SECTIONS.find((s) => s === host.params.section) ?? "jobs"
 
 export const section = signal<Section>(initialSection);
 
+/** 宿主可以用启动参数 `layout: "list"` 让任务页在宽屏上也排成一行一项 (UI 测试和截图用)。 */
+export const listOnly = host.params.layout === "list";
+
 /** 查看器是盖在任务列表上的全屏层, 打开时列表保持原位; null 表示没打开。 */
 export const viewerKey = signal<string | null>(null);
 

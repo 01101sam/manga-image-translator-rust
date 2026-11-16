@@ -26,3 +26,15 @@ export function tileWidth(listWidth: number, columns: number): number {
 export function thumbWidthFor(tilePoints: number): 256 | 512 {
   return tilePoints <= 128 ? 256 : 512;
 }
+/** 列表模式一行的高度 (点, 含底边线)。固定下来, 拖动重排才能由行号算出每一行在哪。 */
+export const ROW_HEIGHT = 72;
+
+/** 网格单元格里缩略图以外两块的高度 (点): 名字加状态, 以及底部的操作按钮。 */
+export const TILE_INFO_HEIGHT = 52;
+export const TILE_FOOTER_HEIGHT = 48;
+
+/** 单元格缩略图的宽高比 (宽 / 高)。 */
+export const TILE_ASPECT = 0.72;
+
+/** 单元格的整体高度 (点): 缩略图按宽高比取, 再加上固定的两块。 */
+export const tileHeight = (width: number): number => Math.round(width / TILE_ASPECT) + TILE_INFO_HEIGHT + TILE_FOOTER_HEIGHT;

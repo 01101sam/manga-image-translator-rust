@@ -1,7 +1,8 @@
-import { keymap, List, platform, signal, Text, View, windowSize, type ListRef } from "nsh";
+import { keymap, List, platform, signal, Text, View, windowSize, type ListRef, type ViewRef } from "nsh";
 import { LANGUAGES } from "../domain/config";
 import { canOpenJob } from "../domain/job";
 import { GRID_GAP, gridColumns, thumbWidthFor, tileWidth } from "../domain/grid";
+import { metricsFor } from "../domain/reorder";
 import { gridStep, type Arrow } from "../domain/nav";
 import type { Counts } from "../domain/board";
 import { dragging } from "../store/app";
@@ -19,7 +20,19 @@ import {
 import { openImportMenu } from "../store/importer";
 import { activeMenu, openMenu } from "../store/menu";
 import { overrides, setOverride } from "../store/overrides";
-import { openViewer, viewerKey } from "../store/route";
+import {
+  bindReorder,
+  claimsTouch,
+  draggedKey,
+  ghost,
+  marker,
+  touchBegan,
+  touchCancelled,
+  touchEnded,
+  touchMoved,
+  trackScroll,
+} from "../store/reorder";
+import { listOnly, openViewer, viewerKey } from "../store/route";
 import { Banner, Button, Card, Empty, Icon, Meter, SelectField } from "../ui";
 import { ItemMenu, SortMenu } from "./ArrangeMenus";
 import { ImportMenu } from "./ImportMenu";
@@ -53,9 +66,13 @@ export function JobsPage() {
   let visible = { first: 0, last: 0 };
   // 列表区域的宽度 (点), 布局之后由 onLayout 更新; 起始值取窗口宽度, 第一帧就接近对。
   const listWidth = signal(windowSize().width);
+  const listHeight = signal(windowSize().height);
+  let container: ViewRef | undefined;
   // iPad、visionOS 和桌面浏览器的宽窗口排成网格, 手机保持一行一项。
-  const columns = () => gridColumns(listWidth(), Math.min(windowSize().width, windowSize().height));
+  const columns = () => (listOnly ? 1 : gridColumns(listWidth(), Math.min(windowSize().width, windowSize().height)));
   const thumbWidth = () => thumbWidthFor(tileWidth(listWidth(), columns()));
+  const metrics = () => metricsFor(listWidth(), columns());
+  bindReorder({ metrics, viewportHeight: listHeight, list: () => list, container: () => container });
 
   // 查看器和导入菜单盖在列表上时, 键盘不动列表。
   const covered = () => viewerKey() !== null || activeMenu() !== null;
@@ -162,7 +179,21 @@ export function JobsPage() {
         />
       </If>
       <If when={notice()}>{(text) => <Banner testID="net-banner" tone="destructive" text={text()} />}</If>
-      <View class="flex-1" onLayout={(event) => listWidth.set(event.bounds.size.width)}>
+      <View
+        class="flex-1"
+        ref={(node) => (container = node)}
+        onLayout={(event) => {
+          listWidth.set(event.bounds.size.width);
+          listHeight.set(event.bounds.size.height);
+        }}
+        onMoveShouldSetResponderCapture={(_event, gesture) => claimsTouch(Math.hypot(gesture.dx, gesture.dy))}
+        onResponderGrant={() => true}
+        onResponderTerminationRequest={() => false}
+        onTouchStart={touchBegan}
+        onTouchMove={touchMoved}
+        onTouchEnd={touchEnded}
+        onTouchCancel={touchCancelled}
+      >
         <If
           when={displayOrder().length > 0}
           else={
@@ -186,7 +217,12 @@ export function JobsPage() {
             each={displayOrder()}
             keyExtractor={(key) => key}
             numColumns={columns()}
-            estimatedItemSize={columns() > 1 ? tileWidth(listWidth(), columns()) / 0.72 + 80 : 72}
+            scrollable={draggedKey() === null}
+            scrollEventThrottle={64}
+            onScroll={(event) => trackScroll(event.offset.y)}
+            onScrollEnd={(event) => trackScroll(event.offset.y)}
+            onMomentumEnd={(event) => trackScroll(event.offset.y)}
+            estimatedItemSize={metrics().cellHeight}
             contentStyle={columns() > 1 ? { padding: GRID_GAP, gap: GRID_GAP } : {}}
             onViewableItemsChange={({ viewableItems }) => {
               const indexes = viewableItems.filter((t) => t.isViewable).map((t) => t.index);
@@ -196,10 +232,32 @@ export function JobsPage() {
           >
             {(key) => (
               <If when={columns() > 1} else={<JobRow itemKey={key} />}>
-                <JobTile itemKey={key} thumbWidth={thumbWidth} />
+                <JobTile itemKey={key} thumbWidth={thumbWidth} height={() => metrics().cellHeight} />
               </If>
             )}
           </List>
+        </If>
+        <If when={ghost()}>
+          {(lifted) => (
+            <View
+              testID="drag-ghost"
+              class="pointer-events-none absolute left-0 top-0 rounded-xl bg-background shadow-lg ring-1 ring-border"
+              style={{ width: lifted().width, height: lifted().height, translate: [lifted().x, lifted().y] }}
+            >
+              <If when={columns() > 1} else={<JobRow itemKey={() => lifted().key} lifted />}>
+                <JobTile itemKey={() => lifted().key} thumbWidth={thumbWidth} height={() => lifted().height} lifted />
+              </If>
+            </View>
+          )}
+        </If>
+        <If when={marker()}>
+          {(line) => (
+            <View
+              testID="drop-marker"
+              class="pointer-events-none absolute left-0 top-0 rounded-full bg-primary"
+              style={{ width: line().width, height: line().height, translate: [line().x, line().y] }}
+            />
+          )}
         </If>
         <If when={dragging()}>
           <View testID="drop-overlay" class="absolute inset-3 items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-primary bg-background/90">

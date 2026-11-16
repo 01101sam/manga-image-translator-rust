@@ -669,3 +669,121 @@ describe("arranging the list", () => {
     expect(app.shows("id:sort-menu")).toBe(false);
   });
 });
+
+describe("drag to reorder", () => {
+  const names = (app: Launched) => app.texts().filter((t) => /^p\d+\.png$/.test(t));
+
+  /** Engine 停着, 文件都留在待上传里: 只看顺序。 */
+  async function held(n: number, extra: { platform?: "ios" | "web"; width?: number; height?: number } = { platform: "web" }) {
+    const daemon = createFakeDaemon({ engine: "stopped" });
+    const app = await launch({ daemon, saved: true, picks: [files(n)] }, extra);
+    await app.waitFor("id:add-images");
+    await importFrom(app);
+    await app.waitFor("text:/共 " + n + " 张/");
+    return { app, daemon };
+  }
+
+  test("with a mouse a row dragged down shows the ghost and the marker, and drops where the marker was", async () => {
+    const { app, daemon } = await held(5);
+    expect(names(app)).toEqual(["p0.png", "p1.png", "p2.png", "p3.png", "p4.png"]);
+    await app.dragAndHold("label:/^p0.png,/", { y: 180 });
+    expect(app.shows("id:drag-ghost")).toBe(true);
+    expect(app.shows("id:drop-marker")).toBe(true);
+    // 拖动中列表原样不动, 顺序要到放手才改
+    expect(names(app).filter((t) => t === "p0.png").length).toBe(2);
+    await app.drop();
+    await app.waitFor("id:drag-ghost", { state: "gone" });
+    expect(app.shows("id:drop-marker")).toBe(false);
+    expect(names(app)).toEqual(["p1.png", "p2.png", "p3.png", "p0.png", "p4.png"]);
+    daemon.setEngine("running");
+    await app.waitFor("text:/全部完成/", { timeout: 30_000 });
+    expect(calls(app, "upload.start").map((c) => (c.data as { fileId: string }).fileId)).toEqual(["p0", "p1", "p2", "p3", "p4"]);
+  });
+
+  test("a row dragged up lands before the row it was dropped on, and a drag that goes nowhere changes nothing", async () => {
+    const { app } = await held(5);
+    await app.drag("label:/^p4.png,/", { y: -150 });
+    await app.waitFor("id:drag-ghost", { state: "gone" });
+    expect(names(app)).toEqual(["p0.png", "p1.png", "p4.png", "p2.png", "p3.png"]);
+    await app.drag("label:/^p1.png,/", { y: 10 });
+    expect(names(app)).toEqual(["p0.png", "p1.png", "p4.png", "p2.png", "p3.png"]);
+  });
+
+  test("in the grid a tile dragged to another tile's place shows a vertical marker and lands there", async () => {
+    const { app } = await held(8, { platform: "web", width: 1024, height: 1400 });
+    await app.waitFor("id:job-grid");
+    await app.dragAndHold("label:/^p1.png,/", { x: 440, y: 0 });
+    expect(app.shows("id:drag-ghost")).toBe(true);
+    expect(app.shows("id:drop-marker")).toBe(true);
+    await app.drop();
+    await app.waitFor("id:drag-ghost", { state: "gone" });
+    const after = names(app);
+    expect(after.length).toBe(8);
+    expect(after.indexOf("p1.png")).toBeGreaterThan(1);
+  });
+
+  test("holding a row at the bottom edge scrolls the list on its own, and the row drops far down", async () => {
+    const { app } = await held(60, { platform: "web", width: 420, height: 700 });
+    await app.dragAndHold("label:/^p0.png,/", { y: 520 });
+    await app.wait(2500);
+    await app.drop();
+    await app.waitFor("id:drag-ghost", { state: "gone" });
+    await app.scroll("id:job-list", -100_000);
+    expect(names(app)[0]).toBe("p1.png");
+  });
+
+  test("on a touch screen an ordinary swipe scrolls and never reorders, and a drag without a long press does not start", async () => {
+    const { app } = await held(40, { platform: "ios", width: 390, height: 844 });
+    await app.drag("label:/^p0.png,/", { y: -300 });
+    expect(app.shows("id:drag-ghost")).toBe(false);
+    expect(app.shows("id:drop-marker")).toBe(false);
+    await app.scroll("id:job-list", -100_000);
+    expect(names(app).slice(0, 3)).toEqual(["p0.png", "p1.png", "p2.png"]);
+  });
+
+  test("after a drop the release does not open the viewer, and pressing a finished job still does", async () => {
+    const daemon = createFakeDaemon({ finishPerPoll: 1000 });
+    const app = await launch({ daemon, saved: true, picks: [files(4)] }, { platform: "web" });
+    await app.waitFor("id:add-images");
+    await importFrom(app);
+    await app.waitFor("text:/全部完成/", { timeout: 30_000 });
+    await app.drag("label:/^p0.png,/", { y: 160 });
+    await app.waitFor("id:drag-ghost", { state: "gone" });
+    expect(app.shows("id:viewer")).toBe(false);
+    expect(names(app)[0]).not.toBe("p0.png");
+    // 刚放手的 0.4 秒里点按不算数 (那一下是放手, 不是点按)
+    await app.wait(500);
+    await app.press("label:/^p0.png,/");
+    await app.waitFor("id:viewer");
+  });
+
+  test("a row being dragged while its upload finishes stays in the drag and still drops where it was put", async () => {
+    const { app, daemon } = await held(5);
+    await app.press("label:更多: p1.png");
+    await app.waitFor("id:item-menu");
+    await app.keyboard.press("escape");
+    await app.dragAndHold("label:/^p0.png,/", { y: 180 });
+    daemon.setEngine("running");
+    await app.wait(6000);
+    // 上传成功后 p0 的 key 从本地 id 换成了 jobId: 影子和占位还在, 拖动没有被放弃
+    expect(app.shows("id:drag-ghost")).toBe(true);
+    expect(app.shows("id:drop-marker")).toBe(true);
+    expect(names(app).filter((t) => t === "p0.png").length).toBe(2);
+    await app.drop();
+    await app.waitFor("id:drag-ghost", { state: "gone" });
+    expect(names(app)).toEqual(["p1.png", "p2.png", "p3.png", "p0.png", "p4.png"]);
+    expect(calls(app, "upload.start").length).toBe(5);
+  });
+
+  test("the item menu of a row stays open and keeps working when that row's upload finishes", async () => {
+    const { app, daemon } = await held(3);
+    await app.press("label:更多: p2.png");
+    await app.waitFor("id:item-menu");
+    daemon.setEngine("running");
+    await app.wait(6000);
+    expect(app.shows("id:item-menu")).toBe(true);
+    await app.press("id:move-to-front");
+    await app.waitFor("id:item-menu", { state: "gone" });
+    expect(names(app)).toEqual(["p2.png", "p0.png", "p1.png"]);
+  });
+});

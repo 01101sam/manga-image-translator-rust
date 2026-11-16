@@ -1,15 +1,20 @@
 import { Image, platform, Text, View } from "nsh";
 import { jobStatusLabel, shortJobId } from "../domain/job";
+import { ROW_HEIGHT } from "../domain/grid";
 import { mediaUrl, THUMB_WIDTH } from "../domain/media";
 import { factsOf, isRemovable, type Item } from "../domain/board";
 import { formatBytes, formatModified } from "../format";
 import { cancelItem, highlight, itemOf, removeItems, retryItem } from "../store/jobs";
 import { openMenu } from "../store/menu";
+import { draggedKey, pressBlocked, startDrag } from "../store/reorder";
 import { openViewer } from "../store/route";
 import { session } from "../store/session";
 import { Badge, Button, Icon, IconButton, type BadgeTone } from "../ui";
 
 const desktop = platform.desktop;
+
+/** 按住多久算长按, 进入拖动重排 (毫秒)。 */
+export const LONG_PRESS_MS = 400;
 
 export const toneOf = (item: Item): BadgeTone => {
   if (item.kind !== "job") return item.kind === "pending" && item.rejected !== undefined ? "destructive" : "neutral";
@@ -56,10 +61,11 @@ export function thumbUrl(item: Item, width: number = THUMB_WIDTH): string {
  * 一行。List 会把 cell 复用给别的 Item, 所以这里不存任何状态:
  * 一切都从 key 现读, 缩略图加载失败时叠在占位图标上的 Image 只是不显示。
  */
-export function JobRow(props: { itemKey: () => string }) {
+export function JobRow(props: { itemKey: () => string; /** 拖动时跟手的影子: 不当占位变淡。 */ lifted?: boolean }) {
   const item = () => itemOf(props.itemKey());
   const selected = () => highlight() === props.itemKey();
   const open = () => {
+    if (pressBlocked()) return;
     const current = item();
     highlight.set(props.itemKey());
     if (current?.kind === "job" && current.row.state === "done") openViewer(props.itemKey());
@@ -69,12 +75,15 @@ export function JobRow(props: { itemKey: () => string }) {
       {(current) => (
         <View
           testID="job-row"
-          class={`flex-row items-center gap-1 border-b border-border pr-2 ${selected() ? "bg-accent" : ""}`}
+          style={{ height: ROW_HEIGHT }}
+          class={`flex-row items-center gap-1 border-b border-border pr-2 ${selected() ? "bg-accent" : ""} ${!props.lifted && draggedKey() === props.itemKey() ? "opacity-30" : ""}`}
         >
           <View
             role="button"
             accessibilityLabel={`${titleOf(current())}, ${statusOf(current())}`}
             onPress={open}
+            delayLongPress={LONG_PRESS_MS}
+            onLongPress={(event) => void startDrag(props.itemKey(), event.pagePosition)}
             class="min-h-16 flex-1 flex-row items-center gap-3 px-4 py-2 hover:bg-accent active:opacity-70"
           >
             <View class="size-12 items-center justify-center overflow-hidden rounded-lg bg-muted">
