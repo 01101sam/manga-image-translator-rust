@@ -284,6 +284,21 @@ describe("PDF reader: export and restoring the last PDF", () => {
     expect(exported[0]?.pages[0]?.artifactUrl).toMatch(/^http:\/\/daemon\.test\/jobs\/[^/?]+\/artifact\?token=tok-1$/);
   });
 
+  test("the translated page can be saved as the full-size file, named after the PDF and the page", async () => {
+    const { app } = await translatePageTwo();
+    await app.press("id:reader-save");
+    await app.waitUntil(() => calls(app, "artifact.save").length === 1);
+    const data = calls(app, "artifact.save")[0]?.data as { url: string; filename: string };
+    expect(data.filename).toBe("vol01-p002-translated");
+    expect(data.url).toMatch(/^http:\/\/daemon\.test\/jobs\/[^/?]+\/artifact\?token=tok-1$/);
+  });
+
+  test("a page that is not translated has nothing to save", async () => {
+    const { app } = await launch({ daemon: createFakeDaemon(), platform: "ios" });
+    await openPdf(app);
+    expect(app.shows("id:reader-save")).toBe(false);
+  });
+
   test("a translation that is gone from the Daemon is reported, the rest is exported", async () => {
     const { app } = await translatePageTwo({ exportResult: { translated: 0, missing: 1 } });
     await app.press("id:reader-export");

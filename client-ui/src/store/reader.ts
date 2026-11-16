@@ -127,7 +127,22 @@ export function documentFailed(message: string) {
   if (pdf() !== null) loadError.set(message);
 }
 
-// ---- 导出 ----
+// ---- 保存与导出 ----
+
+/** 保存当前页的译文 (原始大小的文件, 不是预览用的降采样图): App 弹分享面板 (里面有「存储图像」), Web 直接下载。 */
+export async function saveCurrentPage(): Promise<void> {
+  const open = pdf();
+  const s = session();
+  const page = pages()[current()];
+  if (open === null || s.kind !== "paired" || page === undefined || page.translation !== "done" || page.jobId === undefined) return;
+  const stem = open.name.replace(/\.pdf$/i, "") || "page";
+  const filename = `${stem}-p${String(page.index + 1).padStart(3, "0")}-translated`;
+  try {
+    await hostPort.saveArtifact(rawMediaUrl(s.daemon.url, page.jobId, "artifact", s.token), filename);
+  } catch (error) {
+    showToast(`无法保存: ${error instanceof Error ? error.message : String(error)}`, "error");
+  }
+}
 
 /** 已翻译的页换成译文, 其余页保持原样, 拼成新 PDF 交给系统分享 (宿主逐页写, 见 HOST_PROTOCOL.md 的 pdf.export)。 */
 export async function exportPdf(): Promise<void> {
