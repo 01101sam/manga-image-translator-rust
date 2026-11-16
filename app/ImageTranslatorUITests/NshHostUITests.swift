@@ -193,8 +193,8 @@ final class NshHostUITests: XCTestCase {
         expectation(for: NSPredicate(format: "label CONTAINS %@", "共 \(before + expected) 张"), evaluatedWith: summary)
         waitForExpectations(timeout: 30)
         shot(app, "pasted-from-menu")
-        // 点过菜单项之后的第一个键盘事件到不了界面 (实测: 日志里 files.paste 少一次, 先按一次方向键就好了; 原因没查清, 也不知道真键盘上会不会这样)。
-        // 方向键只动列表的高亮, 没有别的作用。
+        // App 启动后 XCUITest 发的第一个键盘事件到不了界面 (实测: 不碰菜单直接按 ⌘V 也不生效, 日志里 files.paste 少一次, 第二次才生效;
+        // 原因没查清, 也不知道真键盘上会不会这样), 所以先按一次方向键 (只动列表的高亮, 没有别的作用) 再按 ⌘V。
         app.typeKey(XCUIKeyboardKey.downArrow, modifierFlags: [])
         // visionOS 的 typeKey 只收 XCUIKeyboardKey; iOS 上用 XCUIKeyboardKey("v") 发出的却不是 ⌘V (实测: 粘贴没有发生), 要用字符串那个重载。
         #if os(visionOS)
