@@ -107,10 +107,43 @@ final class InboxDrainerTests: XCTestCase {
         let drainer = InboxDrainer(inbox: inbox)
         async let first = drainer.drain(using: ingestor)
         async let second = drainer.drain(using: ingestor)
-        let all = await first.images + second.images
+        let (a, b) = await (first, second)
+        let all = a.images + b.images
+        XCTAssertEqual(a.ignored + b.ignored + a.failed + b.failed, 0, "a second drain must not touch entries the first one is moving")
         XCTAssertEqual(all.count, 30)
         XCTAssertEqual(Set(all.map(\.id)).count, 30)
         XCTAssertEqual(Set(all.map(\.name)).count, 30)
+    }
+
+    /// 在第一次还在搬的时候又来一次 (回到前台紧跟在启动之后): 第二次什么都不返回, 第一次回头再扫一遍, 把中途到的条目也搬完。
+    func testADrainThatArrivesWhileAnotherIsRunningIsFoldedIntoIt() async throws {
+        for index in 0..<20 { try deposit(String(format: "0000000000001-%04d-aaaaaaaa", index), "a\(index).png") }
+        let drainer = InboxDrainer(inbox: inbox)
+        async let first = drainer.drain(using: ingestor)
+        try await Task.sleep(nanoseconds: 1_000_000)
+        try deposit("0000000000002-0000-bbbbbbbb", "late.png")
+        async let second = drainer.drain(using: ingestor)
+        let (a, b) = await (first, second)
+        XCTAssertEqual(a.images.count + b.images.count, 21, "the late entry is moved too, exactly once")
+        XCTAssertTrue(leftovers().isEmpty)
+        let third = await drainer.drain(using: ingestor)
+        XCTAssertTrue(ImportDelivery(third).isEmpty, "nothing is left to move or to complain about")
+    }
+
+    func testTheExtensionsNoteOfWhatItSkippedBecomesNoticesTheAppSaysAgain() async throws {
+        try deposit("0000000000001-0000-aaaaaaaa", "p.png")
+        let note = try JSONEncoder().encode(ShareSkips(unsupported: 1, unreadable: 2))
+        try deposit("0000000000001-0001-note0000", "skipped.\(ShareInbox.noteExtension)", note)
+        let result = await InboxDrainer(inbox: inbox).drain(using: ingestor)
+        XCTAssertEqual(result.images.count, 1)
+        XCTAssertEqual(result.ignored, 1)
+        XCTAssertEqual(result.failed, 2)
+        let events = ImportDelivery(result).events()
+        let notices = events.filter { $0.name == "host.notice" }
+        XCTAssertEqual(notices.count, 1, "one combined notice, because the next one would replace it on screen")
+        let text = try XCTUnwrap((notices[0].payload as? [String: String])?["text"])
+        XCTAssertTrue(text.contains("1 个不是图片或 PDF") && text.contains("2 个文件没能读进来"), text)
+        XCTAssertTrue(leftovers().isEmpty)
     }
 
     func testWithoutAGroupContainerThereIsNothingToDo() async {

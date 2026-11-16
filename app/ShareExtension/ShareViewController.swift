@@ -5,7 +5,9 @@ import UIKit
 final class ShareViewController: UIViewController {
     private let spinner = UIActivityIndicatorView(style: .large)
     private let label = UILabel()
+    private let dismissButton = UIButton(type: .system)
     private var started = false
+    private var succeeded = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -15,7 +17,13 @@ final class ShareViewController: UIViewController {
         label.font = .preferredFont(forTextStyle: .headline)
         label.accessibilityIdentifier = "share-message"
         spinner.startAnimating()
-        let stack = UIStackView(arrangedSubviews: [spinner, label])
+        var configuration = UIButton.Configuration.filled()
+        configuration.title = "好"
+        dismissButton.configuration = configuration
+        dismissButton.accessibilityIdentifier = "share-dismiss"
+        dismissButton.isHidden = true
+        dismissButton.addAction(UIAction { [weak self] _ in self?.close() }, for: .touchUpInside)
+        let stack = UIStackView(arrangedSubviews: [spinner, label, dismissButton])
         stack.axis = .vertical
         stack.spacing = 16
         stack.alignment = .center
@@ -39,30 +47,38 @@ final class ShareViewController: UIViewController {
     private func run() async {
         // 取不到容器就如实说, 不能让用户以为已经加入。
         guard let inbox = ShareInbox.directory() else {
-            finish("没有共享容器, 无法加入。请重新安装 App。", success: false)
+            finish("没有共享容器, 无法加入。请重新安装 App。", success: false, stays: true)
             return
         }
         let items = (extensionContext?.inputItems as? [NSExtensionItem]) ?? []
         let result = await ShareDepositor(inbox: inbox).deposit(items: items)
+        let reasons = result.skips.reasons.map { "· \($0)" }.joined(separator: "\n")
         if result.added == 0 {
-            finish("没有可以加入的图片或 PDF", success: false)
+            finish("没有可以加入的图片或 PDF" + (reasons.isEmpty ? "" : "\n\(reasons)"), success: false, stays: !reasons.isEmpty)
         } else if result.skipped > 0 {
-            finish("已加入 \(result.added) 项，打开 App 后开始翻译\n另有 \(result.skipped) 项无法加入", success: true)
+            finish("已加入 \(result.added) 项，打开 App 后开始翻译\n另有 \(result.skipped) 项没能加入:\n\(reasons)", success: true, stays: true)
         } else {
-            finish("已加入，打开 App 后开始翻译", success: true)
+            finish("已加入，打开 App 后开始翻译", success: true, stays: false)
         }
     }
 
-    private func finish(_ message: String, success: Bool) {
+    /// 有东西没能加入时面板一直留着, 等用户点「好」: 1.2 秒一闪而过的话, 用户只看到「已加入」, 少了几张也不知道。
+    private func finish(_ message: String, success: Bool, stays: Bool) {
         spinner.stopAnimating()
         label.text = message
-        let delay: TimeInterval = success ? 1.2 : 2.0
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            if success {
-                self?.extensionContext?.completeRequest(returningItems: nil)
-            } else {
-                self?.extensionContext?.cancelRequest(withError: NSError(domain: "ShareExtension", code: 1))
-            }
+        succeeded = success
+        if stays {
+            dismissButton.isHidden = false
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (success ? 1.2 : 2.0)) { [weak self] in self?.close() }
+    }
+
+    private func close() {
+        if succeeded {
+            extensionContext?.completeRequest(returningItems: nil)
+        } else {
+            extensionContext?.cancelRequest(withError: NSError(domain: "ShareExtension", code: 1))
         }
     }
 }

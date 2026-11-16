@@ -5,7 +5,7 @@ import { loadOverrides } from "./overrides";
 import { resetReader, startReader } from "./reader";
 import { closeViewer, section } from "./route";
 import { forgetDaemon, hostPort, startSession } from "./session";
-import { showToast } from "./toast";
+import { LONG_MS, showToast } from "./toast";
 
 /** 网页拖拽进行中 (宿主推送), 用来显示「松开以添加」。 */
 export const dragging = signal(false);
@@ -24,7 +24,7 @@ export function startApp(): void {
     }
   });
   hostPort.onDragState((active) => dragging.set(active));
-  hostPort.onNotice((text) => showToast(text, "error"));
+  hostPort.onNotice((text) => showToast(text, "error", LONG_MS));
   void loadOverrides();
   void startSession();
   startReader();

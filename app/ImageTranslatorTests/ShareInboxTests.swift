@@ -39,7 +39,7 @@ final class ShareInboxTests: XCTestCase {
             try write("c.jpg"),
         ].compactMap(DebugProvider.make)
         let summary = await ShareDepositor(inbox: inbox).deposit(providers)
-        XCTAssertEqual(summary, ShareDeposit(added: 3, skipped: 0))
+        XCTAssertEqual(summary, ShareDeposit(added: 3))
         let entries = ShareInbox.entries(in: inbox)
         XCTAssertEqual(entries.count, 3)
         XCTAssertEqual(stems(in: entries), ["b", "a", "c"])
@@ -73,11 +73,37 @@ final class ShareInboxTests: XCTestCase {
         let links = ["https://x.test/img/page01.png", "https://x.test/index.html", "https://x.test/", "ftp://x.test/a.png", "https://x.test/img?id=3"]
             .map { NSItemProvider(object: NSURL(string: $0)!) }
         let summary = await ShareDepositor(inbox: inbox).deposit([text].compactMap { $0 } + links)
-        XCTAssertEqual(summary, ShareDeposit(added: 2, skipped: 4))
+        XCTAssertEqual(summary, ShareDeposit(added: 2, skips: ShareSkips(unsupported: 4, unreadable: 0)))
         let entries = ShareInbox.entries(in: inbox)
-        XCTAssertEqual(names(in: entries), ["link.\(ShareInbox.linkExtension)", "link.\(ShareInbox.linkExtension)"])
-        let texts = try entries.map { try String(contentsOf: XCTUnwrap(ShareInbox.payload(of: $0)), encoding: .utf8) }
+        // 没加进来的数目作为这一批的最后一个条目留给 App。
+        XCTAssertEqual(names(in: entries), ["link.\(ShareInbox.linkExtension)", "link.\(ShareInbox.linkExtension)", "skipped.\(ShareInbox.noteExtension)"])
+        let texts = try entries.dropLast().map { try String(contentsOf: XCTUnwrap(ShareInbox.payload(of: $0)), encoding: .utf8) }
         XCTAssertEqual(texts, ["https://x.test/img/page01.png", "https://x.test/img?id=3"])
+        let note = try JSONDecoder().decode(ShareSkips.self, from: Data(contentsOf: XCTUnwrap(ShareInbox.payload(of: entries.last!))))
+        XCTAssertEqual(note, ShareSkips(unsupported: 4, unreadable: 0))
+    }
+
+    /// 用户的真机场景: 相册里有的照片还在 iCloud 里, 系统交不出文件。它们和「不是图片」是两回事, 提示里要分开说。
+    func testPhotosThatCannotBeLoadedAreCountedAsUnreadableAndTheReasonsAreListedSeparately() async throws {
+        let broken = NSItemProvider()
+        broken.registerFileRepresentation(forTypeIdentifier: UTType.jpeg.identifier, fileOptions: [], visibility: .all) { completion in
+            completion(nil, false, NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet))
+            return nil
+        }
+        let fine = try XCTUnwrap(DebugProvider.make(try write("ok.png")))
+        let text = try XCTUnwrap(DebugProvider.make(try write("notes.txt")))
+        let summary = await ShareDepositor(inbox: inbox).deposit([fine, broken, text, broken])
+        XCTAssertEqual(summary, ShareDeposit(added: 1, skips: ShareSkips(unsupported: 1, unreadable: 2)))
+        XCTAssertEqual(summary.skipped, 3)
+        XCTAssertEqual(summary.skips.reasons.count, 2)
+        XCTAssertTrue(summary.skips.reasons[0].contains("1 项不是图片或 PDF"))
+        XCTAssertTrue(summary.skips.reasons[1].contains("2 项没能读出来") && summary.skips.reasons[1].contains("iCloud"))
+    }
+
+    func testNothingIsLeftBehindForANoteWhenEverythingWasAdded() async throws {
+        let summary = await ShareDepositor(inbox: inbox).deposit([try XCTUnwrap(DebugProvider.make(try write("a.png")))])
+        XCTAssertEqual(summary.skipped, 0)
+        XCTAssertEqual(names(in: ShareInbox.entries(in: inbox)).filter { $0.hasSuffix(ShareInbox.noteExtension) }, [])
     }
 
     func testTheProviderTypeThePhotoLibraryUsuallyOffersIsChosenForTheDaemon() {

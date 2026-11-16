@@ -64,13 +64,12 @@ struct ImportDelivery {
         var events: [HostEvent] = []
         if includeImages, !images.isEmpty { events.append(HostEvent(name: "files.added", payload: images.map(\.json))) }
         if let pdf { events.append(HostEvent(name: "pdf.added", payload: [pdf.json])) }
-        if !droppedPDFs.isEmpty {
-            events.append(HostEvent(name: "host.notice", payload: ["text": "一次只打开一个 PDF, 已忽略另外 \(droppedPDFs.count) 个"]))
-        }
-        if ignored > 0 { events.append(HostEvent(name: "host.notice", payload: ["text": "已忽略 \(ignored) 个不是图片或 PDF 的文件"])) }
-        if failed > 0 {
-            events.append(HostEvent(name: "host.notice", payload: ["text": "有 \(failed) 个文件没能读进来 (iCloud 里还没下载好、网络不通或文件已损坏), 请稍后再试"]))
-        }
+        // TSX 的提示一次只显示一条, 后来的会盖掉前面的; 同一次导入的几句话合成一条。
+        var lines: [String] = []
+        if !droppedPDFs.isEmpty { lines.append("一次只打开一个 PDF, 已忽略另外 \(droppedPDFs.count) 个") }
+        if ignored > 0 { lines.append("已忽略 \(ignored) 个不是图片或 PDF 的文件") }
+        if failed > 0 { lines.append("有 \(failed) 个文件没能读进来 (iCloud 里还没下载好、网络不通或文件已损坏), 请稍后再试") }
+        if !lines.isEmpty { events.append(HostEvent(name: "host.notice", payload: ["text": lines.joined(separator: "; ")])) }
         return events
     }
 }

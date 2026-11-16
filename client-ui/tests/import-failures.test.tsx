@@ -22,6 +22,17 @@ describe("a mixed batch where the Daemon refuses some files", () => {
     }
   }, 60_000);
 
+  test("what the host could not import stays on screen long enough to read", async () => {
+    const app = await launchPaired({ daemon: createFakeDaemon(), width: 390, height: 844 });
+    await app.waitFor("id:add-images");
+    await app.host.send("host.notice", { text: "已忽略 1 个不是图片或 PDF 的文件; 有 2 个文件没能读进来" });
+    await app.waitFor("id:toast");
+    await app.clock!.runFor(5000);
+    expect(app.shows("id:toast")).toBe(true);
+    await app.clock!.runFor(4000);
+    expect(app.shows("id:toast")).toBe(false);
+  });
+
   test("a refused file stays with the host so Retry can upload it again, and removing it lets the host go", async () => {
     const daemon = createFakeDaemon({ finishPerPoll: 100 });
     const attempts: string[] = [];

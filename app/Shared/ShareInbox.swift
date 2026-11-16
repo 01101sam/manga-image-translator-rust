@@ -12,6 +12,8 @@ enum ShareInbox {
     static let groupIdentifier = "group.com.wisdomworldworkshop.imagetranslator"
     /// 网页链接条目: 文件内容是 URL 文本。扩展有内存和时间上限, 不下载, 留给 App 导入时下载。
     static let linkExtension = "weblink"
+    /// 扩展没能加入的东西的数目 (ShareSkips 的 JSON)。App 搬收件箱时读它, 再提醒用户一次。
+    static let noteExtension = "note"
     static let stagingName = ".staging"
 
     /// 收件箱目录。取不到 App Group 容器 (没有授权、没有注册) 时为 nil。
@@ -68,9 +70,35 @@ enum FileNaming {
     }
 }
 
+/// 没能放进收件箱的东西, 按原因分开数: 用户的处理办法不同 (不是图片 vs 稍后重试)。
+struct ShareSkips: Equatable, Codable, Sendable {
+    /// 不是图片或 PDF (别的文件、网页链接)。
+    var unsupported = 0
+    /// 是图片或 PDF, 却没读出来: 照片还在 iCloud 里没下载下来、网络不通、拷贝失败。
+    var unreadable = 0
+
+    var total: Int { unsupported + unreadable }
+
+    /// 一类一行的原因, 扩展的面板和 App 里的提示用同一份文字。
+    var reasons: [String] {
+        var lines: [String] = []
+        if unsupported > 0 { lines.append("\(unsupported) 项不是图片或 PDF") }
+        if unreadable > 0 { lines.append("\(unreadable) 项没能读出来 (照片可能还在 iCloud 里没有下载, 联网后再分享一次)") }
+        return lines
+    }
+}
+
 struct ShareDeposit: Equatable {
     var added = 0
-    var skipped = 0
+    var skips = ShareSkips()
+
+    var skipped: Int { skips.total }
+}
+
+private enum DepositOutcome {
+    case added
+    case unsupported
+    case unreadable
 }
 
 /// 把分享来的东西串行放进收件箱: 一次只有一个文件在拷, 扩展的内存上限 (约 120 MB) 因此与文件大小无关。
@@ -91,34 +119,51 @@ final class ShareDepositor: @unchecked Sendable {
         var summary = ShareDeposit()
         for (index, provider) in providers.enumerated() {
             let entry = String(format: "%013ld-%04ld-%@", batch, index, String(UUID().uuidString.prefix(8)))
-            if await deposit(provider, entry: entry) { summary.added += 1 } else { summary.skipped += 1 }
+            switch await deposit(provider, entry: entry) {
+            case .added: summary.added += 1
+            case .unsupported: summary.skips.unsupported += 1
+            case .unreadable: summary.skips.unreadable += 1
+            }
         }
+        // 扩展的面板关掉之后用户只剩 App 可看: 把没加进来的数目也留给 App, 它在搬完收件箱时再说一次。排在这一批的最后。
+        if summary.skipped > 0 { writeNote(summary.skips, entry: String(format: "%013ld-%04ld-%@", batch, providers.count, "note0000")) }
         return summary
     }
 
-    private func deposit(_ provider: NSItemProvider, entry: String) async -> Bool {
+    private func deposit(_ provider: NSItemProvider, entry: String) async -> DepositOutcome {
         if let type = Self.fileType(of: provider) {
             let suggested = provider.suggestedName
             return await withCheckedContinuation { continuation in
                 provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
                     guard let url else {
-                        continuation.resume(returning: false)
+                        continuation.resume(returning: .unreadable)
                         return
                     }
-                    continuation.resume(returning: self.place(url, type: type, suggested: suggested, entry: entry))
+                    continuation.resume(returning: self.place(url, type: type, suggested: suggested, entry: entry) ? .added : .unreadable)
                 }
             }
         }
         // loadObject 替我们解码: loadItem 给的 URL 有时是 NSURL, 有时是归档过的 Data。
-        guard provider.canLoadObject(ofClass: URL.self) else { return false }
+        guard provider.canLoadObject(ofClass: URL.self) else { return .unsupported }
         return await withCheckedContinuation { continuation in
             _ = provider.loadObject(ofClass: URL.self) { link, _ in
-                guard let link, Self.isImageLink(link) else {
-                    continuation.resume(returning: false)
+                guard let link else {
+                    continuation.resume(returning: .unreadable)
                     return
                 }
-                continuation.resume(returning: self.writeLink(link, entry: entry))
+                guard Self.isImageLink(link) else {
+                    continuation.resume(returning: .unsupported)
+                    return
+                }
+                continuation.resume(returning: self.writeLink(link, entry: entry) ? .added : .unreadable)
             }
+        }
+    }
+
+    private func writeNote(_ skips: ShareSkips, entry: String) {
+        guard let data = try? JSONEncoder().encode(skips) else { return }
+        _ = stage(entry) { directory in
+            try data.write(to: directory.appendingPathComponent("skipped.\(ShareInbox.noteExtension)"))
         }
     }
 
