@@ -27,6 +27,8 @@ export const toast = signal<Toast | null>(null);
 let nextId = 1;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let leaving: (() => void) | undefined;
+/** 当前提示的显示时长, 合并时取两条里长的。 */
+let shownMs = 0;
 
 /** 一般的提示 3.5 秒; 宿主的导入提示 (哪些文件没进来) 要读完再决定怎么办, 给得久一点。 */
 const SHORT_MS = 3500;
@@ -40,17 +42,47 @@ function leave() {
   done?.();
 }
 
+/**
+ * 同一时间只显示一条提示, 后来的盖掉前面的; 例外: 一条带按钮的提示 (比如「已跳过 N 张重复图片」+「仍然添加」) 和一条不带按钮的提示
+ * 碰在一起时合成一条 (文字换行连起来, 按钮留着), 因为盖掉带按钮的那条会让用户没机会按, 它替用户留着的文件也被放掉了。
+ * 宿主在同一次导入里先发 files.added 再发 host.notice (有文件没能读进来), 两条几乎同时到。两条都带按钮时仍然是后来的盖掉前面的。
+ */
 export function showToast(text: string, tone: Toast["tone"] = "info", options: ToastOptions = {}) {
-  leave();
+  const current = toast();
+  const merge = current !== null && (current.action === undefined) !== (options.action === undefined);
+  const gone = merge ? chain(leaving, options.onGone) : options.onGone;
+  if (merge) {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    leaving = undefined;
+  } else {
+    leave();
+  }
   const id = nextId++;
-  leaving = options.onGone;
-  toast.set({ id, text, tone, ...(options.action === undefined ? {} : { action: options.action }) });
+  leaving = gone;
+  const action = merge ? (current.action ?? options.action) : options.action;
+  const ms = Math.max(options.ms ?? SHORT_MS, merge ? shownMs : 0);
+  shownMs = ms;
+  toast.set({
+    id,
+    text: merge ? `${current.text}\n${text}` : text,
+    tone: merge && current.tone === "error" ? "error" : tone,
+    ...(action === undefined ? {} : { action }),
+  });
   timer = setTimeout(() => {
     if (toast()?.id === id) {
       toast.set(null);
       leave();
     }
-  }, options.ms ?? SHORT_MS);
+  }, ms);
+}
+
+function chain(first: (() => void) | undefined, second: (() => void) | undefined): (() => void) | undefined {
+  if (first === undefined || second === undefined) return first ?? second;
+  return () => {
+    first();
+    second();
+  };
 }
 
 export function dismissToast() {

@@ -117,6 +117,40 @@ describe("skipping pictures that are already in the list", () => {
     expect(second.texts().some((t) => t.includes("待上传 1"))).toBe(true);
   });
 
+  const shownTexts = (app: Launched) => app.texts().filter((t) => t.includes("已跳过") || t.includes("没能读进来"));
+
+  test("a notice from the host that arrives right after the skip is shown with it, and the button still works", async () => {
+    const app = await launchPaired({ daemon: createFakeDaemon({ engine: "stopped" }), picks: [[page("p0", hashFor(1))]], width: 390, height: 844 });
+    await app.waitFor("id:add-images");
+    await importOnce(app);
+    await app.waitFor("text:/共 1 张/");
+    // 宿主在同一次导入里先发 files.added, 再发 host.notice
+    await app.host.send("files.added", [page("q0", flipBits(hashFor(1), 4))]);
+    await app.host.send("host.notice", { text: "有 1 个文件没能读进来" });
+    await app.waitFor("text:/没能读进来/");
+    expect(shownTexts(app).join("|")).toMatch(/已跳过 1 张重复图片[\s\S]*没能读进来/);
+    expect(app.shows("id:toast-action")).toBe(true);
+    expect(released(app)).toEqual([]);
+    await app.press("id:toast-action");
+    await app.waitFor("text:/共 2 张/");
+    expect(released(app)).toEqual([]);
+  });
+
+  test("a notice shown just before the skip is not lost either, and when nobody presses the button the copies are released", async () => {
+    const app = await launchPaired({ daemon: createFakeDaemon({ engine: "stopped" }), picks: [[page("p0", hashFor(1))]], width: 390, height: 844 });
+    await app.waitFor("id:add-images");
+    await importOnce(app);
+    await app.waitFor("text:/共 1 张/");
+    await app.host.send("host.notice", { text: "已忽略 1 个不是图片或 PDF 的文件" });
+    await app.host.send("files.added", [page("q0", flipBits(hashFor(1), 4))]);
+    await app.waitFor("text:/已跳过 1 张重复图片/");
+    expect(shownTexts(app).join("|")).toMatch(/已忽略 1 个[\s\S]*已跳过 1 张重复图片/);
+    expect(app.shows("id:toast-action")).toBe(true);
+    await app.clock!.runFor(9000);
+    expect(app.shows("id:toast")).toBe(false);
+    expect(released(app)).toEqual(["q0"]);
+  });
+
   test("files without a fingerprint and different pictures are all added", async () => {
     const app = await launchPaired({
       daemon: createFakeDaemon({ engine: "stopped" }),
