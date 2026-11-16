@@ -343,7 +343,7 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
                 defer { try? FileManager.default.removeItem(at: scratch) }
                 do {
                     try PdfRenderer.render(document: pdf, page: page, longEdge: longEdge, to: scratch)
-                    return .success(try files.adopt(scratch, name: name, move: true))
+                    return .success(try files.adopt(scratch, name: name, move: true, dating: .none))
                 } catch let error as HostCallError {
                     return .failure(error)
                 } catch {

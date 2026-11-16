@@ -24,7 +24,11 @@ export type IconName =
   | "alert"
   | "clock"
   | "swap"
-  | "external";
+  | "external"
+  | "sort"
+  | "more"
+  | "to-top"
+  | "to-bottom";
 
 type Shape =
   | { readonly path: string }
@@ -55,6 +59,10 @@ const shapes: Record<IconName, readonly Shape[]> = {
   clock: [{ circle: [12, 12, 9] }, { path: "M12 7v5l3 2" }],
   swap: [{ path: "M4 8h14M14 4l4 4-4 4M20 16H6M10 12l-4 4 4 4" }],
   external: [{ path: "M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" }],
+  sort: [{ path: "M8 5v14M4 15l4 4 4-4M16 19V5M12 9l4-4 4 4" }],
+  more: [{ circle: [5, 12, 1.2] }, { circle: [12, 12, 1.2] }, { circle: [19, 12, 1.2] }],
+  "to-top": [{ path: "M5 4h14M12 20V9M7 13l5-5 5 5" }],
+  "to-bottom": [{ path: "M5 20h14M12 4v11M7 11l5 5 5-5" }],
 };
 
 export type IconTone = "foreground" | "muted-foreground" | "primary" | "primary-foreground" | "destructive" | "success" | "warning";

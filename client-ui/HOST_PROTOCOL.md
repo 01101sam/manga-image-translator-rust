@@ -15,6 +15,7 @@
 - 名字只含 `A-Z a-z 0-9 _ . : -`。`nsh.json` 的 `capabilities.host` 授权 `session.*`、`files.*`、`upload.*`、`artifact.*`、`pdf.*`; 宿主新增别的前缀时要同步加。事件不需要授权。
 - 宿主**在 TSX 注册监听之前发的事件不会重放**。所以 TSX 启动时先挂监听, 再调用 `session.snapshot` 读初始状态; 宿主把初始状态放在 snapshot 里, 之后的变化才用事件推送。宿主因此把 `session.snapshot` 当作「监听已经挂好」的信号: 在它被调用之前要发的 `files.added`、`pdf.added`、`host.notice` (冷启动时从分享扩展的收件箱搬来的文件、「打开方式」带来的文件) 先攒着, 调用之后按原顺序补发; 界面重新载入时重新等这个信号。
 - `files.pick` 和 `upload.start` 由 TSX 以 `timeout: 0` 调用 (不限时): 用户可能在选择器里停很久, 大图上传可能很慢。其余调用用默认的 30 秒。
+- **文件引用** `{ id, name, size, type, modifiedAt? }` 是 `files.pick`、`files.paste`、`files.added`、`pdf.renderPage` 返回或推送的同一种结构。`size` 是字节数, `modifiedAt` 是文件的修改时间, 自 1970-01-01 UTC 起的**毫秒**数。TSX 用名字、大小、修改时间做任务页的一次性排序, 并随 Job 一起存进 NSH Storage (重启后仍可排序); 宿主读不到的值就不给 (`modifiedAt` 缺省, `size` 给 0), TSX 排序时把缺值的条目放在末尾, 不要编一个。宿主只读文件的元数据, 不读内容。
 - TSX 自己限制并发: 同时在途的 `upload.start` 不超过 3 个, 在途 Job (排队 + 翻译中 + 上传中) 不超过 Daemon 队列容量 64。宿主不需要再排队, 但也不要假设一次只会来一个。
 
 ## TSX 调用宿主
@@ -61,13 +62,14 @@
 // 参数
 { "limit": 200, "source": "photos" }   // limit: 最多返回多少个; source: "photos" | "files" | "folder", 缺省 "files"
 // 返回 (用户取消则 files 为空数组)
-{ "files": [{ "id": "…", "name": "page01.png", "size": 123456, "type": "image/png" }] }
+{ "files": [{ "id": "…", "name": "page01.png", "size": 123456, "type": "image/png", "modifiedAt": 1700000000000 }] }
 ```
 
 - `source`: `photos` 是相册 (App: PHPicker, 只出图片); `files` 是文件选择器 (App: 文档选择器, 图片、PDF 和文件夹都能选, 文件夹递归并按自然序; Web: 浏览器的文件对话框); `folder` 只有 Web 声明, 弹浏览器的目录选择 (`<input webkitdirectory>`), 取出里面的图片和 PDF 并按相对路径自然序排 (page2 在 page10 前, 与 App 的文件夹导入一致)。
 - 选出来的 **PDF 不放进 `files`**, 与拖放一致走事件 `pdf.added`: 只取第一个, 其余宿主立刻放掉并发一条 `host.notice`。
 
 - `id` 由宿主生成, 只在宿主进程内有意义。宿主把 `id` 映射到文件引用 (App: 沙盒内的临时副本或安全作用域 URL; Web: `File` 对象)。**不要把文件读进内存再回传。**
+- `modifiedAt`: App 在复制或搬进沙盒**之前**从原文件读 `URLResourceValues.contentModificationDate` (文档选择器、文件夹、`-pick-folder`; 「打开方式」读的是系统拷进 `Documents/Inbox` 的副本, 读到什么报什么, 系统是否保留原时间没有测过); Web 用 `File.lastModified` (为 0 时省略)。拖放、照片选择器、粘贴走 `NSItemProvider` 的文件表示, 系统给的是临时副本, 实测 (iPad 模拟器, 进程内 provider) 副本的修改时间是复制的那一刻而不是原文件的, 所以这几条路径上离导入不到 2 分钟的修改时间当作没有 (`FileDating.providerCopy`); 真机上系统是否保留原时间没有测过。分享扩展的收件箱、下载下来的链接、`pdf.renderPage` 渲染出的页不带 `modifiedAt` (收件箱里是扩展拷贝时的时间, 页图是刚生成的)。
 - 非图片、非 PDF 的文件不要返回, 数一下发一条 `host.notice`。
 
 ### `files.paste`
@@ -141,7 +143,7 @@
 | 事件 | 载荷 | 说明 |
 |---|---|---|
 | `session.daemons` | `[{ name, url }]` | Bonjour 发现的 Daemon 列表变化 (全量, 不是增量) |
-| `files.added` | `[{ id, name, size, type }]` | 用户拖放、粘贴, 或从分享扩展、「打开方式」带进来的图片, 与 `files.pick` 同样的文件引用。Web 的 ⌘V / Ctrl+V 由 `web/host.js` 监听浏览器的 `paste` 事件 (取 `clipboardData.files`), 走这个事件; 拖入的文件夹同样按自然序 |
+| `files.added` | `[{ id, name, size, type, modifiedAt? }]` | 用户拖放、粘贴, 或从分享扩展、「打开方式」带进来的图片, 与 `files.pick` 同样的文件引用。Web 的 ⌘V / Ctrl+V 由 `web/host.js` 监听浏览器的 `paste` 事件 (取 `clipboardData.files`), 走这个事件; 拖入的文件夹同样按自然序 |
 | `files.dragState` | `{ "active": true \| false }` | 拖拽进入 / 离开窗口, TSX 据此显示「松开以添加」。Web 发; App 可选 |
 | `host.notice` | `{ "text": "…" }` | 一条给用户看的提示 (比如「已忽略 3 个不是图片的文件」), TSX 用 toast 显示 |
 
@@ -243,7 +245,7 @@ nativeComponent<
 { "fileRef": { "id": "…", "name": "book-p001.png", "size": 2345678, "type": "image/png" } }
 ```
 
-- `fileRef` 和 `files.pick` 返回的文件引用同形, `id` 直接当 `upload.start` 的 `fileId`, 上传和释放规则完全一样 (成功后宿主自己释放; 被拒绝或放弃时 TSX 发 `files.release`)。渲染出的 PNG 在宿主沙盒里, 不进 JS。
+- `fileRef` 和 `files.pick` 返回的文件引用同形 (不带 `modifiedAt`: 页图是刚生成的, 排序时按「没有日期」放在末尾), `id` 直接当 `upload.start` 的 `fileId`, 上传和释放规则完全一样 (成功后宿主自己释放; 被拒绝或放弃时 TSX 发 `files.release`)。渲染出的 PNG 在宿主沙盒里, 不进 JS。
 - 页码越界、`fileId` 已不存在、文件不是 PDF 时 reject。
 - `longEdge` 一般取 Config 的 `downscale_long_edge` (没有就 3072)。宿主把页面画到长边等于 `longEdge` (矢量页会放大, 扫描页受原图分辨率限制); 上限 6144 是因为渲染要整页位图, 再大 iPad 会吃不消。
 - 页 → Job 的映射、译文叠加和空格切换是 TSX 的事 (`PageMachine`); 宿主只管上面这几个调用和组件。

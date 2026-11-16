@@ -1,9 +1,10 @@
 import { Image, platform, Text, View } from "nsh";
 import { jobStatusLabel, shortJobId } from "../domain/job";
 import { mediaUrl, THUMB_WIDTH } from "../domain/media";
-import { isRemovable, type Item } from "../domain/board";
-import { formatBytes } from "../format";
+import { factsOf, isRemovable, type Item } from "../domain/board";
+import { formatBytes, formatModified } from "../format";
 import { cancelItem, highlight, itemOf, removeItems, retryItem } from "../store/jobs";
+import { openMenu } from "../store/menu";
 import { openViewer } from "../store/route";
 import { session } from "../store/session";
 import { Badge, Button, Icon, IconButton, type BadgeTone } from "../ui";
@@ -25,6 +26,12 @@ export const toneOf = (item: Item): BadgeTone => {
 };
 
 export const titleOf = (item: Item): string => (item.kind === "job" ? (item.name ?? shortJobId(item.row.jobId)) : item.file.name);
+
+/** 行里状态旁的小字: 大小和修改时间, 缺的不显示。 */
+export const factsLabel = (item: Item): string => {
+  const { size, modifiedAt } = factsOf(item);
+  return [size === undefined ? "" : formatBytes(size), modifiedAt === undefined ? "" : formatModified(modifiedAt)].filter(Boolean).join(" · ");
+};
 
 export const statusOf = (item: Item): string => {
   switch (item.kind) {
@@ -82,8 +89,8 @@ export function JobRow(props: { itemKey: () => string }) {
               </Text>
               <View class="flex-row items-center gap-2">
                 <Badge label={statusOf(current())} tone={toneOf(current())} />
-                <If when={current().kind !== "job"}>
-                  <Text class="text-xs text-muted-foreground">{formatBytes((current() as { file: { size: number } }).file.size)}</Text>
+                <If when={factsLabel(current())}>
+                  {(text) => <Text class="flex-1 truncate text-xs text-muted-foreground">{text()}</Text>}
                 </If>
               </View>
             </View>
@@ -118,6 +125,7 @@ export function RowActions(props: { item: Item; itemKey: string; chevron?: boole
       <If when={removable()}>
         <IconButton label="移除" icon="x" tone="muted-foreground" onPress={() => removeItems([props.itemKey])} />
       </If>
+      <IconButton label={`更多: ${titleOf(props.item)}`} icon="more" tone="muted-foreground" testID="item-more" onPress={() => openMenu({ kind: "item", key: props.itemKey })} />
       <If when={(props.chevron ?? true) && props.item.kind === "job" && props.item.row.state === "done" && desktop}>
         <Icon name="chevron-right" size={16} tone="muted-foreground" />
       </If>

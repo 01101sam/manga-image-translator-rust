@@ -55,11 +55,19 @@ export function parseDaemons(value: unknown): DaemonRef[] {
 
 export function parseFiles(value: unknown): LocalFile[] {
   if (!Array.isArray(value)) return [];
-  return value.flatMap((raw) =>
-    isRecord(raw) && typeof raw.id === "string" && typeof raw.name === "string"
-      ? [{ id: raw.id, name: raw.name, size: typeof raw.size === "number" ? raw.size : 0, type: typeof raw.type === "string" ? raw.type : "" }]
-      : [],
-  );
+  return value.flatMap((raw) => {
+    if (!isRecord(raw) || typeof raw.id !== "string" || typeof raw.name !== "string") return [];
+    const modifiedAt = typeof raw.modifiedAt === "number" && raw.modifiedAt > 0 && Number.isFinite(raw.modifiedAt) ? raw.modifiedAt : undefined;
+    return [
+      {
+        id: raw.id,
+        name: raw.name,
+        size: typeof raw.size === "number" ? raw.size : 0,
+        type: typeof raw.type === "string" ? raw.type : "",
+        ...(modifiedAt === undefined ? {} : { modifiedAt }),
+      },
+    ];
+  });
 }
 
 function parseSnapshot(value: unknown): HostSnapshot {

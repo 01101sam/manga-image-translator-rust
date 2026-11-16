@@ -62,6 +62,70 @@ final class HostFilesTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
     }
 
+    private func stamp(_ url: URL, _ seconds: TimeInterval) throws {
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: seconds)], ofItemAtPath: url.path)
+    }
+
+    func testAdoptReportsTheSourceFilesModificationTimeInMilliseconds() throws {
+        let files = makeFiles()
+        let moved = try write("moved.png")
+        try stamp(moved, 1_700_000_000)
+        let ref = try files.adopt(moved, move: true)
+        XCTAssertEqual(ref.modifiedAt, 1_700_000_000_000)
+        XCTAssertEqual(ref.json["modifiedAt"] as? Double, 1_700_000_000_000)
+        let copied = try write("copied.png")
+        try stamp(copied, 1_600_000_123.456)
+        XCTAssertEqual(try files.adopt(copied, move: false).modifiedAt, 1_600_000_123_456)
+    }
+
+    func testAdoptWithoutADateLeavesItOutOfTheReference() throws {
+        let files = makeFiles()
+        let source = try write("rendered.png")
+        try stamp(source, 1_700_000_000)
+        let ref = try files.adopt(source, move: true, dating: .none)
+        XCTAssertNil(ref.modifiedAt)
+        XCTAssertNil(ref.json["modifiedAt"])
+        XCTAssertNil(ManagedFiles.modificationTime(of: directory.appendingPathComponent("missing.png")))
+    }
+
+    func testFolderIngestKeepsEachFilesOwnModificationTime() async throws {
+        let files = makeFiles()
+        let folder = directory.appendingPathComponent("dated")
+        try stamp(try write("a.png", in: folder), 1_700_000_300)
+        try stamp(try write("b.png", in: folder), 1_700_000_100)
+        let result = await FileIngestor(files: files).ingest(urls: [folder], allowing: [.image])
+        XCTAssertEqual(result.images.map(\.name), ["a.png", "b.png"])
+        XCTAssertEqual(result.images.map(\.modifiedAt), [1_700_000_300_000, 1_700_000_100_000])
+    }
+
+    /// 实测 (模拟器, 进程内 provider): provider 的文件表示是临时副本, 修改时间是复制的那一刻 (1794805617491, 而源文件是 1700000000000),
+    /// 所以拖放和照片选择器的文件在这里没有修改时间, 而不是带一个看着像真的导入时间。
+    func testProviderCopiesCarryNoModificationTimeBecauseItIsOnlyTheCopyTime() async throws {
+        let files = makeFiles()
+        let source = try write("provided.png", bytes: 64, in: directory.appendingPathComponent("drop"))
+        try stamp(source, 1_700_000_000)
+        let provider = try XCTUnwrap(NSItemProvider(contentsOf: source))
+        let result = await FileIngestor(files: files).ingest(providers: [provider], allowing: [.image])
+        let ref = try XCTUnwrap(result.images.first)
+        XCTAssertEqual(ref.size, 64)
+        XCTAssertNil(ref.modifiedAt)
+    }
+
+    func testProviderCopyDatingKeepsOldTimesAndDropsJustCopiedOnes() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let old = try write("old.png")
+        try stamp(old, 1_700_000_000)
+        let fresh = try write("fresh.png")
+        try stamp(fresh, 1_800_000_000 - 30)
+        let borderline = try write("edge.png")
+        try stamp(borderline, 1_800_000_000 - 121)
+        XCTAssertEqual(ManagedFiles.modifiedAt(of: old, dating: .providerCopy, now: now), 1_700_000_000_000)
+        XCTAssertNil(ManagedFiles.modifiedAt(of: fresh, dating: .providerCopy, now: now))
+        XCTAssertEqual(ManagedFiles.modifiedAt(of: borderline, dating: .providerCopy, now: now), 1_799_999_879_000)
+        XCTAssertEqual(ManagedFiles.modifiedAt(of: fresh, dating: .original, now: now), 1_799_999_970_000)
+        XCTAssertNil(ManagedFiles.modifiedAt(of: old, dating: .none, now: now))
+    }
+
     func testReleaseIgnoresUnknownIDs() {
         let files = makeFiles()
         files.release(["../../etc", "nope"])

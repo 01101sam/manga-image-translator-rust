@@ -1,4 +1,5 @@
 import { jobFromEntry, reduceJob, type JobEvent, type JobRow } from "./job";
+import type { SavedJob } from "./saved";
 import { isActive, type JobEntry, type LocalFile } from "./types";
 
 /** 本地 Item 的三态: 还没交给 Daemon、正在上传、已成为 Job。 */
@@ -18,17 +19,34 @@ export interface UploadingItem {
   readonly file: LocalFile;
 }
 
-export interface JobItem {
+export interface JobItem extends FileFacts {
   readonly kind: "job";
   readonly key: string;
   readonly row: JobRow;
-  /** 来自本地文件名, 恢复列表后没有。 */
-  readonly name?: string;
 }
 
-/** 列表的唯一数据源: `order` 决定显示顺序, `items` 按 key 存放, 变化的 key 由每次操作返回。 */
+/** 排序和显示用的三项文件信息, 导入时由宿主给出。缺失的值 (宿主没读到、旧版本存档里没有) 排在末尾。 */
+export interface FileFacts {
+  readonly name?: string;
+  readonly size?: number;
+  readonly modifiedAt?: number;
+}
+
+export function factsOf(item: Item): FileFacts {
+  if (item.kind === "job") return { name: item.name, size: item.size, modifiedAt: item.modifiedAt };
+  const { name, size, modifiedAt } = item.file;
+  return { name, size: size > 0 ? size : undefined, modifiedAt };
+}
+
+/**
+ * 列表的唯一数据源。`items` 按 key 存放, 变化的 key 由每次操作返回。两个顺序互相独立:
+ * - `submitOrder` 是加入顺序, Pending Upload 按它提交给 Daemon, 排序和拖动都不动它。
+ * - `displayOrder` 是界面上的顺序, 新条目追加在末尾, 用户可以一次性排序或拖动调整。
+ * 两者始终是同一批 key 的两种排列。
+ */
 export interface Board {
-  readonly order: readonly string[];
+  readonly submitOrder: readonly string[];
+  readonly displayOrder: readonly string[];
   readonly items: Readonly<Record<string, Item>>;
 }
 
@@ -36,15 +54,15 @@ export interface Change {
   readonly board: Board;
   /** 内容变化的 key, 供 store 只更新这些行的 signal。 */
   readonly changed: readonly string[];
-  /** 新增或移除的 key 使 order 改变。 */
+  /** 新增、移除、排序或移动使显示顺序或加入顺序改变。 */
   readonly orderChanged: boolean;
 }
 
-export const emptyBoard: Board = { order: [], items: {} };
+export const emptyBoard: Board = { submitOrder: [], displayOrder: [], items: {} };
 
 export const localKey = (fileId: string): string => `local:${fileId}`;
 
-const unchanged = (board: Board): Change => ({ board, changed: [], orderChanged: false });
+export const unchanged = (board: Board): Change => ({ board, changed: [], orderChanged: false });
 
 export function addFiles(board: Board, files: readonly LocalFile[]): Change {
   const fresh = files.filter((file) => board.items[localKey(file.id)] === undefined);
@@ -56,12 +74,16 @@ export function addFiles(board: Board, files: readonly LocalFile[]): Change {
     items[key] = { kind: "pending", key, file };
     keys.push(key);
   }
-  return { board: { order: [...board.order, ...keys], items }, changed: keys, orderChanged: true };
+  return {
+    board: { submitOrder: [...board.submitOrder, ...keys], displayOrder: [...board.displayOrder, ...keys], items },
+    changed: keys,
+    orderChanged: true,
+  };
 }
 
 function replaceItem(board: Board, key: string, next: Item): Change {
   if (board.items[key] === next) return unchanged(board);
-  return { board: { order: board.order, items: { ...board.items, [key]: next } }, changed: [key], orderChanged: false };
+  return { board: { ...board, items: { ...board.items, [key]: next } }, changed: [key], orderChanged: false };
 }
 
 export function startUpload(board: Board, key: string): Change {
@@ -81,13 +103,14 @@ export function uploadSucceeded(board: Board, key: string, jobId: string): Chang
   const job: JobItem = {
     kind: "job",
     key: jobId,
-    name: item.file.name,
+    ...factsOf(item),
     row: jobFromEntry({ jobId, state: "queued" }),
   };
   const items: Record<string, Item> = { ...board.items, [jobId]: job };
   delete items[key];
+  const swap = (order: readonly string[]) => order.map((k) => (k === key ? jobId : k));
   return {
-    board: { order: board.order.map((k) => (k === key ? jobId : k)), items },
+    board: { submitOrder: swap(board.submitOrder), displayOrder: swap(board.displayOrder), items },
     changed: [jobId],
     orderChanged: true,
   };
@@ -117,8 +140,9 @@ export function removeKeys(board: Board, keys: readonly string[]): Change {
   if (doomed.size === 0) return unchanged(board);
   const items: Record<string, Item> = { ...board.items };
   for (const key of doomed) delete items[key];
+  const keep = (order: readonly string[]) => order.filter((key) => !doomed.has(key));
   return {
-    board: { order: board.order.filter((key) => !doomed.has(key)), items },
+    board: { submitOrder: keep(board.submitOrder), displayOrder: keep(board.displayOrder), items },
     changed: [...doomed],
     orderChanged: true,
   };
@@ -135,13 +159,13 @@ export function applyJobEvent(board: Board, jobId: string, event: JobEvent): { c
 
 /**
  * 套用一次 `GET /jobs` 的批量状态。没变化的行保持同一个引用, 返回的 `changed` 只含真正变化的 key。
- * Daemon 返回的顺序不确定 (哈希表), 所以显示顺序始终以 `board.order` 为准。
+ * Daemon 返回的顺序不确定 (哈希表), 所以显示顺序始终以 `board.displayOrder` 为准。
  */
 export function applyJobList(board: Board, entries: readonly JobEntry[]): Change {
   const byId = new Map(entries.map((entry) => [entry.jobId, entry] as const));
   let items = board.items;
   const changed: string[] = [];
-  for (const key of board.order) {
+  for (const key of board.submitOrder) {
     const item = board.items[key];
     if (item?.kind !== "job") continue;
     const entry = byId.get(key);
@@ -153,21 +177,15 @@ export function applyJobList(board: Board, entries: readonly JobEntry[]): Change
     }
   }
   if (changed.length === 0) return unchanged(board);
-  return { board: { order: board.order, items }, changed, orderChanged: false };
+  return { board: { ...board, items }, changed, orderChanged: false };
 }
 
 /** 刚变成 failed 但还没取到原因的 Job, 需要单独 GET /jobs/{id} 一次。 */
 export function jobsNeedingError(board: Board): string[] {
-  return board.order.filter((key) => {
+  return board.displayOrder.filter((key) => {
     const item = board.items[key];
     return item?.kind === "job" && item.row.state === "failed" && item.row.error === undefined;
   });
-}
-
-/** 保存下来的一个 Job: id 和当时的文件名 (恢复后列表仍显示文件名)。 */
-export interface SavedJob {
-  readonly id: string;
-  readonly name?: string;
 }
 
 /** 用保存的列表和 Daemon 当前的批量状态重建 Job Item, 保持保存时的顺序, Daemon 已不认识的丢弃。 */
@@ -175,19 +193,20 @@ export function restoreJobs(saved: readonly SavedJob[], entries: readonly JobEnt
   const byId = new Map(entries.map((entry) => [entry.jobId, entry] as const));
   const order: string[] = [];
   const items: Record<string, Item> = {};
-  for (const { id, name } of saved) {
+  for (const { id, name, size, modifiedAt } of saved) {
     const entry = byId.get(id);
     if (!entry || items[id] !== undefined) continue;
     order.push(id);
-    items[id] = { kind: "job", key: id, name, row: jobFromEntry(entry) };
+    items[id] = { kind: "job", key: id, name, size, modifiedAt, row: jobFromEntry(entry) };
   }
-  return { order, items };
+  return { submitOrder: order, displayOrder: order, items };
 }
 
+/** 按显示顺序存, 重启后列表就是用户看到的样子。 */
 export function savedJobs(board: Board): SavedJob[] {
-  return board.order.flatMap((key) => {
+  return board.displayOrder.flatMap((key) => {
     const item = board.items[key];
-    return item?.kind === "job" ? [{ id: key, name: item.name }] : [];
+    return item?.kind === "job" ? [{ id: key, name: item.name, size: item.size, modifiedAt: item.modifiedAt }] : [];
   });
 }
 
@@ -204,7 +223,7 @@ export interface Counts {
 
 export function countItems(board: Board): Counts {
   const c = { pending: 0, uploading: 0, queued: 0, running: 0, done: 0, failed: 0, cancelled: 0 };
-  for (const key of board.order) {
+  for (const key of board.submitOrder) {
     const item = board.items[key];
     if (!item) continue;
     if (item.kind === "pending") {
@@ -213,13 +232,13 @@ export function countItems(board: Board): Counts {
     } else if (item.kind === "uploading") c.uploading++;
     else c[item.row.state]++;
   }
-  return { ...c, total: board.order.length };
+  return { ...c, total: board.submitOrder.length };
 }
 
 /** 在途数: 已交给 Daemon 且还没结束的 Job, 加上正在上传的。 */
 export function inFlight(board: Board): number {
   let n = 0;
-  for (const key of board.order) {
+  for (const key of board.submitOrder) {
     const item = board.items[key];
     if (item?.kind === "uploading") n++;
     else if (item?.kind === "job" && isActive(item.row.state)) n++;
@@ -234,14 +253,14 @@ export interface UploadLimits {
   readonly concurrency: number;
 }
 
-/** 按顺序挑出现在可以开始上传的 Pending: 受队列余量和上传并发双重限制。 */
+/** 按加入顺序 (不是显示顺序) 挑出现在可以开始上传的 Pending: 受队列余量和上传并发双重限制。 */
 export function planUploads(board: Board, limits: UploadLimits): string[] {
   let uploading = 0;
-  for (const key of board.order) if (board.items[key]?.kind === "uploading") uploading++;
+  for (const key of board.submitOrder) if (board.items[key]?.kind === "uploading") uploading++;
   const room = Math.min(limits.capacity - inFlight(board), limits.concurrency - uploading);
   if (room <= 0) return [];
   const plan: string[] = [];
-  for (const key of board.order) {
+  for (const key of board.submitOrder) {
     if (plan.length >= room) break;
     const item = board.items[key];
     if (item?.kind === "pending" && item.rejected === undefined) plan.push(key);
@@ -259,7 +278,7 @@ export function isRemovable(item: Item | undefined): boolean {
 
 /** 「清除已完成」要移除的 key: 已结束的 Job 和被拒绝的 Pending。 */
 export function clearableKeys(board: Board): string[] {
-  return board.order.filter((key) => {
+  return board.displayOrder.filter((key) => {
     const item = board.items[key];
     if (item?.kind === "job") return !isActive(item.row.state);
     return item?.kind === "pending" && item.rejected !== undefined;

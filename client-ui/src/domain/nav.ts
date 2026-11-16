@@ -40,7 +40,7 @@ export function gridStep(arrow: Arrow, columns: number): number | null {
 
 /** 查看器里在已完成的 Job 之间移动; 到头时停在原处。 */
 export function adjacentDone(board: Board, currentKey: string | null, delta: number): string | null {
-  const done = board.order.filter((key) => {
+  const done = board.displayOrder.filter((key) => {
     const item = board.items[key];
     return item?.kind === "job" && canOpenJob(item.row.state);
   });
@@ -55,7 +55,7 @@ export function adjacentDone(board: Board, currentKey: string | null, delta: num
 
 /** 已完成 Job 中某一项的位置 (从 1 起) 与总数, 查看器角标用。 */
 export function donePosition(board: Board, key: string): { index: number; total: number } | null {
-  const done = board.order.filter((k) => {
+  const done = board.displayOrder.filter((k) => {
     const item = board.items[k];
     return item?.kind === "job" && canOpenJob(item.row.state);
   });

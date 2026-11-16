@@ -1,5 +1,5 @@
 import { effect, keymap, platform, Text, View } from "nsh";
-import { currentBoard, order } from "../store/jobs";
+import { currentBoard, displayOrder } from "../store/jobs";
 import { pasteAndAdd } from "../store/importer";
 import { importSources } from "../store/session";
 import { closeViewer, section, viewerKey, type Section } from "../store/route";
@@ -25,7 +25,7 @@ export function Shell() {
   // 正在看的 Job 被移除时关掉查看器。
   effect(() => {
     const key = viewerKey();
-    order();
+    displayOrder();
     if (key !== null && currentBoard().items[key] === undefined) closeViewer();
   });
   // 宿主声明了 paste 才绑 ⌘V。网页不声明: 浏览器自己发 paste 事件 (web/host.js 在听), 绑了反而会吃掉这个按键。

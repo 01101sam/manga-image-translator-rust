@@ -11,11 +11,14 @@ let seq = 0;
 
 const isImage = (file) => file.type.startsWith("image/") || IMAGE_EXT.test(file.name);
 
-function register(list) {
+/** `dated` 为假时不带修改时间: PDF 渲染出来的页是刚生成的, `lastModified` 只是渲染的那一刻, 不是用户的文件日期。 */
+function register(list, { dated = true } = {}) {
   return list.map((file) => {
     const id = "w" + ++seq + "-" + Math.random().toString(36).slice(2, 8);
     files.set(id, file);
-    return { id, name: file.name, size: file.size, type: file.type };
+    const ref = { id, name: file.name, size: file.size, type: file.type };
+    if (dated && file.lastModified > 0) ref.modifiedAt = file.lastModified;
+    return ref;
   });
 }
 
@@ -261,7 +264,7 @@ async function renderPageToFile({ fileId, page, longEdge }) {
       );
       const stem = pdfs.get(fileId).file.name.replace(/\.pdf$/i, "") || "page";
       const name = stem + "-p" + String(page + 1).padStart(3, "0") + ".png";
-      const [fileRef] = register([new File([blob], name, { type: "image/png" })]);
+      const [fileRef] = register([new File([blob], name, { type: "image/png" })], { dated: false });
       return { fileRef };
     } finally {
       canvas.width = canvas.height = 0;

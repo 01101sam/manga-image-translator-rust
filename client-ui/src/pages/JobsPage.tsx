@@ -13,19 +13,27 @@ import {
   highlight,
   moveSelection,
   notice,
-  order,
+  displayOrder,
   removeItems,
 } from "../store/jobs";
-import { importMenuOpen, openImportMenu } from "../store/importer";
+import { openImportMenu } from "../store/importer";
+import { activeMenu, openMenu } from "../store/menu";
 import { overrides, setOverride } from "../store/overrides";
 import { openViewer, viewerKey } from "../store/route";
 import { Banner, Button, Card, Empty, Icon, Meter, SelectField } from "../ui";
+import { ItemMenu, SortMenu } from "./ArrangeMenus";
 import { ImportMenu } from "./ImportMenu";
 import { JobRow } from "./JobRow";
 import { JobTile } from "./JobTile";
 
 const desktop = platform.desktop;
 const optionsOpen = signal(false);
+
+/** 条目菜单对应的条目; 没有打开时为 null。 */
+const itemMenuKey = (): string | null => {
+  const menu = activeMenu();
+  return menu?.kind === "item" ? menu.key : null;
+};
 
 function summary(c: Counts): string {
   const parts: string[] = [];
@@ -50,7 +58,7 @@ export function JobsPage() {
   const thumbWidth = () => thumbWidthFor(tileWidth(listWidth(), columns()));
 
   // 查看器和导入菜单盖在列表上时, 键盘不动列表。
-  const covered = () => viewerKey() !== null || importMenuOpen();
+  const covered = () => viewerKey() !== null || activeMenu() !== null;
   const select = (delta: number) => {
     if (covered()) return;
     const index = moveSelection(delta);
@@ -93,6 +101,15 @@ export function JobsPage() {
             </Text>
           </View>
           <Button label="选项" size="sm" variant="ghost" icon="sliders" onPress={() => optionsOpen.update((v) => !v)} />
+          <Button
+            label="排序"
+            size="sm"
+            variant="ghost"
+            icon="sort"
+            testID="open-sort"
+            disabled={counts().total < 2}
+            onPress={() => openMenu({ kind: "sort" })}
+          />
           <If when={counts().done + counts().failed + counts().cancelled > 0}>
             <Button label="清除已结束" size="sm" variant="secondary" testID="clear-finished" onPress={clearFinished} />
           </If>
@@ -147,7 +164,7 @@ export function JobsPage() {
       <If when={notice()}>{(text) => <Banner testID="net-banner" tone="destructive" text={text()} />}</If>
       <View class="flex-1" onLayout={(event) => listWidth.set(event.bounds.size.width)}>
         <If
-          when={order().length > 0}
+          when={displayOrder().length > 0}
           else={
             <Empty
               icon="image"
@@ -166,7 +183,7 @@ export function JobsPage() {
           <List
             testID={columns() > 1 ? "job-grid" : "job-list"}
             ref={(node) => (list = node)}
-            each={order()}
+            each={displayOrder()}
             keyExtractor={(key) => key}
             numColumns={columns()}
             estimatedItemSize={columns() > 1 ? tileWidth(listWidth(), columns()) / 0.72 + 80 : 72}
@@ -191,9 +208,13 @@ export function JobsPage() {
           </View>
         </If>
       </View>
-      <If when={importMenuOpen()}>
+      <If when={activeMenu()?.kind === "import"}>
         <ImportMenu />
       </If>
+      <If when={activeMenu()?.kind === "sort"}>
+        <SortMenu />
+      </If>
+      <If when={itemMenuKey()}>{(key) => <ItemMenu itemKey={key()} />}</If>
     </View>
   );
 }

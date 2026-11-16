@@ -33,11 +33,13 @@ function submitted(board: Board, id: string, jobId: string): Board {
 describe("Board", () => {
   test("added files queue locally in order and never duplicate", () => {
     let change = addFiles(emptyBoard, files(3));
-    expect(change.board.order).toEqual(["local:f0", "local:f1", "local:f2"]);
+    expect(change.board.submitOrder).toEqual(["local:f0", "local:f1", "local:f2"]);
+    expect(change.board.displayOrder).toEqual(change.board.submitOrder);
     expect(change.changed.length).toBe(3);
     change = addFiles(change.board, [file("f1"), file("f9")]);
-    expect(change.board.order.at(-1)).toBe("local:f9");
-    expect(change.board.order.length).toBe(4);
+    expect(change.board.submitOrder.at(-1)).toBe("local:f9");
+    expect(change.board.submitOrder.length).toBe(4);
+    expect(change.board.displayOrder.length).toBe(4);
   });
 
   test("uploads start in order and respect upload concurrency", () => {
@@ -69,7 +71,8 @@ describe("Board", () => {
   test("a finished upload swaps the local key for the job id in place", () => {
     const board = addFiles(emptyBoard, files(3)).board;
     const next = submitted(board, "f1", "job-1");
-    expect(next.order).toEqual(["local:f0", "job-1", "local:f2"]);
+    expect(next.submitOrder).toEqual(["local:f0", "job-1", "local:f2"]);
+    expect(next.displayOrder).toEqual(["local:f0", "job-1", "local:f2"]);
     const item = next.items["job-1"];
     expect(item?.kind === "job" && item.name).toBe("f1.png");
     expect(next.items["local:f1"]).toBeUndefined();
@@ -105,7 +108,8 @@ describe("Board", () => {
     expect(second.changed).toEqual(["j1"]);
     expect(second.board.items["j0"]).toBe(board.items["j0"]);
     expect(second.board.items["j2"]).toBe(board.items["j2"]);
-    expect(second.board.order).toBe(board.order);
+    expect(second.board.submitOrder).toBe(board.submitOrder);
+    expect(second.board.displayOrder).toBe(board.displayOrder);
   });
 
   test("the daemon's arbitrary order never reorders the list", () => {
@@ -116,13 +120,13 @@ describe("Board", () => {
       { jobId: "j0", state: "done" },
       { jobId: "j1", state: "done" },
     ];
-    expect(applyJobList(board, shuffled).board.order).toEqual(["j0", "j1", "j2"]);
+    expect(applyJobList(board, shuffled).board.displayOrder).toEqual(["j0", "j1", "j2"]);
   });
 
   test("jobs other clients submitted are not adopted", () => {
     const board = submitted(addFiles(emptyBoard, files(1)).board, "f0", "mine");
     const next = applyJobList(board, [{ jobId: "mine", state: "queued" }, { jobId: "theirs", state: "queued" }]);
-    expect(next.board.order).toEqual(["mine"]);
+    expect(next.board.displayOrder).toEqual(["mine"]);
   });
 
   test("a vanished job fails once and its reason is fetched separately", () => {
@@ -147,7 +151,8 @@ describe("Board", () => {
     board = applyJobList(board, [{ jobId: "j0", state: "done" }, { jobId: "j1", state: "running" }, { jobId: "j2", state: "failed" }]).board;
     expect(clearableKeys(board)).toEqual(["j0", "j2"]);
     const cleared = removeKeys(board, clearableKeys(board)).board;
-    expect(cleared.order).toEqual(["j1", "local:f3"]);
+    expect(cleared.submitOrder).toEqual(["j1", "local:f3"]);
+    expect(cleared.displayOrder).toEqual(["j1", "local:f3"]);
   });
 
   test("only finished jobs and files not yet in flight are removable", () => {
@@ -167,7 +172,8 @@ describe("Board", () => {
       { jobId: "b", state: "queued" },
       { jobId: "stranger", state: "queued" },
     ]);
-    expect(restored.order).toEqual(["b", "a"]);
+    expect(restored.displayOrder).toEqual(["b", "a"]);
+    expect(restored.submitOrder).toEqual(["b", "a"]);
     expect(restored.items["b"]?.kind === "job" && restored.items["b"].name).toBe("b.png");
   });
 
@@ -190,7 +196,7 @@ describe("Board", () => {
       }
       expect(inFlight(board)).toBeLessThanOrEqual(64);
       // 模拟 Daemon 完成最老的 10 个
-      const active = board.order.filter((k) => board.items[k]?.kind === "job" && ["queued", "running"].includes((board.items[k] as { row: { state: string } }).row.state));
+      const active = board.submitOrder.filter((k) => board.items[k]?.kind === "job" && ["queued", "running"].includes((board.items[k] as { row: { state: string } }).row.state));
       board = applyJobList(board, active.slice(0, 10).map((jobId) => ({ jobId, state: "done" as const }))).board;
     }
     expect(submittedCount).toBe(200);

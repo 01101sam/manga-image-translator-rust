@@ -540,3 +540,132 @@ describe("grid on wide screens", () => {
     await app.waitFor("text:6 / 10");
   });
 });
+describe("arranging the list", () => {
+  const T = 1_700_000_000_000;
+  // 名字、大小、日期三种顺序互不相同: 名字 page1 < page2 < page10, 大小 b < c < a, 日期 c < a < b。
+  const pages = () => [
+    { id: "a", name: "page10.png", size: 3000, type: "image/png", modifiedAt: T + 2000 },
+    { id: "b", name: "page2.png", size: 1000, type: "image/png", modifiedAt: T + 3000 },
+    { id: "c", name: "Page1.png", size: 2000, type: "image/png", modifiedAt: T + 1000 },
+  ];
+  const titles = (app: Launched) => app.texts().filter((t) => /^page\d+\.png$/i.test(t));
+
+  /** Engine 停着, 三个文件都留在待上传里, 方便看顺序又不会被 Daemon 改状态。 */
+  async function heldPages(extra: { platform?: "ios" | "web"; width?: number; height?: number } = {}) {
+    const daemon = createFakeDaemon({ engine: "stopped" });
+    const app = await launch({ daemon, saved: true, picks: [pages()] }, extra);
+    await app.waitFor("id:add-images");
+    await importFrom(app);
+    await app.waitFor("text:/共 3 张/");
+    return { app, daemon };
+  }
+
+  async function sortBy(app: Launched, id: string) {
+    await app.press("id:open-sort");
+    await app.waitFor("id:sort-menu");
+    await app.press("id:sort-" + id);
+    await app.waitFor("id:sort-menu", { state: "gone" });
+  }
+
+  test("the sort menu offers name, date and size, each ascending and descending, and sorts everything once", async () => {
+    const { app } = await heldPages();
+    expect(titles(app)).toEqual(["page10.png", "page2.png", "Page1.png"]);
+    await app.press("id:open-sort");
+    await app.waitFor("id:sort-menu");
+    for (const label of ["名称 · 升序", "名称 · 降序", "日期 · 从旧到新", "日期 · 从新到旧", "大小 · 从小到大", "大小 · 从大到小"]) {
+      expect(app.shows("label:" + label)).toBe(true);
+    }
+    await app.press("id:sort-name-asc");
+    await app.waitFor("id:sort-menu", { state: "gone" });
+    expect(titles(app)).toEqual(["Page1.png", "page2.png", "page10.png"]);
+    await sortBy(app, "name-desc");
+    expect(titles(app)).toEqual(["page10.png", "page2.png", "Page1.png"]);
+    await sortBy(app, "modified-asc");
+    expect(titles(app)).toEqual(["Page1.png", "page10.png", "page2.png"]);
+    await sortBy(app, "modified-desc");
+    expect(titles(app)).toEqual(["page2.png", "page10.png", "Page1.png"]);
+    await sortBy(app, "size-asc");
+    expect(titles(app)).toEqual(["page2.png", "Page1.png", "page10.png"]);
+    await sortBy(app, "size-desc");
+    expect(titles(app)).toEqual(["page10.png", "Page1.png", "page2.png"]);
+  });
+
+  test("sorting is a one-time rearrangement: files added afterwards go to the end and nothing re-sorts", async () => {
+    const daemon = createFakeDaemon({ engine: "stopped" });
+    const more = [{ id: "z", name: "page0.png", size: 1, type: "image/png", modifiedAt: T }];
+    const app = await launch({ daemon, saved: true, picks: [pages(), more] });
+    await importFrom(app);
+    await app.waitFor("text:/共 3 张/");
+    await sortBy(app, "name-asc");
+    await importFrom(app);
+    await app.waitFor("text:/共 4 张/");
+    expect(titles(app)).toEqual(["Page1.png", "page2.png", "page10.png", "page0.png"]);
+  });
+
+  test("sorting does not change the order files are submitted to the Daemon", async () => {
+    const { app, daemon } = await heldPages();
+    await sortBy(app, "name-asc");
+    daemon.setEngine("running");
+    await app.waitFor("text:/全部完成/", { timeout: 30_000 });
+    expect(calls(app, "upload.start").map((c) => (c.data as { fileId: string }).fileId)).toEqual(["a", "b", "c"]);
+  });
+
+  test("the item menu moves one item to the front or the back, and greys out what already is there", async () => {
+    const { app } = await heldPages();
+    const openMenuOf = async (title: string) => {
+      await app.press("label:更多: " + title);
+      await app.waitFor("id:item-menu");
+    };
+    await openMenuOf("Page1.png");
+    await app.press("id:move-to-front");
+    await app.waitFor("id:item-menu", { state: "gone" });
+    expect(titles(app)).toEqual(["Page1.png", "page10.png", "page2.png"]);
+    await openMenuOf("Page1.png");
+    // 已经在最前: 「移到最前」是置灰的, 按不动, 菜单还开着
+    await expect(app.press("id:move-to-front")).rejects.toThrow(/disabled/);
+    expect(app.shows("id:item-menu")).toBe(true);
+    await app.press("id:move-to-back");
+    await app.waitFor("id:item-menu", { state: "gone" });
+    expect(titles(app)).toEqual(["page10.png", "page2.png", "Page1.png"]);
+    await openMenuOf("page10.png");
+    await app.keyboard.press("escape");
+    await app.waitFor("id:item-menu", { state: "gone" });
+    expect(titles(app)).toEqual(["page10.png", "page2.png", "Page1.png"]);
+  });
+
+  test("the arranged order survives a restart: names, sizes and dates come back with the jobs", async () => {
+    const daemon = createFakeDaemon({ finishPerPoll: 1000 });
+    const first = await launch({ daemon, saved: true, picks: [pages()] });
+    await importFrom(first);
+    await first.waitFor("text:/全部完成/", { timeout: 30_000 });
+    await sortBy(first, "size-desc");
+    await first.press("label:更多: page2.png");
+    await first.press("id:move-to-front");
+    expect(titles(first)).toEqual(["page2.png", "page10.png", "Page1.png"]);
+    await first.wait(800);
+    const second = await open("../App.tsx", {
+      clock: {},
+      network: daemon.network,
+      storage: first.storage(),
+      host: {
+        handlers: {
+          "session.snapshot": () => ({ daemons: [{ name: "studio", url: BASE }], paired: { daemon: { name: "studio", url: BASE }, token: daemon.token() } }),
+        },
+      },
+    });
+    await second.waitFor("text:/共 3 张/", { timeout: 10_000 });
+    expect(titles(second)).toEqual(["page2.png", "page10.png", "Page1.png"]);
+    // 恢复后大小和日期还在, 再按日期排序能用
+    await sortBy(second, "modified-asc");
+    expect(titles(second)).toEqual(["Page1.png", "page10.png", "page2.png"]);
+  });
+
+  test("sorting needs two items", async () => {
+    const daemon = createFakeDaemon({ engine: "stopped" });
+    const app = await launch({ daemon, saved: true, picks: [pages().slice(0, 1)] });
+    await importFrom(app);
+    await app.waitFor("text:/共 1 张/");
+    await expect(app.press("id:open-sort")).rejects.toThrow(/disabled/);
+    expect(app.shows("id:sort-menu")).toBe(false);
+  });
+});

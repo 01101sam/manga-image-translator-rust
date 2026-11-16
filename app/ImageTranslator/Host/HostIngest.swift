@@ -120,8 +120,8 @@ final class FileIngestor: @unchecked Sendable {
     }
 
     /// 文件选择器和测试钩子给的 URL: 文件或目录 (递归), 拷贝进沙盒。move 为真时搬走原文件, 只用于 App 自己的目录 (收件箱、系统给的 Documents/Inbox 副本)。
-    func ingest(urls: [URL], move: Bool = false, allowing kinds: Set<HostFileKind>) async -> IngestResult {
-        await limiter.run { importSync(urls: urls, move: move, allowing: kinds) }
+    func ingest(urls: [URL], move: Bool = false, dating: FileDating = .original, allowing kinds: Set<HostFileKind>) async -> IngestResult {
+        await limiter.run { importSync(urls: urls, move: move, dating: dating, allowing: kinds) }
     }
 
     /// 分享扩展存下来的网页链接: 与拖放的链接走同一条下载路径, 占同一个并发名额。
@@ -141,7 +141,7 @@ final class FileIngestor: @unchecked Sendable {
         if kinds.contains(.image), provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
             return await loadFile(provider, type: .image) { [files] url in
                 var result = IngestResult()
-                result.images = [try files.adopt(url, name: Self.name(for: url, suggested: suggested, type: .image), move: true)]
+                result.images = [try files.adopt(url, name: Self.name(for: url, suggested: suggested, type: .image), move: true, dating: .providerCopy)]
                 return result
             }
         }
@@ -184,7 +184,7 @@ final class FileIngestor: @unchecked Sendable {
         do {
             switch kind {
             case .pdf: result.pdfs = [try files.importPDF(from: temporary, name: name, move: false)]
-            case .image: result.images = [try files.adopt(temporary, name: name, move: false)]
+            case .image: result.images = [try files.adopt(temporary, name: name, move: false, dating: .none)]
             }
         } catch {
             result.ignored = 1
@@ -213,32 +213,32 @@ final class FileIngestor: @unchecked Sendable {
                     continuation.resume(returning: IngestResult(ignored: 1))
                     return
                 }
-                continuation.resume(returning: self.importSync(urls: [url], move: false, allowing: kinds))
+                continuation.resume(returning: self.importSync(urls: [url], move: false, dating: .providerCopy, allowing: kinds))
             }
         }
     }
 
-    func importSync(urls: [URL], move: Bool, allowing kinds: Set<HostFileKind>) -> IngestResult {
+    func importSync(urls: [URL], move: Bool, dating: FileDating = .original, allowing kinds: Set<HostFileKind>) -> IngestResult {
         let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
         defer { scoped.forEach { $0.stopAccessingSecurityScopedResource() } }
         var result = IngestResult()
         for url in urls {
             if Self.isDirectory(url) {
-                for file in Self.files(inDirectory: url, allowing: kinds) { result.merge(importFile(file, move: move, allowing: kinds)) }
+                for file in Self.files(inDirectory: url, allowing: kinds) { result.merge(importFile(file, move: move, dating: dating, allowing: kinds)) }
             } else {
-                result.merge(importFile(url, move: move, allowing: kinds))
+                result.merge(importFile(url, move: move, dating: dating, allowing: kinds))
             }
         }
         return result
     }
 
-    private func importFile(_ url: URL, move: Bool, allowing kinds: Set<HostFileKind>) -> IngestResult {
+    private func importFile(_ url: URL, move: Bool, dating: FileDating, allowing kinds: Set<HostFileKind>) -> IngestResult {
         var result = IngestResult()
         guard let kind = HostFileKind(url: url), kinds.contains(kind) else { return IngestResult(ignored: 1) }
         do {
             switch kind {
             case .pdf: result.pdfs = [try files.importPDF(from: url, move: move)]
-            case .image: result.images = [try files.adopt(url, move: move)]
+            case .image: result.images = [try files.adopt(url, move: move, dating: dating)]
             }
         } catch {
             result.ignored = 1

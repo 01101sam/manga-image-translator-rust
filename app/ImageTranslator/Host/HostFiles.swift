@@ -2,17 +2,20 @@ import CoreGraphics
 import Foundation
 import UniformTypeIdentifiers
 
-/// 宿主发给 TSX 的文件引用, 与 HOST_PROTOCOL.md 的 { id, name, size, type } 同形。
+/// 宿主发给 TSX 的文件引用, 与 HOST_PROTOCOL.md 的 { id, name, size, type, modifiedAt? } 同形。
 struct FileRef: Equatable, Sendable {
     var id: String
     var name: String
     var size: Int
     var type: String
     var pageCount: Int?
+    /// 文件的修改时间, 毫秒时间戳。来自导入时的原文件 (URLResourceValues), 读不到时为 nil, TSX 排序时把它放在末尾。
+    var modifiedAt: Double?
 
     var json: [String: Any] {
         var value: [String: Any] = ["id": id, "name": name, "size": size, "type": type]
         if let pageCount { value["pageCount"] = pageCount }
+        if let modifiedAt { value["modifiedAt"] = modifiedAt }
         return value
     }
 }
@@ -44,6 +47,18 @@ enum HostFileKind: Sendable, Hashable {
             return nil
         }
     }
+}
+
+/// 文件的修改时间信不信: 用户自己的文件 (文档选择器、文件夹、打开方式) 读什么就报什么; NSItemProvider (拖放、照片选择器、粘贴) 给的是
+/// 系统的临时副本, 实测 (模拟器, 进程内 provider) 副本的修改时间是复制的那一刻, 而不是原文件的, 所以刚刚才改过的时间当作没有;
+/// 下载下来的链接和渲染出来的页只有生成时间, 一律没有。
+enum FileDating: Sendable {
+    case original
+    case providerCopy
+    case none
+
+    /// 离导入这一刻不到这么久的修改时间, 对 provider 的副本来说分不清是文件真的刚改过还是副本刚生成, 一律当没有。
+    static let justCopied: TimeInterval = 120
 }
 
 /// 面向用户的错误。宿主调用 reject 时 TSX 直接把 message 当 toast 显示。
@@ -110,7 +125,9 @@ final class ManagedFiles: @unchecked Sendable {
     // MARK: - 图片 (含渲染出的 PDF 页)
 
     /// 把一个文件收进沙盒并登记。move 为真时搬走原文件 (拖放给的临时文件在回调返回后就会被系统删掉), 失败退回拷贝。
-    func adopt(_ source: URL, name: String? = nil, move: Bool) throws -> FileRef {
+    func adopt(_ source: URL, name: String? = nil, move: Bool, dating: FileDating = .original, now: Date = Date()) throws -> FileRef {
+        // 搬走之后原文件就没了, 所以修改时间要在搬之前读 (只读元数据, 不读内容)。
+        let modifiedAt = Self.modifiedAt(of: source, dating: dating, now: now)
         let id = UUID().uuidString
         let directory = images.appendingPathComponent(id, isDirectory: true)
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -125,7 +142,7 @@ final class ManagedFiles: @unchecked Sendable {
         lock.lock()
         registry[id] = destination
         lock.unlock()
-        return FileRef(id: id, name: fileName, size: Self.size(of: destination), type: Self.mimeType(of: destination))
+        return FileRef(id: id, name: fileName, size: Self.size(of: destination), type: Self.mimeType(of: destination), modifiedAt: modifiedAt)
     }
 
     func url(for id: String) -> URL? {
@@ -214,6 +231,19 @@ final class ManagedFiles: @unchecked Sendable {
             }
         }
         try fileManager.copyItem(at: source, to: destination)
+    }
+
+    static func modifiedAt(of url: URL, dating: FileDating, now: Date) -> Double? {
+        guard dating != .none, let modified = modificationTime(of: url) else { return nil }
+        if dating == .providerCopy, abs(now.timeIntervalSince1970 * 1000 - modified) < FileDating.justCopied * 1000 { return nil }
+        return modified
+    }
+
+    /// 文件的修改时间 (毫秒时间戳); 读不到、或不是 1970 年之后的时间时返回 nil。
+    static func modificationTime(of url: URL) -> Double? {
+        guard let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate else { return nil }
+        let milliseconds = (date.timeIntervalSince1970 * 1000).rounded()
+        return milliseconds > 0 ? milliseconds : nil
     }
 
     static func size(of url: URL) -> Int {

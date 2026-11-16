@@ -19,8 +19,11 @@ export interface DaemonRef {
 export interface LocalFile {
   readonly id: string;
   readonly name: string;
+  /** 字节数; 宿主没读到时是 0, 排序时按「缺失」算。 */
   readonly size: number;
   readonly type: string;
+  /** 文件修改时间 (毫秒时间戳), 宿主没读到时缺省。App 读文件的 contentModificationDate, Web 读 File.lastModified。 */
+  readonly modifiedAt?: number;
 }
 
 export const isActive = (state: JobState): boolean => state === "queued" || state === "running";

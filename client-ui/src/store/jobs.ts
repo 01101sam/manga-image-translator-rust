@@ -13,7 +13,6 @@ import {
   removeKeys,
   restoreJobs,
   savedJobs,
-  type SavedJob,
   retryRejected,
   startUpload,
   UPLOAD_CONCURRENCY,
@@ -25,7 +24,9 @@ import {
   type Counts,
   type Item,
 } from "../domain/board";
+import { moveItem, moveToBack, moveToFront, sortBoard, type SortChoice } from "../domain/arrange";
 import { adjacentDone, moveHighlight } from "../domain/nav";
+import { decodeSaved, encodeSaved } from "../domain/saved";
 import type { PickSource } from "../domain/import";
 import type { LocalFile } from "../domain/types";
 import { engineAcceptsJobs, engineState, queueCapacity, refreshEngine } from "./engine";
@@ -35,12 +36,13 @@ import { showToast } from "./toast";
 
 /**
  * 列表状态。Board 是纯数据, 这里把它的变化翻译成 signal:
- * 每个 key 一个 signal, 轮询只写真正变化的行; `order` 只在增删时变。
+ * 每个 key 一个 signal, 轮询只写真正变化的行; `displayOrder` 只在增删、排序和移动时变。
  */
 let board: Board = emptyBoard;
 const itemSignals = new Map<string, Signal<Item>>();
 
-export const order = signal<readonly string[]>([]);
+/** 界面上的顺序 (Board.displayOrder), List 按它排列。 */
+export const displayOrder = signal<readonly string[]>([]);
 export const counts = signal<Counts>(countItems(board));
 /** 键盘高亮的行 (key)。 */
 export const highlight = signal<string | null>(null);
@@ -85,7 +87,7 @@ function commit(change: Change) {
     }
     if (change.orderChanged) {
       for (const key of itemSignals.keys()) if (board.items[key] === undefined) itemSignals.delete(key);
-      order.set(board.order);
+      displayOrder.set(board.displayOrder);
       if (highlight() !== null && board.items[highlight()!] === undefined) highlight.set(null);
       schedulePersist();
     }
@@ -94,7 +96,7 @@ function commit(change: Change) {
   });
 }
 
-// ---- 持久化: 只存 Job 的 id 顺序, 刷新页面后据此从 Daemon 恢复 ----
+// ---- 持久化: 只存 Job (id、名字、大小、修改时间) 的显示顺序, 刷新页面后据此从 Daemon 恢复 ----
 
 let persistTimer: ReturnType<typeof setTimeout> | undefined;
 const storageKey = (url: string) => `jobs:${url}`;
@@ -105,9 +107,7 @@ function schedulePersist() {
   persistTimer = setTimeout(() => {
     const s = session();
     if (s.kind !== "paired") return;
-    // 紧凑格式 [[id, name], ...], 两千项也只有几十 KB。
-    const rows = savedJobs(board).slice(-MAX_PERSISTED).map((job) => [job.id, job.name ?? null]);
-    void Storage.setItem(storageKey(s.daemon.url), JSON.stringify(rows));
+    void Storage.setItem(storageKey(s.daemon.url), encodeSaved(savedJobs(board).slice(-MAX_PERSISTED)));
   }, 400);
 }
 
@@ -136,6 +136,24 @@ export function removeItems(keys: readonly string[]) {
   commit(removeKeys(board, removable));
   for (const fileId of releasable) emitOutcome({ type: "removed", fileId });
 }
+
+// ---- 显示顺序: 只影响界面, 不影响提交给 Daemon 的先后 ----
+
+/** 一次性排序: 把现有的所有条目排一遍, 之后加入的条目照常追加在末尾。 */
+export function sortItems(choice: SortChoice) {
+  commit(sortBoard(board, choice));
+}
+
+export function moveItemTo(key: string, toIndex: number) {
+  commit(moveItem(board, key, toIndex));
+}
+
+export const moveItemToFront = (key: string) => commit(moveToFront(board, key));
+
+export const moveItemToBack = (key: string) => commit(moveToBack(board, key));
+
+/** 条目当前在显示顺序里的位置, 不在列表里返回 -1。 */
+export const displayIndexOf = (key: string): number => board.displayOrder.indexOf(key);
 
 export function clearFinished() {
   removeItems(clearableKeys(board));
@@ -167,7 +185,7 @@ export async function cancelItem(key: string): Promise<void> {
 }
 
 export function moveSelection(delta: number) {
-  const keys = board.order;
+  const keys = board.displayOrder;
   const current = highlight() === null ? null : keys.indexOf(highlight()!);
   const next = moveHighlight(keys.length, current === -1 ? null : current, delta);
   highlight.set(next === null ? null : keys[next]!);
@@ -291,27 +309,22 @@ async function restore(client: NonNullable<ReturnType<typeof api>>): Promise<voi
   if (s.kind !== "paired") return;
   const raw = await Storage.getItem(storageKey(s.daemon.url));
   if (!raw) return;
-  let saved: SavedJob[];
-  try {
-    saved = (JSON.parse(raw) as unknown[]).flatMap((row): SavedJob[] => {
-      if (typeof row === "string") return [{ id: row }];
-      if (Array.isArray(row) && typeof row[0] === "string") return [{ id: row[0], name: typeof row[1] === "string" ? row[1] : undefined }];
-      return [];
-    });
-  } catch {
-    return;
-  }
-  const restored = restoreJobs(saved, await client.jobs());
-  const kept = board.order.filter((key) => restored.items[key] === undefined);
+  const restored = restoreJobs(decodeSaved(raw), await client.jobs());
+  const keptSubmit = board.submitOrder.filter((key) => restored.items[key] === undefined);
+  const keptDisplay = board.displayOrder.filter((key) => restored.items[key] === undefined);
   const items: Record<string, Item> = { ...restored.items };
-  for (const key of kept) items[key] = board.items[key]!;
-  const merged: Board = { order: [...restored.order, ...kept], items };
-  commit({ board: merged, changed: merged.order, orderChanged: true });
+  for (const key of keptSubmit) items[key] = board.items[key]!;
+  const merged: Board = {
+    submitOrder: [...restored.submitOrder, ...keptSubmit],
+    displayOrder: [...restored.displayOrder, ...keptDisplay],
+    items,
+  };
+  commit({ board: merged, changed: merged.submitOrder, orderChanged: true });
 }
 
 /** 更换 Daemon: 列表属于旧 Daemon, 清空, 并让宿主释放还没上传的文件。 */
 export function resetBoard() {
-  const abandoned = board.order.flatMap((key) => {
+  const abandoned = board.submitOrder.flatMap((key) => {
     const item = board.items[key];
     return item?.kind === "pending" || item?.kind === "uploading" ? [item.file.id] : [];
   });
@@ -320,7 +333,7 @@ export function resetBoard() {
   for (const fileId of abandoned) emitOutcome({ type: "removed", fileId });
   itemSignals.clear();
   batch(() => {
-    order.set([]);
+    displayOrder.set([]);
     highlight.set(null);
     counts.set(countItems(board));
     notice.set(null);

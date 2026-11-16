@@ -34,7 +34,8 @@ actor InboxDrainer {
         defer { try? FileManager.default.removeItem(at: entry) }
         guard let payload = ShareInbox.payload(of: entry) else { return IngestResult() }
         guard payload.pathExtension == ShareInbox.linkExtension else {
-            return await ingestor.ingest(urls: [payload], move: true, allowing: [.image, .pdf])
+            // 收件箱里的文件是分享扩展从 provider 的临时副本拷来的, 修改时间只是拷贝的那一刻。
+            return await ingestor.ingest(urls: [payload], move: true, dating: .none, allowing: [.image, .pdf])
         }
         guard let text = try? String(contentsOf: payload, encoding: .utf8),
               let link = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))
