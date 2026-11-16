@@ -94,10 +94,41 @@ describe("pairing", () => {
     const daemon = createFakeDaemon();
     const app = await launch({ daemon }, { platform: "web" });
     await app.waitFor("id:pairing-key");
+    await app.type("id:pairing-key", "sam01101");
     await app.press("id:pairing-confirm");
     await app.waitFor("id:jobs-summary");
     expect(app.storage()["session.token:" + BASE]).toBe("tok-1");
     expect(calls(app, "session.saveToken").length).toBe(0);
+  });
+
+  test("the web page starts with an empty key box, sends nothing until a key is typed, and never stores the key", async () => {
+    const daemon = createFakeDaemon();
+    const app = await launch({ daemon }, { platform: "web" });
+    await app.waitFor("id:pairing-key");
+    expect(app.value("id:pairing-key")).toBe("");
+    await app.press("id:pairing-confirm");
+    await app.waitFor("id:pair-notice");
+    expect(app.texts()).toContain("请输入 Pairing Key");
+    expect(daemon.log.pairs).toEqual([]);
+    await app.type("id:pairing-key", "sam01101");
+    await app.press("id:pairing-confirm");
+    await app.waitFor("id:jobs-summary");
+    expect(daemon.log.pairs).toEqual(["sam01101"]);
+    expect("pairing.key" in app.storage()).toBe(false);
+  });
+
+  test("the app still starts with the default key and remembers the key it paired with, unlike the web page", async () => {
+    const web = await launch({ daemon: createFakeDaemon() }, { platform: "web" });
+    await web.waitFor("id:pairing-key");
+    expect(web.value("id:pairing-key")).toBe("");
+    const native = await launch({ daemon: createFakeDaemon({ pairingKey: "other-key" }) });
+    await native.waitFor("id:pairing-key");
+    expect(native.value("id:pairing-key")).toBe("sam01101");
+    await native.clear("id:pairing-key");
+    await native.type("id:pairing-key", "other-key");
+    await native.press("id:pairing-confirm");
+    await native.waitFor("id:jobs-summary");
+    expect(native.storage()["pairing.key"]).toBe("other-key");
   });
 });
 

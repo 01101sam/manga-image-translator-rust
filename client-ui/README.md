@@ -5,7 +5,7 @@
 - **Web:** `scripts/build-ui.sh web` 打包成静态站点 `gui/dist/`, 由 Daemon 托管。
 - **App (iOS / iPadOS / visionOS):** `scripts/build-ui.sh native` 产出 `client-ui/dist/native/`, Swift 宿主用 `NshAppView` 加载; 宿主侧契约见 [HOST_PROTOCOL.md](HOST_PROTOCOL.md)。
 
-页面: 配对 (Pairing Key)、任务列表 + 上传 (导入菜单: 相册、文件、打开 PDF, 项目由宿主在 `session.snapshot` 里声明; 排序菜单: 名称 / 日期 / 大小各升降序, 一次性; 条目菜单: 移到最前 / 最后; 长按或鼠标按住拖动重排)、单张查看 (原文/译文)、Config (结构化表单)、Engine 启停、PDF 阅读器 (`reader`: 本地显示 PDF, 方向键翻页, 空格把当前页送去翻译或切换原文/译文)。
+页面: 配对 (Pairing Key; App 预填默认 Key 并记住配对成功的那个, 网页的输入框是空的, 也不存输入的 Key)、任务列表 + 上传 (导入菜单: 相册、文件、打开 PDF, 项目由宿主在 `session.snapshot` 里声明; 排序菜单: 名称 / 日期 / 大小各升降序, 一次性; 条目菜单: 移到最前 / 最后; 长按或鼠标按住拖动重排)、单张查看 (原文/译文)、Config (结构化表单)、Engine 启停、PDF 阅读器 (`reader`: 本地显示 PDF, 方向键翻页, 空格把当前页送去翻译或切换原文/译文)。
 
 ## 结构
 

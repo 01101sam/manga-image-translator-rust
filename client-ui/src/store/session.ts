@@ -16,8 +16,17 @@ export const importSources = signal<readonly ImportSource[]>(DEFAULT_IMPORTS);
 /** 宿主没有应答或快照不可读时的说明。 */
 export const startupError = signal<string | null>(null);
 
+/** Daemon 的 Pairing Key 默认值 (Daemon 的 Config 里同一个默认)。 */
+const DEFAULT_PAIRING_KEY = "sam01101";
+
+/**
+ * App 的配对页预填默认 Key, 配对成功后记住输入的; 网页的输入框一律是空的: 不预填默认 Key, 也不预填 (更不存) 上次输入的,
+ * 因为网页打开的人不一定是这台 Daemon 的主人, 而浏览器的 localStorage 是明文。
+ */
+const remembersKey = platform.os !== "web";
+
 /** 配对页输入框里的 Key。放在 store 里, 页面因状态切换重建时不丢。 */
-export const keyDraft = signal("sam01101");
+export const keyDraft = signal(remembersKey ? DEFAULT_PAIRING_KEY : "");
 export const sessionKind = computed(() => session().kind);
 
 const TOKEN_KEY = "session.token:";
@@ -45,7 +54,7 @@ async function run(command: SessionCommand): Promise<void> {
     case "pair":
       try {
         const token = await createApi(command.daemon.url, null).pair(command.key);
-        await Storage.setItem(PAIRING_KEY_STORE, command.key);
+        if (remembersKey) await Storage.setItem(PAIRING_KEY_STORE, command.key);
         dispatch({ type: "pairSucceeded", token });
       } catch (error) {
         const rejected = error instanceof DaemonError && error.kind === "rejected";
@@ -86,9 +95,14 @@ async function savedFromStorage(daemons: readonly DaemonRef[]) {
 
 /** 启动: 先挂监听, 再读宿主的初始状态 (宿主在监听挂上之前发的事件不会重放)。 */
 export async function startSession(): Promise<void> {
-  void Storage.getItem(PAIRING_KEY_STORE).then((saved) => {
-    if (saved) keyDraft.set(saved);
-  });
+  if (remembersKey) {
+    void Storage.getItem(PAIRING_KEY_STORE).then((saved) => {
+      if (saved) keyDraft.set(saved);
+    });
+  } else {
+    // 以前的网页版存过输入的 Key: 清掉。
+    void Storage.removeItem(PAIRING_KEY_STORE);
+  }
   hostPort.onDaemons((daemons) => {
     knownDaemons.set(daemons);
     dispatch({ type: "daemons", daemons });
