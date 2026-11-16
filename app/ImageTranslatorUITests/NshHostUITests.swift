@@ -268,6 +268,61 @@ final class NshHostUITests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: pdf.path), "a file outside the app container must be copied, not moved")
     }
 
+    /// 在「照片」里选中今天加入的所有照片 (xcrun simctl addmedia 放进去的, 标签里没有年份; 模拟器自带的旧照片标签带年份), 一起分享给扩展。
+    /// 照片 App 的界面随系统版本和语言变: 「選取」按钮和分享按钮的标识是实测的。要设 TEST_RUNNER_HOST_PHOTOS_SHARE=1。
+    private func shareTodaysPhotosWithTheExtension(_ expected: Int) throws {
+        let photos = XCUIApplication(bundleIdentifier: "com.apple.mobileslideshow")
+        photos.launch()
+        let proceed = photos.buttons.matching(NSPredicate(format: "label IN %@", ["繼續", "继续", "Continue"])).firstMatch
+        if proceed.waitForExistence(timeout: 3) { proceed.tap() }
+        let select = photos.buttons.matching(NSPredicate(format: "label IN %@", ["選取", "选择", "Select"])).firstMatch
+        XCTAssertTrue(select.waitForExistence(timeout: 10), "Photos has no Select button")
+        select.tap()
+        let todays = photos.images.matching(NSPredicate(format: "identifier == %@ AND NOT (label MATCHES %@)", "PXGGridLayout-Info", ".*[0-9]{4}.*"))
+        XCTAssertEqual(todays.count, expected, "the library should hold exactly \(expected) photos added today")
+        for index in 0..<todays.count { todays.element(boundBy: index).tap() }
+        let share = photos.buttons.matching(NSPredicate(format: "identifier CONTAINS[c] 'Share' OR label IN %@", ["分享", "Share"])).firstMatch
+        XCTAssertTrue(share.waitForExistence(timeout: 10), "Photos has no Share button after selecting")
+        share.tap()
+        let entry = photos.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "图片翻译")).firstMatch
+        XCTAssertTrue(entry.waitForExistence(timeout: 10), "the extension is not in the share sheet")
+        shot(photos, "photos-share-sheet-batch")
+        entry.tap()
+        let message = photos.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "已加入")).firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 60), "the extension did not confirm")
+        print("EXTENSION message: \(message.label)")
+        shot(photos, "extension-confirmation-batch")
+        sleep(3)
+        photos.terminate()
+    }
+
+    /// 一批 HEIC 照片从「照片」分享到扩展, 打开 App 后一张不少地进列表, 上传时 Daemon 不拒绝 (Daemon 读不了 HEIC, 导入时要先转成 JPEG)。
+    /// 需要一个在跑的测试 Daemon 和一台放了 N 张 HEIC 照片的模拟器 (TEST_RUNNER_HOST_PHOTOS_SHARE=1, TEST_RUNNER_HOST_PHOTOS_COUNT=N, 默认 13)。
+    func testAHEICBatchSharedFromPhotosIsImportedWholeAndTheDaemonAcceptsIt() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["HOST_PHOTOS_SHARE"] == "1", "needs a simulator with photos (xcrun simctl addmedia)")
+        let expected = Int(ProcessInfo.processInfo.environment["HOST_PHOTOS_COUNT"] ?? "") ?? 13
+        let first = launch(["-forget-pairing"])
+        pair(first)
+        let before = Self.jobCount(element(first, "jobs-summary").label)
+        first.terminate()
+        try shareTodaysPhotosWithTheExtension(expected)
+        let app = launch()
+        let summary = element(app, "jobs-summary")
+        XCTAssertTrue(summary.waitForExistence(timeout: 30))
+        // 等全部进列表、没有条目还在「待上传」或「上传中」; 超时也先把现状打出来再判失败
+        let deadline = Date().addingTimeInterval(150)
+        while Date() < deadline, !summary.label.contains("共 \(before + expected) 张") || summary.label.contains("待上传") || summary.label.contains("上传中") { sleep(2) }
+        print("BEFORE \(before) EXPECTED \(expected)")
+        print("SUMMARY \(summary.label)")
+        print("LABELS " + app.staticTexts.allElementsBoundByIndex.prefix(80).map(\.label).joined(separator: " | "))
+        shot(app, "batch-imported")
+        let refused = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@", "无法识别图片", "格式不支持"))
+        print("REFUSED \(refused.count)")
+        XCTAssertTrue(summary.label.contains("共 \(before + expected) 张"), "expected \(before + expected) items, the summary says: \(summary.label)")
+        XCTAssertFalse(summary.label.contains("待上传") || summary.label.contains("上传中"), "items are still not uploaded: \(summary.label)")
+        XCTAssertEqual(refused.count, 0, "the Daemon refused \(refused.count) of the shared photos")
+    }
+
     func testSharingAPhotoFromPhotosShowsTheExtensionAndItConfirms() throws {
         try sharePhotoWithTheExtension()
     }
