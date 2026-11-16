@@ -25,14 +25,14 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 |---|---|
 | `Host/NshHostViewController.swift` | 持有 `NshAppView`, 注册 HOST_PROTOCOL 的全部调用, 接 `UIDropInteraction`; bundle 加载失败或 JS 虚拟机报错时显示错误和「重新载入」 |
 | `Host/HostSession.swift` | `session.*`: Bonjour 发现的 Daemon 加 Keychain 里的 Token, Token 永久保存 |
-| `Host/HostFiles.swift` | `ManagedFiles`: 文件 id 到沙盒文件。图片在 tmp, 启动时整个清掉; PDF 在 Application Support, id 是文件名里的 uuid, 超过 30 天没打开才在启动时清掉 |
-| `Host/HostIngest.swift` | 拖放和选择的文件进沙盒。每个 `NSItemProvider` 只读一种表示, 一次只读一个, 目录递归并按自然序排 |
+| `Host/HostFiles.swift` | `ManagedFiles`: 文件 id 到沙盒文件。图片在 tmp, 启动时整个清掉; PDF 在 Application Support, id 是文件名里的 uuid, 超过 30 天没打开才在启动时清掉 (`pdf.open` 凭上次的 id 找回); 交给分享面板的文件放在各自的子目录里, 面板上显示的是干净的文件名 |
+| `Host/HostIngest.swift` | 拖放和选择的文件进沙盒。每个 `NSItemProvider` 只读一种表示, 一次只读一个, 目录递归并按自然序排; 只带一个网页链接的拖放会下载, 按应答类型或文件头判断是图片还是 PDF |
 | `Host/HostPickers.swift` | 照片 (PHPicker)、文件、文件夹三种选择器, iPad 与 visionOS 用居中的 popover |
 | `Host/HostUpload.swift` | `upload.start`: multipart 先分块写进临时文件, 再 `URLSession.upload(fromFile:)`, 字节不进 JS 也不在内存里拼 `Data` |
 | `Host/HostArtifact.swift` | `artifact.save`: 下载到临时文件, 弹系统分享面板 |
 | `Host/HostPdf.swift` | 原生组件 `it.pdf` (PDFView, 单页, 只渲染当前页)、`pdf.renderPage` (CGContext 画到长边, 直接写 PNG 文件) 和 `pdf.export` (译文页换进原 PDF, 逐页下载逐页写) |
 
-旧的 SwiftUI 界面 (`RootView`、`JobListView`、`PDFReaderView`、`AppSession` 等) 还留在 target 里但不再被引用, 步骤 7 删除。
+旧的 SwiftUI 界面 (`RootView`、`JobListView`、`PDFReaderView`、`AppSession`、`ConfigWebView` 等) 和它们的测试已经删除, 旧功能在新实现里的位置见文末「旧功能对照」。
 
 ## 内存
 
@@ -56,4 +56,38 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | `-section jobs\|reader\|config` | 起始分区 |
 | `-bundle FILE.js` | 加载这个 bundle 而不是内置的。字节码 (`.nshc`) 只能从 App 自己的资源加载, 外部文件要用 `bundle.js` |
 
-`ImageTranslatorUITests/NshHostUITests.swift` 需要一个在跑的测试 Daemon, 用环境变量 `TEST_RUNNER_HOST_DAEMON_HOST`、`TEST_RUNNER_HOST_DAEMON_PORT`、`TEST_RUNNER_HOST_DAEMON_KEY`、`TEST_RUNNER_HOST_PICK_FOLDER` 传进来。Bonjour 那个用例要先在 Mac 上 `dns-sd -R <名字> _imagetranslator._tcp local <端口>` 公布一个实例, 并设 `TEST_RUNNER_HOST_BONJOUR=1`。测试 Daemon 一律用独立的 HOME、TMPDIR 和端口, 并加 `--no-bonjour`。
+`ImageTranslatorUITests/NshHostUITests.swift` 需要一个在跑的测试 Daemon (Engine 要是 running, 翻译用例才会完成), 用环境变量 `TEST_RUNNER_HOST_DAEMON_HOST`、`TEST_RUNNER_HOST_DAEMON_PORT`、`TEST_RUNNER_HOST_DAEMON_KEY`、`TEST_RUNNER_HOST_PICK_FOLDER` 传进来; 阅读器、配置页和分区切换的用例还要 `TEST_RUNNER_HOST_TOKEN` (先 `POST /pair` 取得) 和 `TEST_RUNNER_HOST_PICK_PDF`。Daemon 上可能留着之前的 Job, 用例按增量数, 不假设列表是空的。Bonjour 那个用例要先在 Mac 上 `dns-sd -R <名字> _imagetranslator._tcp local <端口>` 公布一个实例, 并设 `TEST_RUNNER_HOST_BONJOUR=1`。测试 Daemon 一律用独立的 HOME、TMPDIR 和端口, 并加 `--no-bonjour`。
+## 旧功能对照
+
+步骤 7 删除旧的 SwiftUI 界面前, 逐条对过旧版的 UI 测试和视图。「已补」是对照时发现新实现缺的, 当场补上; 「不再需要」写明原因。旧文件在 git 历史里, 删除它们的提交的上一个提交里能看到。
+
+| 旧功能 | 新实现 | 测试 |
+|---|---|---|
+| Bonjour 发现 Daemon | `BonjourBrowser.swift` 保留, `Host/HostSession.swift` 推送 `session.daemons`; TSX `PairingScreen` | `NshHostUITests.testBonjourDiscoversTheDaemonThenPairs`、`EndpointTests` |
+| 6 位配对码 (`pairing-code`) | 不再需要: Pairing Key 固定 (默认 sam01101, 存在 Config), 一次成功永久保存 Token, 见 `docs/adr/0002-pairing-key.md` | `app.test.tsx` 的 pairing、`session.test.ts` (旧 `PairingMachineTests` 的选择、确认、重试、401 都对应在这里) |
+| Token 跨重启 (Keychain) | `TokenStore.swift` 保留, `HostSession` 读写; Web 存 NSH Storage | `NshHostUITests.testPairingIsRememberedAcrossRelaunch`、`HostUploadTests.testTokenRoundTripsThroughSaveAndSnapshot` |
+| 更换 Daemon、401 清 Token | 配置页「取消配对」(`changeDaemon`)、401 触发 `session.clearToken` | `app.test.tsx` 的 "a revoked Token…" 和 "forgetting the Daemon…" |
+| 添加图片: 相册、文件、文件夹 | `Host/HostPickers.swift` + `files.pick`, 文件夹递归并按自然序 | `HostFilesTests.testFolderIngest…`、`NshHostUITests.testPickedImagesUploadFinishAndOpenInViewer` (旧的 `testFolderBatchImport` 也并在这里) |
+| 拖放文件、照片、PDF | `Host/HostIngest.swift`, 每个 provider 只读一种表示, 一次只读一个 | `HostFilesTests` 的 provider 摄入、类型过滤、限流用例、`NshHostUITests.testDraggingFilesOntoTheWindowAddsThem` (旧 `DropRoutingTests` 的路由判断随之换成 provider 的类型判断) |
+| 拖放网页链接 (`testWebURLToImage`、`testWebURLToPDF`) | 已补: `HostIngest.loadWebLink` 下载后按应答类型或文件头分图片和 PDF | `HostFilesTests.testDroppedWebLinksAreDownloadedAndRoutedByWhatTheyAre`、`testWebType…` |
+| 导入结果横幅 | `host.notice` 事件, TSX 用 toast 显示「已忽略 N 个不是图片或 PDF 的文件」; 不再列出无法识别的类型标识 | `HostFilesTests.testProviderIngestIgnoresKindsTheCallerDidNotAllow` |
+| Job 列表: 状态、排队位置、错误、批量提交、Pending Upload、队列容量 | `JobsPage`、`JobRow`、`JobTile`、`store/jobs.ts`、`domain/board.ts` (虚拟化 List, 批量轮询, iPad 与 visionOS 是网格) | `app.test.tsx` 的 jobs 与 grid、`board.test.ts`、`job.test.ts` |
+| 取消排队中的 Job (`testCancelQueuedJob`) | 行上的「取消」 (`cancelItem`) | `app.test.tsx` 的 "a queued job can be cancelled…"。不再做设备上的用例: 它要把 workers 设成 0 再重启 Engine, 取消只走 Daemon API, 对宿主没有增量 |
+| 删除、重排 (`EditButton`、`onDelete`、`onMove`) | 删除: 行上「移除」、「清除已结束」、Backspace。重排不再需要: 只改本地显示顺序, 与 Daemon 的队列无关 | `app.test.tsx` 的 "a queued job can be cancelled…" 与 "Backspace…" |
+| 键盘移动、回车预览 | `keymap` 与 `domain/nav.ts` (网格里上下一行, 左右一格) | `nav.test.ts`、`app.test.tsx` 的 viewer and keyboard 与 grid |
+| 预览译文与原文、上一张下一张、关闭 (`testPreviewClose`) | `Viewer.tsx`, 加载 w=2048 的降采样图 | `app.test.tsx` 的 viewer and keyboard、`NshHostUITests.testPickedImagesUploadFinishAndOpenInViewer` (已补关闭) |
+| 分享译图 (`ShareLink`) | `artifact.save` → `Host/HostArtifact.swift`, 存原始大小的文件 | `HostUploadTests.testArtifactExtensionFollowsContentType`、`app.test.tsx` 的 "saving asks the host for the full-size file…" |
+| 缩略图、把 Artifact 整个读进内存 | 不再需要: Daemon 的 `?w=256` 与 `?w=512` 预览加 NSH `Image` 的降采样缓存, 字节不进 JS | `media.test.ts` |
+| Engine 提示条 | `Banner` (任务页和阅读器) 与配置页的 Engine 卡片 | `app.test.tsx` 的 "a stopped Engine holds uploads…" |
+| 打开 PDF、PDFView 单页 | `pdf.pick` / `pdf.added`; App 用 `it.pdf` (`PdfComponent`), Web 用 pdf.js | `NshHostUITests.testReaderOpensAPdfTurnsPagesAndTranslatesOne`、`reader-store.test.ts` |
+| 方向键翻页、空格翻译或切换 | `ReaderPage.tsx` 的 `keymap`; `domain/reader.ts` 是页状态机 | `reader.test.ts` (前六个用例逐个移植自 `PageMachineTests`)、`reader-app.test.tsx` |
+| 把页送去翻译: 整页 300 dpi JPEG 读进内存 | `pdf.renderPage`: PNG, 长边取 Config 的 `downscale_long_edge`, 直接写文件 | `HostFilesTests.testRenderPage…` (包括新加的整页铺满像素检查) |
+| 翻译全部 | `store/reader.translateAll`: 一次渲染一页, 已渲染未上传最多 5 页 | `reader-app.test.tsx` 的 "translate all renders only a few pages ahead…" |
+| 导出 PDF (`assembleExport`) | 已补: `pdf.export`, 后台线程逐页下载译文、降采样到页面点尺寸的 2 倍、写进 PDF, 再弹分享面板。Web 不支持导出 (没有不加依赖的低成本办法), 不显示按钮 | `HostFilesTests.testExport…`、`reader-app.test.tsx`、`NshHostUITests.testReaderOpens…` (确认分享面板弹出) |
+| 存图到相册 | 已补: 阅读器页脚「保存译图」走 `artifact.save`, 分享面板里有「存储图像」 | `reader-app.test.tsx` 的 "the translated page can be saved…" |
+| 重启后回到上次的 PDF | 已补 (旧版也没有): `pdf.open` 加 Storage 的 `reader.last` | `reader-app.test.tsx` 的 export and restoring the last PDF |
+| 配置页 (WKWebView 载入 Daemon 的网页) | `ConfigPage.tsx`: TSX 表单, 与 Web 同一份, 含 Pairing Key 和 Engine 启停 | `app.test.tsx` 的 config、`config.test.ts`、`NshHostUITests.testConfigPageShowsTheDaemonSettings` (已补) |
+| 分区切换压力 (`testTabSwitchStress`, 50 轮) | 已补: 30 轮 | `NshHostUITests.testSwitchingSectionsRepeatedlyStaysResponsive` |
+| visionOS 窗口横竖屏 | `WindowSettings.swift` 与 `ImageTranslatorApp.swift` 保留 | `WindowSettingsTests` |
+| 测试钩子 `-open-test-pdf`、`-auto-submit-image` 与打进 App 的 sample.jpg、three-pages.pdf、batch | 不再需要: 新测试用 `-pick-folder`、`-pick-pdf` 取绝对路径的文件; 钩子和资源已删 | `TestHooksTests` |
+| `DaemonClient`、`MockURLProtocol`、`Domain` 里的状态机与拖放路由 | 不再需要: HTTP 全在 TSX (`api/daemon.ts`), 测试用 NSH 的 `network` 桩 (`tests/fake-daemon.ts`); `Domain.swift` 只留 `DaemonEndpoint`、`Token`、`PairedDaemon` | 同上各行 |

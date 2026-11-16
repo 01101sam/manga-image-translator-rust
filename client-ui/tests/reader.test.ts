@@ -26,7 +26,7 @@ const page = (index: number, translation: ReaderPage["translation"], extra: Part
 
 const run = (start: ReaderPage, ...events: PageEvent[]) => events.reduce((p, event) => reducePage(p, event)[0], start);
 
-// 前六个用例逐个移植自 app/ImageTranslatorTests/PageMachineTests.swift。
+// 前六个用例逐个移植自旧的 app/ImageTranslatorTests/PageMachineTests.swift (已删除, 见 git 历史)。
 describe("PageMachine (ported from the Swift tests)", () => {
   test("space on an untranslated page enqueues and leaves the state", () => {
     const p = newPage(0);

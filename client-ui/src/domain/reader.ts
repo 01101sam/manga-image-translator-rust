@@ -61,7 +61,7 @@ function onJobState(page: ReaderPage, state: JobState): ReaderPage {
 }
 
 /**
- * 从旧 Client 的 reducePage 移植 (app/ImageTranslatorTests/PageMachineTests.swift 的语义不变):
+ * 从旧 Client 的 reducePage 移植 (旧 Swift 版和 PageMachineTests 已删除, 在 git 历史里; 语义不变):
  * 空格在未翻译页上只发出 enqueue 命令, 状态由后续事件推进; 失败和取消回到未翻译。
  */
 export function reducePage(page: ReaderPage, event: PageEvent): [ReaderPage, PageCommand] {
