@@ -194,6 +194,27 @@ final class NshHostUITests: XCTestCase {
         shot(app, "pasted-with-command-v")
     }
 
+    /// 从系统「照片」分享到本 App 的分享扩展: 分享面板里有它, 点了显示确认。要先用 xcrun simctl addmedia 给模拟器放几张照片, 并设
+    /// TEST_RUNNER_HOST_PHOTOS_SHARE=1 才跑 (照片 App 的界面随系统版本变: 第一张照片靠坐标点, 分享按钮的标识 PUOneUpBarButtonItemIdentifierShare 是实测的)。
+    func testSharingAPhotoFromPhotosShowsTheExtensionAndItConfirms() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["HOST_PHOTOS_SHARE"] == "1", "needs a simulator with photos (xcrun simctl addmedia)")
+        let photos = XCUIApplication(bundleIdentifier: "com.apple.mobileslideshow")
+        photos.launch()
+        let proceed = photos.buttons.matching(NSPredicate(format: "label IN %@", ["繼續", "继续", "Continue"])).firstMatch
+        if proceed.waitForExistence(timeout: 3) { proceed.tap() }
+        photos.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.15)).tap()
+        let share = photos.buttons["PUOneUpBarButtonItemIdentifierShare"]
+        XCTAssertTrue(share.waitForExistence(timeout: 10), "Photos did not open a photo with a share button")
+        share.tap()
+        let entry = photos.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "图片翻译")).firstMatch
+        XCTAssertTrue(entry.waitForExistence(timeout: 10), "the extension is not in the share sheet")
+        shot(photos, "photos-share-sheet")
+        entry.tap()
+        let message = photos.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "已加入")).firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 15), "the extension did not confirm")
+        shot(photos, "extension-confirmation")
+    }
+
     /// 配置页: 从 Daemon 读出配置并显示 (Pairing Key 在其中), Engine 状态也在。保存条只在有修改时才出现。
     func testConfigPageShowsTheDaemonSettings() throws {
         let token = try XCTUnwrap(ProcessInfo.processInfo.environment["HOST_TOKEN"], "needs HOST_TOKEN")

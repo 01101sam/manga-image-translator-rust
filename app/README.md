@@ -30,6 +30,8 @@ xcframework 没有 x86_64 切片, 工程已对 iOS 与 visionOS 模拟器排除 
 | `Host/HostPickers.swift` | 照片 (PHPicker) 和文档选择器 (图片、PDF、文件夹)。选哪个由 TSX 的导入菜单决定 (`files.pick` 的 `source`), 宿主不再弹自己的选择菜单 |
 | `Host/HostUpload.swift` | `upload.start`: multipart 先分块写进临时文件, 再 `URLSession.upload(fromFile:)`, 字节不进 JS 也不在内存里拼 `Data` |
 | `Host/HostArtifact.swift` | `artifact.save`: 下载到临时文件, 弹系统分享面板 |
+| `ShareExtension/` | 分享扩展 (bundle id `com.wisdomworldworkshop.imagetranslator.share`, iOS 与 visionOS): 分享面板里接受图片 (含多张)、PDF、图片网页链接, 只把文件复制进 App Group (`group.com.wisdomworldworkshop.imagetranslator`) 的 `inbox/`, 不解码也不上传, 然后显示「已加入，打开 App 后开始翻译」就结束。App 在启动和回到前台时把收件箱搬进沙盒 |
+| `Shared/ShareInbox.swift` | App 与扩展共用的收件箱约定, 和扩展的拷贝逻辑 `ShareDepositor`: 串行、一次一个文件, 用 `copyItem` 按文件拷 (不把内容读进内存, 所以扩展约 120 MB 的内存上限与文件大小无关); 先拷进 `.staging/`, 拷完整个目录原子改名成条目, App 不会搬走拷了一半的文件; 每个条目一个目录, 目录名 (毫秒时间戳、序号、uuid) 的字典序就是分享顺序; 网页链接存成 `link.weblink`, 内容是 URL, 由 App 导入时下载 |
 | `Host/HostPdf.swift` | 原生组件 `it.pdf` (PDFView, 单页, 只渲染当前页)、`pdf.renderPage` (CGContext 画到长边, 直接写 PNG 文件) 和 `pdf.export` (译文页换进原 PDF, 逐页下载逐页写) |
 
 旧的 SwiftUI 界面 (`RootView`、`JobListView`、`PDFReaderView`、`AppSession`、`ConfigWebView` 等) 和它们的测试已经删除, 旧功能在新实现里的位置见文末「旧功能对照」。

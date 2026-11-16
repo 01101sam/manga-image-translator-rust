@@ -30,6 +30,11 @@
 		020000000000000000000014 /* HostUploadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000013 /* HostUploadTests.swift */; };
 		02000000000000000000001B /* NshHostUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000001A /* NshHostUITests.swift */; };
 		02000000000000000000001D /* HostDebugDrag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000001C /* HostDebugDrag.swift */; };
+		030000000000000000000011 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030000000000000000000002 /* ShareViewController.swift */; };
+		030000000000000000000012 /* ShareInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030000000000000000000005 /* ShareInbox.swift */; };
+		030000000000000000000013 /* ShareInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030000000000000000000005 /* ShareInbox.swift */; };
+		030000000000000000000014 /* ShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 030000000000000000000001 /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		030000000000000000000040 /* ShareInboxTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 030000000000000000000041 /* ShareInboxTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -47,7 +52,28 @@
 			remoteGlobalIDString = 010000000000000000000020;
 			remoteInfo = ImageTranslator;
 		};
+		030000000000000000000025 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 010000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 030000000000000000000020;
+			remoteInfo = ShareExtension;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		030000000000000000000024 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				030000000000000000000014 /* ShareExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		000000000000000000000100 /* ImageTranslatorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageTranslatorApp.swift; sourceTree = "<group>"; };
@@ -77,6 +103,13 @@
 		020000000000000000000015 /* NativeShell.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = NativeShell.xcframework; sourceTree = "<group>"; };
 		02000000000000000000001A /* NshHostUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NshHostUITests.swift; sourceTree = "<group>"; };
 		02000000000000000000001C /* HostDebugDrag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostDebugDrag.swift; sourceTree = "<group>"; };
+		030000000000000000000001 /* ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		030000000000000000000002 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		030000000000000000000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		030000000000000000000004 /* ShareExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ShareExtension.entitlements; sourceTree = "<group>"; };
+		030000000000000000000005 /* ShareInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareInbox.swift; sourceTree = "<group>"; };
+		030000000000000000000006 /* ImageTranslator.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ImageTranslator.entitlements; sourceTree = "<group>"; };
+		030000000000000000000041 /* ShareInboxTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareInboxTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -102,6 +135,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		030000000000000000000022 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -116,6 +156,7 @@
 				00000000000000000000011E /* TestHooks.swift */,
 				020000000000000000000017 /* Host */,
 				010000000000000000000070 /* Info.plist */,
+				030000000000000000000006 /* ImageTranslator.entitlements */,
 				010000000000000000000071 /* Assets.xcassets */,
 			);
 			path = ImageTranslator;
@@ -129,6 +170,7 @@
 				000000000000000000000139 /* WindowSettingsTests.swift */,
 				020000000000000000000011 /* HostFilesTests.swift */,
 				020000000000000000000013 /* HostUploadTests.swift */,
+				030000000000000000000041 /* ShareInboxTests.swift */,
 			);
 			path = ImageTranslatorTests;
 			sourceTree = "<group>";
@@ -147,6 +189,7 @@
 				010000000000000000000010 /* ImageTranslator.app */,
 				010000000000000000000011 /* ImageTranslatorTests.xctest */,
 				010000000000000000000012 /* ImageTranslatorUITests.xctest */,
+				030000000000000000000001 /* ShareExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -157,6 +200,8 @@
 				010000000000000000000004 /* ImageTranslator */,
 				010000000000000000000005 /* ImageTranslatorTests */,
 				010000000000000000000006 /* ImageTranslatorUITests */,
+				030000000000000000000007 /* ShareExtension */,
+				030000000000000000000008 /* Shared */,
 				020000000000000000000018 /* Frameworks */,
 				010000000000000000000003 /* Products */,
 			);
@@ -186,6 +231,24 @@
 			path = Frameworks;
 			sourceTree = "<group>";
 		};
+		030000000000000000000007 /* ShareExtension */ = {
+			isa = PBXGroup;
+			children = (
+				030000000000000000000002 /* ShareViewController.swift */,
+				030000000000000000000003 /* Info.plist */,
+				030000000000000000000004 /* ShareExtension.entitlements */,
+			);
+			path = ShareExtension;
+			sourceTree = "<group>";
+		};
+		030000000000000000000008 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				030000000000000000000005 /* ShareInbox.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -196,11 +259,13 @@
 				010000000000000000000030 /* Sources */,
 				010000000000000000000031 /* Frameworks */,
 				010000000000000000000032 /* Resources */,
+				030000000000000000000024 /* Embed Foundation Extensions */,
 				020000000000000000000019 /* Embed NSH UI bundle */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				030000000000000000000026 /* PBXTargetDependency */,
 			);
 			name = ImageTranslator;
 			productName = ImageTranslator;
@@ -243,6 +308,23 @@
 			productReference = 010000000000000000000012 /* ImageTranslatorUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		030000000000000000000020 /* ShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 030000000000000000000030 /* Build configuration list for PBXNativeTarget "ShareExtension" */;
+			buildPhases = (
+				030000000000000000000021 /* Sources */,
+				030000000000000000000022 /* Frameworks */,
+				030000000000000000000023 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ShareExtension;
+			productName = ShareExtension;
+			productReference = 030000000000000000000001 /* ShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -264,6 +346,9 @@
 						CreatedOnToolsVersion = 27.0;
 						TestTargetID = 010000000000000000000020;
 					};
+					030000000000000000000020 = {
+						CreatedOnToolsVersion = 27.0;
+					};
 				};
 			};
 			buildConfigurationList = 010000000000000000000061 /* Build configuration list for PBXProject "ImageTranslator" */;
@@ -283,6 +368,7 @@
 				010000000000000000000020 /* ImageTranslator */,
 				010000000000000000000021 /* ImageTranslatorTests */,
 				010000000000000000000022 /* ImageTranslatorUITests */,
+				030000000000000000000020 /* ShareExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -304,6 +390,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		010000000000000000000038 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		030000000000000000000023 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -354,6 +447,7 @@
 				02000000000000000000000C /* HostSession.swift in Sources */,
 				02000000000000000000000E /* HostUpload.swift in Sources */,
 				020000000000000000000010 /* NshHostViewController.swift in Sources */,
+				030000000000000000000013 /* ShareInbox.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -366,6 +460,7 @@
 				00000000000000000000013A /* WindowSettingsTests.swift in Sources */,
 				020000000000000000000012 /* HostFilesTests.swift in Sources */,
 				020000000000000000000014 /* HostUploadTests.swift in Sources */,
+				030000000000000000000040 /* ShareInboxTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -374,6 +469,15 @@
 			buildActionMask = 2147483647;
 			files = (
 				02000000000000000000001B /* NshHostUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		030000000000000000000021 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				030000000000000000000011 /* ShareViewController.swift in Sources */,
+				030000000000000000000012 /* ShareInbox.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -389,6 +493,11 @@
 			isa = PBXTargetDependency;
 			target = 010000000000000000000020 /* ImageTranslator */;
 			targetProxy = 010000000000000000000042 /* PBXContainerItemProxy */;
+		};
+		030000000000000000000026 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 030000000000000000000020 /* ShareExtension */;
+			targetProxy = 030000000000000000000025 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -454,6 +563,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ImageTranslator/ImageTranslator.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				"CODE_SIGN_IDENTITY[sdk=xrsimulator*]" = "-";
@@ -493,6 +603,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ImageTranslator/ImageTranslator.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				"CODE_SIGN_IDENTITY[sdk=xrsimulator*]" = "-";
@@ -621,6 +732,68 @@
 			};
 			name = Release;
 		};
+		030000000000000000000031 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
+				"CODE_SIGN_IDENTITY[sdk=xrsimulator*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 2UPMU92PCA;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wisdomworldworkshop.imagetranslator.share;
+				PRODUCT_NAME = ShareExtension;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 1.0;
+			};
+			name = Debug;
+		};
+		030000000000000000000032 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
+				"CODE_SIGN_IDENTITY[sdk=xrsimulator*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 2UPMU92PCA;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wisdomworldworkshop.imagetranslator.share;
+				PRODUCT_NAME = ShareExtension;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator xros xrsimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 1.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -656,6 +829,15 @@
 			buildConfigurations = (
 				010000000000000000000056 /* Debug */,
 				010000000000000000000057 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		030000000000000000000030 /* Build configuration list for PBXNativeTarget "ShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				030000000000000000000031 /* Debug */,
+				030000000000000000000032 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
