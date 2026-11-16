@@ -30,7 +30,6 @@ Usage: simple-runtime [OPTIONS] <COMMAND>
 Commands:
   cli   Run the image translation CLI
   api   Run in API server mode
-  ui    Run the UI
   help  Print this message or the help of the given subcommand(s)
 
 Options:
