@@ -79,6 +79,7 @@ final class HostUploadTests: XCTestCase {
     func testArtifactExtensionFollowsContentType() {
         XCTAssertEqual(ArtifactSaver.fileExtension(forContentType: "image/png"), "png")
         XCTAssertEqual(ArtifactSaver.fileExtension(forContentType: "image/jpeg; charset=binary"), "jpg")
+        XCTAssertEqual(ArtifactSaver.fileExtension(forContentType: "image/webp"), "webp")
         XCTAssertEqual(ArtifactSaver.fileExtension(forContentType: "text/html"), "html")
         XCTAssertEqual(ArtifactSaver.fileExtension(forContentType: nil), "bin")
     }
