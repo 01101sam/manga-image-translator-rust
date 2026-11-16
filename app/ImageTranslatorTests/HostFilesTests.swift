@@ -355,6 +355,57 @@ final class HostFilesTests: XCTestCase {
         XCTAssertLessThan(peak.rss - before, 200, "peak RSS grew by \(peak.rss - before) MB for \(pages) pages")
     }
 
+    // MARK: - 网页链接
+
+    func testWebTypePrefersTheResponseTypeAndFallsBackToTheFileHeader() {
+        XCTAssertEqual(FileIngestor.webType(mimeType: "image/jpeg", header: Data()), .jpeg)
+        XCTAssertEqual(FileIngestor.webType(mimeType: "application/pdf", header: Data()), .pdf)
+        XCTAssertEqual(FileIngestor.webType(mimeType: "application/octet-stream", header: Data("%PDF-1.4\n".utf8)), .pdf)
+        XCTAssertEqual(FileIngestor.webType(mimeType: nil, header: Data([0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10])), .jpeg)
+        XCTAssertEqual(FileIngestor.webType(mimeType: "binary/octet-stream", header: Data([0x89, 0x50, 0x4E, 0x47, 0x0D])), .png)
+        XCTAssertEqual(FileIngestor.webType(mimeType: nil, header: Data("RIFF\0\0\0\0WEBPVP8 ".utf8)), .webP)
+        XCTAssertNil(FileIngestor.webType(mimeType: "text/html", header: Data("<!doctype html>".utf8)))
+        XCTAssertNil(FileIngestor.webType(mimeType: nil, header: Data()))
+    }
+
+    func testLinkNameIsTheLastPathSegmentWithoutPercentEncoding() {
+        XCTAssertEqual(FileIngestor.linkName(URL(string: "https://example.com/a/page%2001.png?x=1")!), "page 01.png")
+        XCTAssertNil(FileIngestor.linkName(URL(string: "https://example.com")!))
+    }
+
+    func testLinkFileNameKeepsAMatchingExtensionAndFixesTheRest() {
+        let link = { (text: String) in URL(string: text)! }
+        XCTAssertEqual(FileIngestor.linkFileName(link("https://x.test/a/doc.pdf"), type: .pdf), "doc.pdf")
+        XCTAssertEqual(FileIngestor.linkFileName(link("https://x.test/a/photo.jpeg"), type: .jpeg), "photo.jpeg")
+        XCTAssertEqual(FileIngestor.linkFileName(link("https://x.test/a/photo.jpg"), type: .jpeg), "photo.jpg")
+        XCTAssertEqual(FileIngestor.linkFileName(link("https://x.test/a/page01"), type: .png), "page01.png")
+        XCTAssertEqual(FileIngestor.linkFileName(link("https://x.test/a/page01.php"), type: .png), "page01.php.png")
+        XCTAssertEqual(FileIngestor.linkFileName(link("https://x.test"), type: .pdf), "download.pdf")
+    }
+
+    func testDroppedWebLinksAreDownloadedAndRoutedByWhatTheyAre() async throws {
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0])
+        LinkStub.responses = [
+            "https://stub.test/img/page01": (200, "application/octet-stream", png),
+            "https://stub.test/doc.pdf": (200, "application/pdf", Data("%PDF-1.4\n%".utf8)),
+            "https://stub.test/index.html": (200, "text/html", Data("<html></html>".utf8)),
+            "https://stub.test/missing.png": (404, "image/png", Data()),
+        ]
+        URLProtocol.registerClass(LinkStub.self)
+        defer { URLProtocol.unregisterClass(LinkStub.self) }
+        let files = makeFiles()
+        let links = ["https://stub.test/img/page01", "https://stub.test/doc.pdf", "https://stub.test/index.html", "https://stub.test/missing.png", "ftp://stub.test/x.png"]
+        let providers = links.map { NSItemProvider(object: NSURL(string: $0)!) }
+        let result = await FileIngestor(files: files).ingest(providers: providers, allowing: [.image, .pdf])
+        XCTAssertEqual(result.images.map(\.name), ["page01.png"])
+        XCTAssertEqual(result.images.first?.type, "image/png")
+        XCTAssertEqual(result.pdfs.map(\.name), ["doc.pdf"])
+        XCTAssertEqual(result.ignored, 3)
+        let onlyImages = await FileIngestor(files: files).ingest(providers: [NSItemProvider(object: NSURL(string: "https://stub.test/doc.pdf")!)], allowing: [.image])
+        XCTAssertEqual(onlyImages.ignored, 1)
+        XCTAssertTrue(onlyImages.pdfs.isEmpty)
+    }
+
     func testDisplayNamePrefersTheSuggestedNameAndKeepsOneExtension() {
         let temp = URL(fileURLWithPath: "/tmp/PNG图像.png")
         XCTAssertEqual(FileIngestor.name(for: temp, suggested: "page01", type: .png), "page01.png")
@@ -375,4 +426,22 @@ private actor Counter {
     private(set) var peak = 0
     func enter() { current += 1; peak = max(peak, current) }
     func leave() { current -= 1 }
+}
+/// 把 https://stub.test/... 的请求交给表里的应答, 不碰网络。
+final class LinkStub: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var responses: [String: (status: Int, mime: String, body: Data)] = [:]
+
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "stub.test" }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let url = request.url!
+        let entry = Self.responses[url.absoluteString] ?? (404, "text/plain", Data())
+        let response = HTTPURLResponse(url: url, statusCode: entry.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": entry.mime])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: entry.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

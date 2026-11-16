@@ -308,7 +308,7 @@ final class NshHostViewController: UIViewController, UIDropInteractionDelegate {
 
     func dropInteraction(_ interaction: UIDropInteraction, canHandle session: UIDropSession) -> Bool {
         session.hasItemsConforming(toTypeIdentifiers: [
-            UTType.image.identifier, UTType.pdf.identifier, UTType.folder.identifier, UTType.fileURL.identifier,
+            UTType.image.identifier, UTType.pdf.identifier, UTType.folder.identifier, UTType.url.identifier,
         ])
     }
 
